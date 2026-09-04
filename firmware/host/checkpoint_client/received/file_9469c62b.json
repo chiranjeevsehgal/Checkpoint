@@ -1,0 +1,11 @@
+{
+  "file_id": "9469c62b",
+  "total": 83132,
+  "total_frags": 378,
+  "expected_crc": "94688297",
+  "actual_crc": "94688297",
+  "mtu": 517,
+  "frag_size": 220,
+  "duplicates": 0,
+  "decrypt_fail": 0
+}

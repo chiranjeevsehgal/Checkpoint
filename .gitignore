@@ -1,3 +1,6 @@
 # Data files
 data
 .env
+*.pyc
+*.bin
+/firmware/examples
