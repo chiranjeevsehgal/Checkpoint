@@ -87,8 +87,13 @@ void setup() {
   Serial.println("Transfer task started");
 
   recorder_start();
+#if VAD_ENABLE
+  ui_signal_vad_listening();
+  Serial.println("Recorder started, VAD voice-triggered chunks");
+#else
   ui_signal_recording(true);
   Serial.println("Recorder started, 1-min chunks");
+#endif
   Serial.printf("Checkpoint ready — BLE %s\n", BLE_DEVICE_NAME);
 }
 
@@ -106,7 +111,13 @@ void loop() {
     } else if (sd_present() && !sd_mounted()) {
       if (sd_begin()) {
         manifest_scan_and_recover();
+#if VAD_ENABLE
+        if (recorder_vad_active()) ui_signal_recording(true);
+        else if (recorder_is_recording()) ui_signal_vad_listening();
+        else ui_signal_recording(false);
+#else
         ui_signal_recording(recorder_is_recording());
+#endif
       }
     }
 #else
@@ -115,7 +126,13 @@ void loop() {
     if (!sd_mounted()) {
       if (sd_begin()) {
         manifest_scan_and_recover();
+#if VAD_ENABLE
+        if (recorder_vad_active()) ui_signal_recording(true);
+        else if (recorder_is_recording()) ui_signal_vad_listening();
+        else ui_signal_recording(false);
+#else
         ui_signal_recording(recorder_is_recording());
+#endif
       } else {
         ui_signal_error();
       }

@@ -6,7 +6,7 @@
 static TaskHandle_t s_task = nullptr;
 static volatile uint8_t s_state = 0;
 
-enum LedState : uint8_t { LED_OFF, LED_ON, LED_BOOKMARK, LED_ERROR, LED_FATAL };
+enum LedState : uint8_t { LED_OFF, LED_ON, LED_BOOKMARK, LED_ERROR, LED_FATAL, LED_VAD_IDLE };
 
 void ui_init() {
   pinMode(HW_RECORD_LED_GPIO, OUTPUT);
@@ -17,6 +17,10 @@ void ui_init() {
 void ui_signal_recording(bool on) {
   s_state = on ? LED_ON : LED_OFF;
   Serial.printf("UI LED %s (recording %s)\n", on ? "ON" : "OFF", on ? "ON" : "MUTED");
+}
+void ui_signal_vad_listening() {
+  s_state = LED_VAD_IDLE;
+  Serial.println("UI LED PULSE (VAD listening, silence)");
 }
 void ui_signal_bookmark() {
   // Bookmark removed - mic toggle uses LED_ON/OFF only
@@ -113,6 +117,13 @@ void ui_task(void *arg) {
         // Non-blocking 80ms on/off strobe
         uint32_t t = (now - state_enter_ms) % 160;
         digitalWrite(HW_RECORD_LED_GPIO, t < 80 ? HIGH : LOW);
+        break;
+      }
+      case LED_VAD_IDLE: {
+        // Slow 1Hz pulse, 10% duty: proves "mic ON, listening, silence"
+        // vs LED_OFF (muted) and LED_ON solid (utterance capturing).
+        uint32_t t = (now - state_enter_ms) % 1000;
+        digitalWrite(HW_RECORD_LED_GPIO, t < 100 ? HIGH : LOW);
         break;
       }
     }

@@ -5,6 +5,7 @@
 #include "ui.h"
 #include "opus_codec.h"
 #include "ogg_mux.h"
+#include "vad.h"
 #include "driver/i2s.h"
 #include "freertos/ringbuf.h"
 #include "esp_heap_caps.h"
@@ -51,7 +52,55 @@ static uint32_t s_opus_frames = 0;
 static uint64_t s_encode_time_us_sum = 0;
 static uint32_t s_encode_frames = 0;
 
+// VAD — voice-triggered recording. opus_encode_task is the sole writer of the
+// request flags; recorder_task (owner of s_file) is the sole clearer.
+static volatile bool s_vad_open_req = false;  // ONSET: recorder_task should open_chunk()
+static volatile bool s_vad_close_req = false; // OFFSET: recorder_task should close_chunk()
+static volatile bool s_vad_discard_req = false; // DISCARD: hum — purge opus_ring, drop file
+static volatile uint32_t s_vad_utt_frames = 0; // voiced+hangover frames in open utterance
+static int16_t *s_preroll = nullptr; // circular PCM pre-roll (VAD_PREROLL_MS of 20ms frames)
+static uint32_t s_preroll_frames = 0;
+static uint32_t s_preroll_head = 0; // next write slot
+static uint32_t s_preroll_count = 0;
+static inline uint32_t vad_preroll_frames_cfg() {
+  uint32_t f = (VAD_PREROLL_MS / REC_OPUS_FRAME_MS);
+  if (f < 1) f = 1;
+  if (f > 100) f = 100; // cap 2s
+  return f;
+}
+static inline uint32_t vad_min_speech_frames_cfg() {
+  uint32_t f = (VAD_MIN_SPEECH_MS / REC_OPUS_FRAME_MS);
+  return f; // 0 = disabled
+}
+
 static void opus_encode_task(void *arg);
+
+#if VAD_ENABLE
+// Encode one 320-sample frame and push length-prefixed to opus_ring.
+// Buffers are heap-owned (canary-safe). Updates encode stats + drop counters.
+static void vad_encode_push(short *pcm_s16, uint8_t *frame_bytes, uint8_t *packet) {
+  int64_t t0 = esp_timer_get_time();
+  int n = 0;
+  if (enc_lock()) {
+    n = opus_encode(s_encoder, pcm_s16, REC_OPUS_SAMPLES_PER_FRAME, frame_bytes, REC_OPUS_MAX_FRAME_BYTES);
+    enc_unlock();
+  }
+  int64_t dt = esp_timer_get_time() - t0;
+  s_encode_time_us_sum += dt; s_encode_frames++;
+  if (n > 0 && n <= REC_OPUS_MAX_FRAME_BYTES) {
+    packet[0] = n & 0xFF; packet[1] = (n >> 8) & 0xFF;
+    memcpy(packet + 2, frame_bytes, n);
+    BaseType_t sent = xRingbufferSend(s_opus_ring, packet, n + 2, pdMS_TO_TICKS(10));
+    if (sent != pdTRUE) {
+      s_dropped_bytes += n;
+      s_drop_events++;
+    } else {
+      s_vad_utt_frames++;
+    }
+    if (dt > 8000) Serial.printf("REC encode slow %lldus n=%d frames %lu\n", dt, n, (unsigned long)s_encode_frames);
+  }
+}
+#endif
 static bool write_opus_sliced(const uint8_t *opus, size_t olen, bool *fs_lost_out);
 
 static uint32_t load_boot_id() {
@@ -425,6 +474,43 @@ bool recorder_init() {
     }
   }
 #endif
+#if VAD_ENABLE
+  {
+    struct VadConfig vc;
+    vc.mode = VAD_MODE;
+    vc.onset_ms = VAD_ONSET_MS;
+    vc.hangover_ms = VAD_HANGOVER_MS;
+    vc.session_extend_ms = VAD_SESSION_EXTEND_MS;
+    vc.min_speech_ms = VAD_MIN_SPEECH_MS;
+    vc.preroll_ms = VAD_PREROLL_MS;
+    vc.abs_floor_dbfs = VAD_ABS_FLOOR_DBFS;
+    vad_configure(&vc);
+    Serial.printf("REC VAD ON mode %d onset %dms hang %dms sess +%dms min %dms preroll %dms\n",
+                  VAD_MODE, VAD_ONSET_MS, VAD_HANGOVER_MS,
+                  VAD_SESSION_EXTEND_MS, VAD_MIN_SPEECH_MS, VAD_PREROLL_MS);
+  }
+  if (!s_preroll) {
+    s_preroll_frames = vad_preroll_frames_cfg();
+    size_t bytes = (size_t)s_preroll_frames * REC_OPUS_SAMPLES_PER_FRAME * sizeof(int16_t);
+    s_preroll = (int16_t*)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_preroll) s_preroll = (int16_t*)malloc(bytes);
+    if (s_preroll) {
+      memset(s_preroll, 0, bytes);
+      Serial.printf("REC VAD pre-roll %lu frames (%luB)\n",
+                    (unsigned long)s_preroll_frames, (unsigned long)bytes);
+    } else {
+      s_preroll_frames = 0;
+      Serial.println("REC VAD pre-roll alloc FAIL, continuing without");
+    }
+    s_preroll_head = 0;
+    s_preroll_count = 0;
+  }
+  s_vad_open_req = false;
+  s_vad_close_req = false;
+  s_vad_utt_frames = 0;
+#else
+  Serial.println("REC VAD OFF (continuous chunks)");
+#endif
   i2s_config_t cfg = {};
   cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
   cfg.sample_rate = REC_SAMPLE_RATE;
@@ -463,6 +549,17 @@ bool recorder_start() {
   }
   s_recording = true;
   s_bookmark = false;
+#if VAD_ENABLE
+  // Fresh unmute/remount: clear stale onset/offset requests and filter state
+  // (config from recorder_init is kept).
+  vad_reset();
+  s_vad_open_req = false;
+  s_vad_close_req = false;
+  s_vad_discard_req = false;
+  s_vad_utt_frames = 0;
+  s_preroll_head = 0;
+  s_preroll_count = 0;
+#endif
   Serial.printf("REC start: creating recorder task at uptime %lu ms\n", (unsigned long)millis());
   BaseType_t r = xTaskCreatePinnedToCore(recorder_task, "recorder", TASK_STACK_RECORDER, nullptr, TASK_PRIO_RECORDER, &s_task, 1);
   if (r != pdPASS) {
@@ -499,6 +596,12 @@ void recorder_stop() {
     vTaskDelay(pdMS_TO_TICKS(100));
     s_encode_task = nullptr;
   }
+#if VAD_ENABLE
+  s_vad_open_req = false;
+  s_vad_close_req = false;
+  s_vad_discard_req = false;
+  s_vad_utt_frames = 0;
+#endif
   if (!s_task) Serial.println("REC stop: no task handle, mic OFF");
 }
 
@@ -510,6 +613,34 @@ void recorder_notify_bookmark() {
 }
 uint32_t recorder_dropped_bytes() { return s_dropped_bytes; }
 uint32_t recorder_drop_events() { return s_drop_events; }
+bool recorder_vad_active() {
+#if VAD_ENABLE
+  return s_file && vad_should_record();
+#else
+  return recorder_is_recording();
+#endif
+}
+bool recorder_vad_speech() {
+#if VAD_ENABLE
+  return vad_is_speech();
+#else
+  return recorder_is_recording();
+#endif
+}
+float recorder_vad_level_dbfs() {
+#if VAD_ENABLE
+  return vad_level_dbfs();
+#else
+  return 0.0f;
+#endif
+}
+uint32_t recorder_vad_utterances() {
+#if VAD_ENABLE
+  return vad_utterances();
+#else
+  return s_chunks;
+#endif
+}
 
 static bool write_audio_sliced(const uint8_t *data, size_t len, size_t *written_out, bool *fs_lost_out) {
   if (fs_lost_out) *fs_lost_out = false;
@@ -574,12 +705,19 @@ void recorder_task(void *arg) {
     vTaskDelete(nullptr);
     return;
   }
+  // VAD mode starts fileless (mic ON, listening, no SD file) — first ONSET
+  // opens the chunk. Legacy mode opens immediately as before.
+#if VAD_ENABLE
+  ui_signal_vad_listening();
+  Serial.println("REC VAD listening (fileless until onset)");
+#else
   if (!open_chunk()) {
     vTaskDelay(pdMS_TO_TICKS(1000));
     if (!open_chunk()) {
       ui_signal_error();
     }
   }
+#endif
   while (s_recording) {
 #if HW_HAS_SD_DETECT
     if (!sd_present() || !sd_mounted()) {
@@ -597,11 +735,30 @@ void recorder_task(void *arg) {
       continue;
     }
     if (!s_file) {
+#if VAD_ENABLE
+      // Fileless listening: VAD (opus_encode_task) owns the open decision.
+      // Keep I2S->s_ring flowing below so VAD stays fed; skip SD work here.
+      // Retry while in session so a transient open failure mid-utterance
+      // doesn't strand encoded pre-roll in opus_ring until the next onset.
+      if (s_vad_open_req || (vad_should_record() && !s_file)) {
+        s_vad_open_req = false;
+        if (!open_chunk()) {
+          ui_signal_error();
+          vTaskDelay(pdMS_TO_TICKS(200));
+        } else {
+          // NOTE: s_vad_utt_frames already counts the flushed pre-roll
+          // (zeroed at ONSET before flush) — do not reset here.
+          ui_signal_recording(true);
+          Serial.printf("REC VAD onset open %s\n", s_tmp_path.c_str());
+        }
+      }
+#else
       if (!open_chunk()) {
         ui_signal_error();
         vTaskDelay(pdMS_TO_TICKS(200));
         continue;
       }
+#endif
     }
     size_t bytes_read = 0;
     esp_err_t err = i2s_read(REC_I2S_PORT, raw, bytes_per_read * 4, &bytes_read, pdMS_TO_TICKS(100));
@@ -644,6 +801,11 @@ void recorder_task(void *arg) {
 #if REC_CODEC_OPUS
     // drain opus_ring to SD as OGG pages (12/loop ~= 240fps capacity, need 50)
     for (int drain_try = 0; drain_try < 12; drain_try++) {
+#if VAD_ENABLE
+      // Fileless listening: leave encoded pre-roll buffered in opus_ring
+      // until ONSET opens the chunk. Draining here would discard it.
+      if (!s_file) break;
+#endif
       size_t item_sz = 0;
       uint8_t *item = (uint8_t *)xRingbufferReceive(s_opus_ring, &item_sz, 0);
       if (!item) break;
@@ -723,18 +885,72 @@ void recorder_task(void *arg) {
         uint32_t elapsed = millis() - s_chunk_start_ms;
         uint32_t exp_frames = elapsed / REC_OPUS_FRAME_MS;
         uint32_t i2s_hz = elapsed ? (uint32_t)((uint64_t)s_i2s_frames * 1000 / elapsed) : 0;
-        Serial.printf("REC dbg file=%s bytes=%lu elapsed=%lu ms i2s=%luHz exp_frames=%lu opus_frames=%lu drop=%lu events=%lu pending=%u avg_enc=%luus stack_rec=%u stack_enc=%u\n",
+        Serial.printf("REC dbg file=%s bytes=%lu elapsed=%lu ms i2s=%luHz exp_frames=%lu opus_frames=%lu drop=%lu events=%lu pending=%u avg_enc=%luus stack_rec=%u stack_enc=%u"
+#if VAD_ENABLE
+                      " vad_st=%d vad_lvl=%.1f vad_mod=%.1f utt=%lu utt_fr=%lu"
+#endif
+                      "\n",
                       s_tmp_path.c_str(), (unsigned long)s_bytes_in_chunk,
                       (unsigned long)elapsed,
                       (unsigned long)i2s_hz, (unsigned long)exp_frames,
                       (unsigned long)s_opus_frames,
                       (unsigned long)s_dropped_bytes, (unsigned long)s_drop_events,
                       (unsigned)manifest_pending_count(), (unsigned long)avg,
-                      (unsigned)rec_hw, (unsigned)enc_hw);
+                      (unsigned)rec_hw, (unsigned)enc_hw
+#if VAD_ENABLE
+                      , (int)vad_state(), vad_level_dbfs(), vad_mod_db(),
+                      (unsigned long)vad_utterances(), (unsigned long)s_vad_utt_frames
+#endif
+                      );
       }
     }
-    bool time_done = (millis() - s_chunk_start_ms) >= (REC_CHUNK_SEC * 1000UL);
-    bool size_done = s_bytes_in_chunk >= REC_CHUNK_BYTES;
+#if VAD_ENABLE
+    // VAD OFFSET: close the utterance file (or discard blips).
+    if (s_vad_close_req && s_file) {
+      s_vad_close_req = false;
+      uint32_t min_fr = vad_min_speech_frames_cfg();
+      bool too_short = (min_fr > 0 && s_vad_utt_frames < min_fr);
+      Serial.printf("REC VAD offset close utt_frames=%lu min=%lu bytes=%lu\n",
+                    (unsigned long)s_vad_utt_frames, (unsigned long)min_fr,
+                    (unsigned long)s_bytes_in_chunk);
+      // flush remaining opus_ring before closing (same as rotation path)
+      size_t item_sz0 = 0;
+      uint8_t *item0 = nullptr;
+      while ((item0 = (uint8_t *)xRingbufferReceive(s_opus_ring, &item_sz0, 0)) != nullptr) {
+        if (s_file && item_sz0>=2) {
+          uint16_t olen = item0[0] | (item0[1]<<8);
+          if (olen+2 <= item_sz0) write_opus_sliced(item0+2, olen, nullptr);
+        }
+        vRingbufferReturnItem(s_opus_ring, item0);
+      }
+      close_chunk(!too_short);
+      s_vad_utt_frames = 0;
+      ui_signal_vad_listening();
+      // Do not reopen here: next ONSET will open. Skip rotation check below.
+    } else if (s_vad_close_req && !s_file) {
+      s_vad_close_req = false;
+      s_vad_utt_frames = 0;
+    }
+    // VAD HUMDISCARD: sustained flat hum — purge buffered encoded frames
+    // WITHOUT writing (unlike OFFSET/rotation flushes), then drop the tmp.
+    if (s_vad_discard_req) {
+      s_vad_discard_req = false;
+      size_t dit_sz = 0;
+      uint8_t *dit = nullptr;
+      uint32_t purged = 0;
+      while ((dit = (uint8_t *)xRingbufferReceive(s_opus_ring, &dit_sz, 0)) != nullptr) {
+        purged++;
+        vRingbufferReturnItem(s_opus_ring, dit);
+      }
+      Serial.printf("REC VAD discard purged=%lu tmp=%s\n",
+                    (unsigned long)purged, s_tmp_path.c_str());
+      if (s_file) close_chunk(false);
+      s_vad_utt_frames = 0;
+      ui_signal_vad_listening();
+    }
+#endif
+    bool time_done = s_file && (millis() - s_chunk_start_ms) >= (REC_CHUNK_SEC * 1000UL);
+    bool size_done = s_file && (s_bytes_in_chunk >= REC_CHUNK_BYTES);
     // For Opus, size threshold never hit (100KB <<1.6M), time_done drives rotation
     // Keep size_done for PCM fallback compat
     if (time_done || size_done) {
@@ -765,11 +981,29 @@ void recorder_task(void *arg) {
 #endif
       // also flush any pending PCM via direct encode path (same as close_chunk handles)
       close_chunk(true);
+#if VAD_ENABLE
+      // 50s cap hit mid-utterance: keep capturing iff VAD still in session,
+      // else fall back to fileless listening until the next onset.
+      if (vad_should_record() && !s_vad_close_req && !s_vad_discard_req) {
+        if (!open_chunk()) {
+          ui_signal_error();
+          vTaskDelay(pdMS_TO_TICKS(500));
+        } else {
+          // Utterance continues across the 50s rotation: keep the counter so
+          // MIN_SPEECH accounting spans the whole utterance, not per file.
+          ui_signal_recording(true);
+        }
+      } else {
+        s_vad_utt_frames = 0;
+        ui_signal_vad_listening();
+      }
+#else
       ui_signal_recording(s_recording);
       if (!open_chunk()) {
         ui_signal_error();
         vTaskDelay(pdMS_TO_TICKS(500));
       }
+#endif
     }
     vTaskDelay(pdMS_TO_TICKS(1));
   }
@@ -825,7 +1059,13 @@ static void opus_encode_task(void *arg) {
   }
   size_t pcm_filled = 0;
   while (s_recording) {
+#if VAD_ENABLE
+    if (!s_ring || !s_opus_ring) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
+    // NOTE: no !s_file stall here — VAD must keep draining s_ring while
+    // fileless so silence never overflows the PCM ring.
+#else
     if (!s_ring || !s_opus_ring || !s_file) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
+#endif
     // Ensure we have 640B PCM for one Opus frame
     while (pcm_filled < REC_OPUS_SAMPLES_PER_FRAME*2) {
       size_t item_sz = 0;
@@ -859,6 +1099,60 @@ static void opus_encode_task(void *arg) {
     for (int i=0;i<REC_OPUS_SAMPLES_PER_FRAME;i++) {
       pcm_s16[i] = (int16_t)(pcm_buf[i*2] | (pcm_buf[i*2+1]<<8));
     }
+#if VAD_ENABLE
+    // ---- VAD gate: run detection on every frame, encode only speech ----
+    // Pre-roll always tracks the latest frames so ONSET can flush audio
+    // from BEFORE the trigger (avoids first-syllable clipping).
+    if (s_preroll && s_preroll_frames > 0) {
+      memcpy(&s_preroll[s_preroll_head * REC_OPUS_SAMPLES_PER_FRAME], pcm_s16,
+             REC_OPUS_SAMPLES_PER_FRAME * sizeof(int16_t));
+      s_preroll_head = (s_preroll_head + 1) % s_preroll_frames;
+      if (s_preroll_count < s_preroll_frames) s_preroll_count++;
+    }
+    {
+      int voiced = vad_process_frame(pcm_s16, REC_OPUS_SAMPLES_PER_FRAME);
+      if (voiced < 0) voiced = 0;
+      enum VadEvent ev = vad_update(voiced);
+      if (ev == VAD_EV_ONSET) {
+        s_vad_utt_frames = 0;
+        if (!s_file) s_vad_open_req = true;
+        // Flush pre-roll oldest->newest, then the trigger frame itself.
+        // opus_ring buffers them in order; recorder_task drains after open.
+        if (s_preroll && s_preroll_count > 0) {
+          uint32_t start = (s_preroll_head + s_preroll_frames - s_preroll_count) % s_preroll_frames;
+          // Newest slot always holds the current frame (written above) —
+          // skip it here, it is encoded once below.
+          uint32_t newest = (s_preroll_head + s_preroll_frames - 1) % s_preroll_frames;
+          for (uint32_t k = 0; k < s_preroll_count; k++) {
+            uint32_t slot = (start + k) % s_preroll_frames;
+            if (slot == newest) continue;
+            vad_encode_push(&s_preroll[slot * REC_OPUS_SAMPLES_PER_FRAME],
+                            frame_bytes, packet);
+          }
+        }
+        vad_encode_push(pcm_s16, frame_bytes, packet);
+        Serial.printf("REC VAD ONSET lvl=%.1fdB pre=%lu\n",
+                      vad_level_dbfs(), (unsigned long)s_preroll_count);
+      } else if (ev == VAD_EV_SPEECH) {
+        vad_encode_push(pcm_s16, frame_bytes, packet);
+      } else if (ev == VAD_EV_PAUSE) {
+        Serial.printf("REC VAD PAUSE lvl=%.1fdB utt_fr=%lu (writes suspended, file kept)\n",
+                      vad_level_dbfs(), (unsigned long)s_vad_utt_frames);
+      } else if (ev == VAD_EV_OFFSET) {
+        s_vad_close_req = true;
+        Serial.printf("REC VAD OFFSET utt_fr=%lu\n", (unsigned long)s_vad_utt_frames);
+      } else if (ev == VAD_EV_DISCARD) {
+        // 2s spectrally-flat session (hum/tune): drop everything, keep nothing.
+        s_vad_discard_req = true;
+        Serial.printf("REC VAD HUMDISCARD utt_fr=%lu mod=%.1fdB\n",
+                      (unsigned long)s_vad_utt_frames, vad_mod_db());
+      } else {
+        // VAD_EV_SILENCE: fileless idle or in-session pause — discard frame.
+        // (s_ring already drained above, so no overflow. opus_encode skipped
+        // = the main CPU saving of voice-triggered recording.)
+      }
+    }
+#else
     int64_t t0 = esp_timer_get_time();
     int n = 0;
     if (enc_lock()) {
@@ -879,6 +1173,7 @@ static void opus_encode_task(void *arg) {
       }
       if (dt > 8000) Serial.printf("REC encode slow %lldus n=%d frames %lu\n", dt, n, (unsigned long)s_encode_frames);
     }
+#endif
     pcm_filled = 0;
   }
   if (pcm_buf) heap_caps_free(pcm_buf);

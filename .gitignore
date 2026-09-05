@@ -4,3 +4,4 @@ data
 *.pyc
 *.bin
 /firmware/examples
+/firmware/host/checkpoint_client/received
