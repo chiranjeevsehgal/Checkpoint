@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"checkpoint/ingestion/internal/cleanup"
@@ -45,7 +46,6 @@ func main() {
 		logger.Error("postgres connect failed", "error", err)
 		os.Exit(1)
 	}
-	defer pool.Close()
 
 	objectStorage, err := minioimpl.New(ctx,
 		cfg.MinIOEndpoint, cfg.MinIOAccessKey, cfg.MinIOSecretKey, cfg.MinIOBucket, cfg.MinIOUseSSL, cfg.MinIOPublicEndpoint)
@@ -74,10 +74,12 @@ func main() {
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	go dispatcher.Run(sigCtx)
-
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); dispatcher.Run(runCtx) }()
 	cleaner := cleanup.NewCleaner(pool, objectStorage, cfg.UploadExpiry, cfg.CleanupInterval, logger)
-	go cleaner.Run(sigCtx)
+	go func() { defer wg.Done(); cleaner.Run(runCtx) }()
 
 	go func() {
 		logger.Info("ingestion api listening", "port", cfg.Port, "env", cfg.Env)
@@ -97,6 +99,9 @@ func main() {
 		logger.Error("graceful shutdown failed", "error", err)
 		os.Exit(1)
 	}
+	cancelRun()
+	wg.Wait()
+	pool.Close()
 	logger.Info("shutdown complete")
 }
 

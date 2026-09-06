@@ -61,7 +61,7 @@ func (c *Cleaner) Run(ctx context.Context) {
 			c.log.Info("upload cleaner stopping")
 			return
 		case <-ticker.C:
-			expired, deleted, err := c.Sweep(ctx)
+			expired, deleted, err := c.Sweep(context.WithoutCancel(ctx))
 			if err != nil {
 				c.log.Error("expiry sweep failed", "error", err)
 				continue

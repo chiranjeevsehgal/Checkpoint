@@ -3,6 +3,7 @@ package minio
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	minioapi "github.com/minio/minio-go/v7"
@@ -58,14 +59,27 @@ func New(ctx context.Context, endpoint, accessKey, secretKey, bucket string, use
 	}
 	if !exists {
 		if err := client.MakeBucket(ctx, bucket, minioapi.MakeBucketOptions{}); err != nil {
-			return nil, err
+			if !isBucketExistsError(err) {
+				return nil, err
+			}
 		}
 	}
 	return &Storage{client: client, public: public}, nil
 }
 
+func isBucketExistsError(err error) bool {
+	code := minioapi.ToErrorResponse(err).Code
+	if code == "BucketAlreadyExists" || code == "BucketAlreadyOwnedByYou" {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "bucketalreadyexists") || strings.Contains(msg, "bucketalreadyownedbyyou")
+}
+
 // CreateUploadURL mints a presigned PUT URL for direct client upload.
 // The URL points at the public endpoint; the API never sees the bytes.
+// Content type is intentionally not bound here; CompleteUpload verifies
+// the stored object's type before marking READY.
 func (s *Storage) CreateUploadURL(
 	ctx context.Context,
 	bucket string,
@@ -95,7 +109,12 @@ func (s *Storage) StatObject(
 
 	info, err := s.client.StatObject(ctx, bucket, objectKey, minioapi.StatObjectOptions{})
 	if err != nil {
-		if minioapi.ToErrorResponse(err).Code == "NoSuchKey" {
+		resp := minioapi.ToErrorResponse(err)
+		if resp.StatusCode == 404 {
+			return storage.ObjectInfo{}, storage.ErrObjectNotFound
+		}
+		switch resp.Code {
+		case "NoSuchKey", "NoSuchBucket", "NoSuchObject", "NotFound", "NoSuchUpload":
 			return storage.ObjectInfo{}, storage.ErrObjectNotFound
 		}
 		return storage.ObjectInfo{}, err

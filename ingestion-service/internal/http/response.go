@@ -67,24 +67,12 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, domain.ErrUnsupportedMediaType):
 		writeError(w, r, http.StatusUnsupportedMediaType, CodeUnsupportedMediaType, "Content type is not supported.")
 	case errors.Is(err, domain.ErrInvalidFilename),
-		errors.Is(err, domain.ErrInvalidSize):
+		errors.Is(err, domain.ErrInvalidSize),
+		errors.Is(err, domain.ErrInvalidChecksum):
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, err.Error())
 	default:
 		writeError(w, r, http.StatusInternalServerError, CodeInternal, "Unexpected internal error.")
 	}
 }
 
-func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	if r.Body == nil {
-		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Request body is required.")
-		return false
-	}
-	defer func() { _ = r.Body.Close() }()
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil {
-		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Malformed JSON request body.")
-		return false
-	}
-	return true
-}
+

@@ -14,22 +14,24 @@ import (
 )
 
 type fakeStore struct {
-	claimed    []repository.ClaimedEvent
-	delivered  []string
-	retried    map[string]time.Time
-	failed     []string
-	deliverErr error
+	claimed     []repository.ClaimedEvent
+	delivered   []string
+	deliverUpID []string
+	retried     map[string]time.Time
+	failed      []string
+	deliverErr  error
 }
 
 func (f *fakeStore) ClaimDue(_ context.Context, _ string, _ int, _ time.Duration, _ time.Time) ([]repository.ClaimedEvent, error) {
 	return f.claimed, nil
 }
 
-func (f *fakeStore) MarkDelivered(_ context.Context, eventID, _ string, _ int, _ time.Time) error {
+func (f *fakeStore) MarkDelivered(_ context.Context, eventID, uploadID string, _ int, _ time.Time) error {
 	if f.deliverErr != nil {
 		return f.deliverErr
 	}
 	f.delivered = append(f.delivered, eventID)
+	f.deliverUpID = append(f.deliverUpID, uploadID)
 	return nil
 }
 
@@ -88,6 +90,31 @@ func TestTickDelivers(t *testing.T) {
 	}
 	if len(store.delivered) != 1 || len(store.retried) != 0 {
 		t.Fatalf("delivered=%v retried=%v", store.delivered, store.retried)
+	}
+}
+
+func TestTickUsesAggregateID(t *testing.T) {
+	raw, err := json.Marshal(domain.AudioReadyPayload{
+		SchemaVersion: 1,
+		EventID:       "event-9",
+		EventType:     domain.EventAudioReadyForVAD,
+		Data: domain.AudioReadyData{
+			AudioID: "payload-audio", Bucket: "audio",
+			ObjectKey: "u/2026/09/x", ContentType: "audio/ogg", SizeBytes: 100,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeStore{claimed: []repository.ClaimedEvent{
+		{ID: "event-9", AggregateID: "agg-9", Payload: raw, Attempt: 1},
+	}}
+	d := NewDispatcher(store, &fakeVAD{}, "test-1", nil, metrics.NewRegistry())
+	if _, err := d.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.deliverUpID) != 1 || store.deliverUpID[0] != "agg-9" {
+		t.Fatalf("MarkDelivered must use AggregateID, got %v", store.deliverUpID)
 	}
 }
 

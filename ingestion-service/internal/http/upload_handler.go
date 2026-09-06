@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -28,7 +29,9 @@ type uploadService interface {
 }
 
 // Handler serves the upload API. It decodes HTTP, calls the service and
-// encodes the result; it holds no business logic.
+// encodes the result; it holds no business logic. Idempotency replay is
+// owned by the transactional service; idem is retained for wiring
+// compatibility and future direct lookups.
 type Handler struct {
 	uploads   uploadService
 	idem      repository.IdempotencyRepository
@@ -38,6 +41,7 @@ type Handler struct {
 
 // NewHandler wires the upload endpoints.
 func NewHandler(uploads uploadService, idem repository.IdempotencyRepository, reg *metrics.Registry) *Handler {
+	_ = idem
 	return &Handler{
 		uploads:   uploads,
 		idem:      idem,
@@ -63,8 +67,8 @@ type createResponse struct {
 }
 
 // CreateUpload handles POST /v1/uploads. With an Idempotency-Key header,
-// a retried request replays the original response instead of creating a
-// second upload.
+// a retried request replays the original upload_id with a fresh URL
+// instead of creating a second upload.
 func (h *Handler) CreateUpload(w http.ResponseWriter, r *http.Request) {
 	principal, ok := PrincipalFrom(r.Context())
 	if !ok {
@@ -84,10 +88,7 @@ func (h *Handler) CreateUpload(w http.ResponseWriter, r *http.Request) {
 
 	key := r.Header.Get("Idempotency-Key")
 	if key != "" {
-		if replayed := h.replay(w, r, principal.UserID, key, raw); replayed {
-			return
-		}
-		h.createIdempotent(w, r, principal.UserID, key, raw, req)
+		h.createIdempotent(w, r, principal.UserID, key, req)
 		return
 	}
 
@@ -111,25 +112,35 @@ func (h *Handler) CreateUpload(w http.ResponseWriter, r *http.Request) {
 // createIdempotent handles a keyed POST /v1/uploads. The key claim and
 // the upload insert happen in one transaction, so concurrent retries
 // collapse to a single upload; persistence errors fail the request so
-// the client can safely retry.
-func (h *Handler) createIdempotent(w http.ResponseWriter, r *http.Request, userID, key string, raw []byte, req createRequest) {
+// the client can safely retry. Replay returns the same upload_id with
+// a freshly minted URL.
+func (h *Handler) createIdempotent(w http.ResponseWriter, r *http.Request, userID, key string, req createRequest) {
+	if err := domain.ValidateIdempotencyKey(key); err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	reqHash := hashCreateCommand(req)
 	out, err := h.uploads.CreateUploadIdempotent(r.Context(), userID, service.CreateCommand{
 		Filename:    req.Filename,
 		ContentType: req.ContentType,
 		SizeBytes:   req.SizeBytes,
-	}, key, hashBytes(raw), encodeCreateResponse)
+	}, key, reqHash, encodeCreateResponse)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
 	}
 	if out.Replay {
-		if out.Stored.RequestHash != hashBytes(raw) {
+		if out.Stored == nil || out.Stored.RequestHash != reqHash {
 			writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Idempotency-Key was already used with a different request.")
 			return
 		}
+		body := out.Stored.ResponseBody
+		if len(out.Body) > 0 {
+			body = out.Body
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(out.Stored.ResponseStatus)
-		_, _ = w.Write(out.Stored.ResponseBody)
+		_, _ = w.Write(body)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -147,23 +158,6 @@ func encodeCreateResponse(res *service.CreateResult) []byte {
 	resp.Upload.ExpiresAt = res.ExpiresAt.UTC().Format(time.RFC3339)
 	body, _ := json.Marshal(resp)
 	return body
-}
-
-// replay writes the stored response for a seen idempotency key. It
-// returns false when the key is new and the request must be executed.
-func (h *Handler) replay(w http.ResponseWriter, r *http.Request, userID, key string, raw []byte) bool {
-	rec, err := h.idem.Find(r.Context(), userID, key)
-	if err != nil || rec == nil {
-		return false
-	}
-	if rec.RequestHash != hashBytes(raw) {
-		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Idempotency-Key was already used with a different request.")
-		return true
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(rec.ResponseStatus)
-	_, _ = w.Write(rec.ResponseBody)
-	return true
 }
 
 type completeRequest struct {
@@ -192,10 +186,14 @@ func (h *Handler) CompleteUpload(w http.ResponseWriter, r *http.Request) {
 
 	var req completeRequest
 	if r.Body != nil {
-		raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		raw, err := io.ReadAll(io.LimitReader(r.Body, (1<<20)+1))
 		_ = r.Body.Close()
 		if err != nil {
 			writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Malformed JSON request body.")
+			return
+		}
+		if int64(len(raw)) > 1<<20 {
+			writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Request body too large.")
 			return
 		}
 		if len(bytes.TrimSpace(raw)) > 0 {
@@ -274,16 +272,23 @@ func readRawBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, b
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Request body is required.")
 		return nil, false
 	}
-	raw, err := io.ReadAll(io.LimitReader(r.Body, limit))
+	raw, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
 	_ = r.Body.Close()
 	if err != nil {
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Malformed JSON request body.")
 		return nil, false
 	}
+	if int64(len(raw)) > limit {
+		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Request body too large.")
+		return nil, false
+	}
 	return raw, true
 }
 
-func hashBytes(b []byte) string {
-	sum := sha256.Sum256(b)
+// hashCreateCommand hashes canonical fields so semantically identical
+// retries with different JSON whitespace still replay.
+func hashCreateCommand(req createRequest) string {
+	filename, contentType := domain.NormalizeCreate(req.Filename, req.ContentType)
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d", filename, contentType, req.SizeBytes)))
 	return hex.EncodeToString(sum[:])
 }

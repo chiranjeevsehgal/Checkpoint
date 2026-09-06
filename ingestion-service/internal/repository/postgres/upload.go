@@ -176,7 +176,7 @@ func (p *Pool) MarkReadyAndCreateEvent(ctx context.Context, params repository.Co
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO outbox_events (id, aggregate_id, event_type, payload)
-		VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+		VALUES ($1, $2, $3, $4) ON CONFLICT (aggregate_id, event_type) DO NOTHING`,
 		params.EventID, params.UploadID, domain.EventAudioReadyForVAD, params.Payload)
 	if err != nil {
 		return nil, err

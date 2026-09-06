@@ -64,6 +64,7 @@ type Histogram struct {
 	buckets []float64
 	mu      sync.Mutex
 	counts  map[string][]float64
+	totals  map[string]float64
 	sums    map[string]float64
 	keys    map[string][]string
 }
@@ -79,7 +80,7 @@ func (r *Registry) Histogram(name string, buckets []float64, labels ...string) *
 		return h
 	}
 	h := &Histogram{name: name, labels: labels, buckets: buckets,
-		counts: map[string][]float64{}, sums: map[string]float64{}, keys: map[string][]string{}}
+		counts: map[string][]float64{}, totals: map[string]float64{}, sums: map[string]float64{}, keys: map[string][]string{}}
 	r.histograms[name] = h
 	return h
 }
@@ -100,6 +101,7 @@ func (h *Histogram) Observe(seconds float64, labelValues ...string) {
 		}
 	}
 	h.counts[k] = buckets
+	h.totals[k]++
 	h.sums[k] += seconds
 }
 
@@ -169,14 +171,12 @@ func (r *Registry) Write(b *strings.Builder) {
 		fmt.Fprintf(b, "# TYPE %s histogram\n", name)
 		for k, buckets := range h.counts {
 			lv := h.keys[k]
-			cumulative := 0.0
 			for i, bound := range h.buckets {
-				cumulative = buckets[i]
-				fmt.Fprintf(b, "%s_bucket%s %v\n", name, withLe(h.labels, lv, fmt.Sprint(bound)), cumulative)
+				fmt.Fprintf(b, "%s_bucket%s %v\n", name, withLe(h.labels, lv, fmt.Sprint(bound)), buckets[i])
 			}
-			fmt.Fprintf(b, "%s_bucket%s %v\n", name, withLe(h.labels, lv, "+Inf"), cumulative)
+			fmt.Fprintf(b, "%s_bucket%s %v\n", name, withLe(h.labels, lv, "+Inf"), h.totals[k])
 			fmt.Fprintf(b, "%s_sum%s %v\n", name, formatLabels(h.labels, lv), h.sums[k])
-			fmt.Fprintf(b, "%s_count%s %v\n", name, formatLabels(h.labels, lv), cumulative)
+			fmt.Fprintf(b, "%s_count%s %v\n", name, formatLabels(h.labels, lv), h.totals[k])
 		}
 		h.mu.Unlock()
 	}

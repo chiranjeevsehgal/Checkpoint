@@ -91,6 +91,8 @@ func (d *Dispatcher) Run(ctx context.Context) {
 }
 
 // Tick claims one batch and delivers it, returning the delivered count.
+// Delivery uses a detached context so SIGTERM drain lets in-flight work
+// finish instead of aborting and forcing a 60s lease stall.
 func (d *Dispatcher) Tick(ctx context.Context) (int, error) {
 	now := d.now()
 	events, err := d.store.ClaimDue(ctx, d.instanceID, d.batch, LockFor, now)
@@ -98,10 +100,11 @@ func (d *Dispatcher) Tick(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	d.refreshBacklogGauges(ctx)
+	deliverCtx := context.WithoutCancel(ctx)
 	delivered := 0
 	for _, ev := range events {
 		start := d.now()
-		switch d.deliver(ctx, ev) {
+		switch d.deliver(deliverCtx, ev) {
 		case outcomeDelivered:
 			d.deliveries.Inc("delivered")
 			delivered++
@@ -146,6 +149,10 @@ func (d *Dispatcher) deliver(ctx context.Context, ev repository.ClaimedEvent) ou
 	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
 		// We wrote this payload, so corruption means manual inspection.
 		if markErr := d.store.MarkFailed(ctx, ev.ID, "unmarshal payload: "+err.Error(), now); markErr != nil {
+			if errors.Is(markErr, repository.ErrStaleLease) {
+				d.log.Info("outbox lease lost before failed", "event_id", ev.ID, "attempt", ev.Attempt)
+				return outcomeStale
+			}
 			d.log.Error("mark event failed", "event_id", ev.ID, "error", markErr)
 		}
 		return outcomeFailed
@@ -173,7 +180,7 @@ func (d *Dispatcher) deliver(ctx context.Context, ev repository.ClaimedEvent) ou
 		}
 		return outcomeRetry
 	}
-	if err := d.store.MarkDelivered(ctx, ev.ID, payload.Data.AudioID, ev.Attempt, now); err != nil {
+	if err := d.store.MarkDelivered(ctx, ev.ID, ev.AggregateID, ev.Attempt, now); err != nil {
 		if errors.Is(err, repository.ErrStaleLease) {
 			d.log.Info("outbox lease lost before delivered", "event_id", ev.ID, "attempt", ev.Attempt)
 			return outcomeStale

@@ -70,10 +70,14 @@ func (p *Pool) MarkDelivered(ctx context.Context, eventID, uploadID string, atte
 	if tag.RowsAffected() == 0 {
 		return repository.ErrStaleLease
 	}
-	if _, err := tx.Exec(ctx, `
+	tag, err = tx.Exec(ctx, `
 		UPDATE uploads SET status = 'SUBMITTED', submitted_at = $1, updated_at = $1
-		WHERE id = $2 AND status = 'READY'`, now, uploadID); err != nil {
+		WHERE id = $2 AND status = 'READY'`, now, uploadID)
+	if err != nil {
 		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return repository.ErrStaleLease
 	}
 	return tx.Commit(ctx)
 }
@@ -121,17 +125,22 @@ func (p *Pool) OutboxStats(ctx context.Context) (pending int64, oldestAge time.D
 
 // MarkFailed parks an event for operational intervention. Reserved for
 // poison events that can never be delivered, not transient outages.
-// Deliberately unfenced: it fires only for payloads that fail to
-// unmarshal, which is deterministic across workers, so a stale worker
-// cannot wrongly fail another owner's event.
+// Fenced to PENDING/PROCESSING so a stale worker cannot regress a
+// DELIVERED event.
 func (p *Pool) MarkFailed(ctx context.Context, eventID, errMsg string, now time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	_, err := p.inner.Exec(ctx, `
+	tag, err := p.inner.Exec(ctx, `
 		UPDATE outbox_events
 		SET status = 'FAILED', last_error = $1, delivered_at = NULL,
 			locked_by = NULL, locked_until = NULL
-		WHERE id = $2`, errMsg, eventID)
-	return err
+		WHERE id = $2 AND status IN ('PENDING', 'PROCESSING')`, errMsg, eventID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return repository.ErrStaleLease
+	}
+	return nil
 }

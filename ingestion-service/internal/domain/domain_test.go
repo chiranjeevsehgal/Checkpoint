@@ -41,6 +41,41 @@ func TestValidateCreate(t *testing.T) {
 	}
 }
 
+func TestNormalizeCreate(t *testing.T) {
+	fn, ct := NormalizeCreate("  Meeting.OGG  ", "  Audio/OGG  ")
+	if fn != "Meeting.OGG" || ct != "audio/ogg" {
+		t.Fatalf("got %q/%q", fn, ct)
+	}
+}
+
+func TestValidateFilenameLimits(t *testing.T) {
+	s := ""
+	for i := 0; i < 300; i++ {
+		s += "a"
+	}
+	if err := ValidateCreate(s+".ogg", "audio/ogg", 100); !errors.Is(err, ErrInvalidFilename) {
+		t.Fatalf("long filename must fail, got %v", err)
+	}
+	if err := ValidateIdempotencyKey(s + s); !errors.Is(err, ErrInvalidSize) {
+		t.Fatalf("long key must fail, got %v", err)
+	}
+}
+
+func TestValidateChecksumFormat(t *testing.T) {
+	if err := ValidateChecksumFormat(""); err != nil {
+		t.Fatalf("empty checksum is allowed (absent): %v", err)
+	}
+	valid := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if err := ValidateChecksumFormat(valid); err != nil {
+		t.Fatalf("valid checksum rejected: %v", err)
+	}
+	for _, bad := range []string{"xyz", "0123", valid[:63], valid + "00", "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"} {
+		if err := ValidateChecksumFormat(bad); !errors.Is(err, ErrInvalidChecksum) {
+			t.Fatalf("%q: want ErrInvalidChecksum, got %v", bad, err)
+		}
+	}
+}
+
 func TestCompletionStates(t *testing.T) {
 	if !CanTransitionToComplete(StatusUploading) {
 		t.Fatal("UPLOADING must allow completion")

@@ -48,16 +48,30 @@ func (f *fakeService) CreateUpload(_ context.Context, userID string, cmd service
 }
 
 // CreateUploadIdempotent emulates the atomic key claim: the first caller
-// wins and later same-key callers replay the stored response.
+// wins and later same-key callers replay with a fresh URL body.
 func (f *fakeService) CreateUploadIdempotent(_ context.Context, userID string, cmd service.CreateCommand, key, reqHash string, encode func(*service.CreateResult) []byte) (*service.IdempotentCreateOutcome, error) {
 	if f.idem == nil {
 		f.idem = map[string]idemEntry{}
 	}
 	if e, ok := f.idem[userID+"/"+key]; ok {
-		return &service.IdempotentCreateOutcome{Replay: true, Stored: &repository.IdempotencyRecord{
+		stored := &repository.IdempotencyRecord{
 			Key: key, UserID: userID, RequestHash: e.hash,
 			ResponseStatus: e.status, ResponseBody: e.body,
-		}}, nil
+		}
+		// Emulate fresh-URL re-mint: same upload_id, different URL.
+		fresh := append([]byte{}, e.body...)
+		if len(fresh) > 0 {
+			var v map[string]any
+			if err := json.Unmarshal(e.body, &v); err == nil {
+				if up, ok := v["upload"].(map[string]any); ok {
+					up["url"] = "https://minio.test/put-fresh"
+					if nb, err := json.Marshal(v); err == nil {
+						fresh = nb
+					}
+				}
+			}
+		}
+		return &service.IdempotentCreateOutcome{Replay: true, Stored: stored, Body: fresh}, nil
 	}
 	res, err := f.CreateUpload(context.Background(), userID, cmd)
 	if err != nil {
@@ -173,8 +187,15 @@ func TestCreateIdempotencyReplay(t *testing.T) {
 	req.Header.Set("Idempotency-Key", "key-1")
 	r.ServeHTTP(second, req)
 
-	if first.Body.String() != second.Body.String() {
-		t.Fatal("replay must return the identical body")
+	var firstResp, secondResp createResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstResp); err != nil {
+		t.Fatalf("decode first: %v", err)
+	}
+	if err := json.Unmarshal(second.Body.Bytes(), &secondResp); err != nil {
+		t.Fatalf("decode second: %v", err)
+	}
+	if firstResp.UploadID != secondResp.UploadID {
+		t.Fatalf("replay must keep upload_id: %q vs %q", firstResp.UploadID, secondResp.UploadID)
 	}
 	if svc.createN != 1 {
 		t.Fatalf("service executed %d times, want 1", svc.createN)
@@ -187,6 +208,60 @@ func TestCreateIdempotencyReplay(t *testing.T) {
 	r.ServeHTTP(other, req)
 	if other.Code != http.StatusBadRequest {
 		t.Fatalf("key reuse with different body must be 400, got %d", other.Code)
+	}
+}
+
+func TestCreateIdempotencyCanonicalHash(t *testing.T) {
+	svc := &fakeService{}
+	r := NewRouter(svc, &fakeIdem{rows: map[string]repository.IdempotencyRecord{}}, nil, nil, metrics.NewRegistry())
+	first := `{"filename":"meeting.ogg","content_type":"audio/ogg","size_bytes":100}`
+	second := "{ \"size_bytes\" : 100 , \"filename\" : \"meeting.ogg\" , \"content_type\" : \"audio/ogg\" }"
+	for i, body := range []string{first, second} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(body))
+		authed(req)
+		req.Header.Set("Idempotency-Key", "key-canon")
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("req %d: got %d (%s)", i, rec.Code, rec.Body.String())
+		}
+	}
+	if svc.createN != 1 {
+		t.Fatalf("canonical retry must collapse to 1 upload, got %d", svc.createN)
+	}
+}
+
+func TestCreateBodyTooLargeAndBadKey(t *testing.T) {
+	r := testRouter(&fakeService{})
+	big := strings.Repeat("a", (1<<20)+10)
+	req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(big))
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversize body must be 400, got %d", rec.Code)
+	}
+
+	r = testRouter(&fakeService{})
+	req = httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(`{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100}`))
+	authed(req)
+	req.Header.Set("Idempotency-Key", strings.Repeat("k", 200))
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("long key must be 400, got %d", rec.Code)
+	}
+}
+
+func TestRequestIDSanitized(t *testing.T) {
+	r := testRouter(&fakeService{})
+	req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(`{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100}`))
+	authed(req)
+	req.Header.Set("X-Request-ID", "bad\r\ninjected")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if got := rec.Header().Get("X-Request-ID"); strings.Contains(got, "\r") || strings.Contains(got, "\n") {
+		t.Fatalf("CRLF must not be reflected: %q", got)
 	}
 }
 
@@ -246,6 +321,28 @@ func TestErrorMapping(t *testing.T) {
 			method: "POST", target: "/v1/uploads/22222222-2222-2222-2222-222222222222/complete",
 			body:     `{}`,
 			wantCode: http.StatusConflict, wantErr: CodeInvalidState,
+		},
+		{
+			name: "size mismatch",
+			makeRouter: func() http.Handler {
+				return testRouter(&fakeService{
+					complete: func() (*domain.Upload, error) { return nil, service.ErrSizeMismatch },
+				})
+			},
+			method: "POST", target: "/v1/uploads/22222222-2222-2222-2222-222222222222/complete",
+			body:     `{}`,
+			wantCode: http.StatusConflict, wantErr: CodeSizeMismatch,
+		},
+		{
+			name: "bad checksum",
+			makeRouter: func() http.Handler {
+				return testRouter(&fakeService{
+					complete: func() (*domain.Upload, error) { return nil, domain.ErrInvalidChecksum },
+				})
+			},
+			method: "POST", target: "/v1/uploads/22222222-2222-2222-2222-222222222222/complete",
+			body:     `{}`,
+			wantCode: http.StatusBadRequest, wantErr: CodeInvalidRequest,
 		},
 	}
 	for _, tc := range cases {

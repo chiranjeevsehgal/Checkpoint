@@ -12,8 +12,10 @@ import (
 )
 
 type fakeUploads struct {
-	rows    map[string]*domain.Upload
-	claimed map[string][]byte
+	rows     map[string]*domain.Upload
+	claimed  map[string][]byte
+	hashes   map[string]string
+	uploadID map[string]string
 }
 
 func (f *fakeUploads) Create(_ context.Context, u *domain.Upload) error {
@@ -22,18 +24,23 @@ func (f *fakeUploads) Create(_ context.Context, u *domain.Upload) error {
 }
 
 // CreateUploadIdempotent emulates the key claim: the first caller wins,
-// later callers replay the stored body.
+// later callers replay the stored body with the original hash.
 func (f *fakeUploads) CreateUploadIdempotent(_ context.Context, p repository.IdempotentCreateParams) (*repository.IdempotentCreateResult, error) {
 	if f.claimed == nil {
 		f.claimed = map[string][]byte{}
+		f.hashes = map[string]string{}
+		f.uploadID = map[string]string{}
 	}
-	if body, ok := f.claimed[p.UserID+"/"+p.Key]; ok {
+	k := p.UserID + "/" + p.Key
+	if body, ok := f.claimed[k]; ok {
 		return &repository.IdempotentCreateResult{Replay: true, Stored: &repository.IdempotencyRecord{
-			Key: p.Key, UserID: p.UserID, RequestHash: p.RequestHash,
-			ResponseStatus: p.ResponseStatus, ResponseBody: body,
+			Key: p.Key, UserID: p.UserID, RequestHash: f.hashes[k],
+			ResponseStatus: 201, ResponseBody: body,
 		}}, nil
 	}
-	f.claimed[p.UserID+"/"+p.Key] = p.ResponseBody
+	f.claimed[k] = p.ResponseBody
+	f.hashes[k] = p.RequestHash
+	f.uploadID[k] = p.Upload.ID
 	f.rows[p.Upload.ID] = p.Upload
 	return &repository.IdempotentCreateResult{}, nil
 }
@@ -62,13 +69,19 @@ func (f *fakeCompletion) MarkSubmitted(_ context.Context, _, _ string, _ time.Ti
 }
 
 type fakeStorage struct {
-	size      int64
-	statCalls int
-	statErr   error
+	size        int64
+	contentType string
+	statCalls   int
+	statErr     error
+	presignN    int
 }
 
 func (f *fakeStorage) CreateUploadURL(_ context.Context, _, _, _ string, _ time.Duration) (string, error) {
-	return "https://minio.test/put", nil
+	f.presignN++
+	if f.presignN == 1 {
+		return "https://minio.test/put", nil
+	}
+	return "https://minio.test/put-fresh", nil
 }
 
 func (f *fakeStorage) StatObject(_ context.Context, _, _ string) (storage.ObjectInfo, error) {
@@ -76,7 +89,11 @@ func (f *fakeStorage) StatObject(_ context.Context, _, _ string) (storage.Object
 	if f.statErr != nil {
 		return storage.ObjectInfo{}, f.statErr
 	}
-	return storage.ObjectInfo{Size: f.size, ContentType: "audio/ogg"}, nil
+	ct := f.contentType
+	if ct == "" {
+		ct = "audio/ogg"
+	}
+	return storage.ObjectInfo{Size: f.size, ContentType: ct}, nil
 }
 
 func (f *fakeStorage) DeleteObject(_ context.Context, _, _ string) error { return nil }
@@ -186,5 +203,79 @@ func TestCreateUploadIdempotentValidationFirst(t *testing.T) {
 		CreateCommand{Filename: "a.bin", ContentType: "application/octet-stream", SizeBytes: 100},
 		"key-1", "hash-1", encode); !errors.Is(err, domain.ErrUnsupportedMediaType) {
 		t.Fatalf("invalid requests must fail before claiming a key, got %v", err)
+	}
+}
+
+func TestCreateNormalizes(t *testing.T) {
+	svc, uploads, _, _ := newTestService(100)
+	res, err := svc.CreateUpload(context.Background(), "user-1", CreateCommand{
+		Filename: "  Meeting.OGG  ", ContentType: "  Audio/OGG  ", SizeBytes: 100,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got := uploads.rows[res.Upload.ID]
+	if got.OriginalFilename != "Meeting.OGG" || got.ContentType != "audio/ogg" {
+		t.Fatalf("not normalized: %+v", got)
+	}
+}
+
+func TestCompleteRejectsContentTypeMismatch(t *testing.T) {
+	svc, _, _, st := newTestService(100)
+	st.contentType = "audio/mpeg"
+	res, _ := svc.CreateUpload(context.Background(), "user-1", CreateCommand{
+		Filename: "m.ogg", ContentType: "audio/ogg", SizeBytes: 100,
+	})
+	if _, err := svc.CompleteUpload(context.Background(), "user-1", res.Upload.ID, CompleteCommand{}); !errors.Is(err, domain.ErrUnsupportedMediaType) {
+		t.Fatalf("want ErrUnsupportedMediaType, got %v", err)
+	}
+}
+
+func TestCompleteActualTooLarge(t *testing.T) {
+	svc, _, _, _ := newTestService(domain.MaxUploadBytes + 1)
+	res, _ := svc.CreateUpload(context.Background(), "user-1", CreateCommand{
+		Filename: "m.ogg", ContentType: "audio/ogg", SizeBytes: 100,
+	})
+	if _, err := svc.CompleteUpload(context.Background(), "user-1", res.Upload.ID, CompleteCommand{}); !errors.Is(err, domain.ErrTooLarge) {
+		t.Fatalf("want ErrTooLarge, got %v", err)
+	}
+}
+
+func TestCompleteNegativeSizeAndBadChecksum(t *testing.T) {
+	svc, _, _, _ := newTestService(100)
+	res, _ := svc.CreateUpload(context.Background(), "user-1", CreateCommand{
+		Filename: "m.ogg", ContentType: "audio/ogg", SizeBytes: 100,
+	})
+	if _, err := svc.CompleteUpload(context.Background(), "user-1", res.Upload.ID, CompleteCommand{SizeBytes: -5}); !errors.Is(err, domain.ErrInvalidSize) {
+		t.Fatalf("negative size must be 400, got %v", err)
+	}
+	if _, err := svc.CompleteUpload(context.Background(), "user-1", res.Upload.ID, CompleteCommand{Checksum: "xyz"}); !errors.Is(err, domain.ErrInvalidChecksum) {
+		t.Fatalf("bad checksum must fail, got %v", err)
+	}
+}
+
+func TestIdempotentReplayRefreshesURL(t *testing.T) {
+	svc, _, _, _ := newTestService(100)
+	cmd := CreateCommand{Filename: "m.ogg", ContentType: "audio/ogg", SizeBytes: 100}
+	encode := func(res *CreateResult) []byte {
+		return []byte(`{"upload_id":"` + res.Upload.ID + `"}`)
+	}
+	fresh, err := svc.CreateUploadIdempotent(context.Background(), "user-1", cmd, "key-fresh", "hash-1", encode)
+	if err != nil || fresh.Replay {
+		t.Fatalf("fresh: %v %+v", err, fresh)
+	}
+	firstURL := fresh.Result.UploadURL
+	replay, err := svc.CreateUploadIdempotent(context.Background(), "user-1", cmd, "key-fresh", "hash-1", encode)
+	if err != nil || !replay.Replay {
+		t.Fatalf("replay: %v %+v", err, replay)
+	}
+	if replay.Result == nil || len(replay.Body) == 0 {
+		t.Fatalf("replay must carry fresh URL, got %+v", replay)
+	}
+	if replay.Result.UploadURL == firstURL {
+		t.Fatalf("fresh URL must differ: %q", firstURL)
+	}
+	if replay.Result.Upload.ID != fresh.Result.Upload.ID {
+		t.Fatalf("upload_id must be stable")
 	}
 }

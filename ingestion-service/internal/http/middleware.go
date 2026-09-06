@@ -26,16 +26,32 @@ func RequestIDFrom(ctx context.Context) string {
 }
 
 // RequestID assigns every request an ID for log correlation and the
-// error envelope. A client-provided X-Request-ID is honored when present.
+// error envelope. A client-provided X-Request-ID is honored when present
+// after sanitizing to prevent log/header injection and unbounded values.
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Request-ID")
+		id := sanitizeRequestID(r.Header.Get("X-Request-ID"))
 		if id == "" {
 			id = "req_" + uuid.NewString()
 		}
 		w.Header().Set("X-Request-ID", id)
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDKey, id)))
 	})
+}
+
+func sanitizeRequestID(v string) string {
+	if len(v) > 128 {
+		v = v[:128]
+	}
+	if v == "" {
+		return ""
+	}
+	for _, c := range v {
+		if c < 32 || c == 127 {
+			return ""
+		}
+	}
+	return v
 }
 
 // Principal is the authenticated caller. TenantID is reserved for the

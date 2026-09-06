@@ -124,6 +124,10 @@ curl -X POST localhost:8080/v1/uploads/<id>/complete \
 # GET /v1/uploads/<id> flips READY -> SUBMITTED once mock-vad accepts.
 ```
 
+Idempotency: `Idempotency-Key` retries return the same `upload_id` with a
+freshly minted 15m `upload.url`. `/complete` verifies MinIO size and
+`audio/ogg` type; `checksum_sha256` must be 64-char lowercase hex if sent.
+
 ---
 
 ## 7. Stop containers

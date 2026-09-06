@@ -38,7 +38,7 @@ func (p *Pool) Save(ctx context.Context, rec repository.IdempotencyRecord) error
 
 	_, err := p.inner.Exec(ctx, `
 		INSERT INTO idempotency_keys (key, user_id, request_hash, response_status, response_body)
-		VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+		VALUES ($1,$2,$3,$4,$5) ON CONFLICT (user_id, key) DO NOTHING`,
 		rec.Key, rec.UserID, rec.RequestHash, rec.ResponseStatus, rec.ResponseBody)
 	return err
 }

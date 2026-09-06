@@ -36,7 +36,58 @@ var (
 	ErrInvalidSize          = errors.New("size_bytes must be positive")
 	ErrTooLarge             = errors.New("upload exceeds maximum size")
 	ErrUnsupportedMediaType = errors.New("unsupported content type")
+	ErrInvalidChecksum      = errors.New("checksum_sha256 must be 64 lowercase hex characters")
 )
+
+const (
+	maxFilenameRunes = 255
+	maxIdemKeyChars  = 128
+)
+
+// NormalizeCreate trims and lowercases create fields so validation,
+// persistence, presigning and VAD payloads share one canonical form.
+func NormalizeCreate(filename, contentType string) (string, string) {
+	return strings.TrimSpace(filename), strings.ToLower(strings.TrimSpace(contentType))
+}
+
+// ValidateFilename checks length and content after trimming.
+func ValidateFilename(filename string) error {
+	trimmed := strings.TrimSpace(filename)
+	if trimmed == "" {
+		return ErrInvalidFilename
+	}
+	if len([]rune(trimmed)) > maxFilenameRunes {
+		return fmt.Errorf("%w: exceeds %d characters", ErrInvalidFilename, maxFilenameRunes)
+	}
+	if strings.ContainsRune(trimmed, 0) {
+		return fmt.Errorf("%w: must not contain NUL", ErrInvalidFilename)
+	}
+	return nil
+}
+
+// ValidateIdempotencyKey caps header length to bound storage and logs.
+func ValidateIdempotencyKey(key string) error {
+	if len(key) > maxIdemKeyChars {
+		return fmt.Errorf("%w: Idempotency-Key exceeds %d characters", ErrInvalidSize, maxIdemKeyChars)
+	}
+	return nil
+}
+
+// ValidateChecksumFormat checks optional sha256 hex without I/O.
+func ValidateChecksumFormat(checksum string) error {
+	if checksum == "" {
+		return nil
+	}
+	if len(checksum) != 64 {
+		return ErrInvalidChecksum
+	}
+	for _, c := range checksum {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return ErrInvalidChecksum
+		}
+	}
+	return nil
+}
 
 // Upload mirrors the uploads table row.
 type Upload struct {
@@ -59,8 +110,8 @@ type Upload struct {
 
 // ValidateCreate checks a create-upload command before any I/O happens.
 func ValidateCreate(filename, contentType string, sizeBytes int64) error {
-	if strings.TrimSpace(filename) == "" {
-		return ErrInvalidFilename
+	if err := ValidateFilename(filename); err != nil {
+		return err
 	}
 	if sizeBytes <= 0 {
 		return ErrInvalidSize
@@ -68,7 +119,8 @@ func ValidateCreate(filename, contentType string, sizeBytes int64) error {
 	if sizeBytes > MaxUploadBytes {
 		return fmt.Errorf("%w: %d bytes exceeds %d", ErrTooLarge, sizeBytes, MaxUploadBytes)
 	}
-	if _, ok := AllowedContentTypes[strings.ToLower(strings.TrimSpace(contentType))]; !ok {
+	_, normalizedType := NormalizeCreate(filename, contentType)
+	if _, ok := AllowedContentTypes[normalizedType]; !ok {
 		return fmt.Errorf("%w: %q", ErrUnsupportedMediaType, contentType)
 	}
 	return nil

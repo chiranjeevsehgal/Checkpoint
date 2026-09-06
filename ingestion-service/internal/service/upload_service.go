@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,6 +68,29 @@ type CreateResult struct {
 	ExpiresAt time.Time
 }
 
+// buildUpload normalizes the command once so validation, persistence,
+// presigning and VAD payloads share one canonical form.
+func (s *UploadService) buildUpload(userID string, cmd CreateCommand, now time.Time) *domain.Upload {
+	filename, contentType := domain.NormalizeCreate(cmd.Filename, cmd.ContentType)
+	uploadID := uuid.NewString()
+	size := cmd.SizeBytes
+	upload := &domain.Upload{
+		ID:               uploadID,
+		UserID:           userID,
+		Bucket:           s.bucket,
+		ObjectKey:        domain.ObjectKeyFor(userID, uploadID, now),
+		OriginalFilename: filename,
+		ContentType:      contentType,
+		ExpectedSize:     &size,
+		Status:           domain.StatusUploading,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	expiresAt := now.Add(UploadURLExpiry)
+	upload.UploadExpiresAt = &expiresAt
+	return upload
+}
+
 // CreateUpload validates, mints a presigned URL, and persists the
 // UPLOADING row. The presigned URL is created before the row; an orphan
 // URL on DB failure simply expires unused.
@@ -76,30 +100,16 @@ func (s *UploadService) CreateUpload(ctx context.Context, userID string, cmd Cre
 	}
 
 	now := s.now()
-	uploadID := uuid.NewString()
-	upload := &domain.Upload{
-		ID:               uploadID,
-		UserID:           userID,
-		Bucket:           s.bucket,
-		ObjectKey:        domain.ObjectKeyFor(userID, uploadID, now),
-		OriginalFilename: cmd.Filename,
-		ContentType:      cmd.ContentType,
-		ExpectedSize:     &cmd.SizeBytes,
-		Status:           domain.StatusUploading,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	}
-	expiresAt := now.Add(UploadURLExpiry)
-	upload.UploadExpiresAt = &expiresAt
+	upload := s.buildUpload(userID, cmd, now)
 
-	putURL, err := s.storage.CreateUploadURL(ctx, s.bucket, upload.ObjectKey, cmd.ContentType, UploadURLExpiry)
+	putURL, err := s.storage.CreateUploadURL(ctx, s.bucket, upload.ObjectKey, upload.ContentType, UploadURLExpiry)
 	if err != nil {
 		return nil, fmt.Errorf("presign upload: %w", err)
 	}
 	if err := s.uploads.Create(ctx, upload); err != nil {
 		return nil, fmt.Errorf("persist upload: %w", err)
 	}
-	return &CreateResult{Upload: upload, UploadURL: putURL, ExpiresAt: expiresAt}, nil
+	return &CreateResult{Upload: upload, UploadURL: putURL, ExpiresAt: *upload.UploadExpiresAt}, nil
 }
 
 // IdempotentCreateOutcome reports a keyed create. Replay is true when
@@ -116,7 +126,9 @@ type IdempotentCreateOutcome struct {
 // the idempotency key and persists the upload atomically. Presigning
 // stays outside the transaction: it is offline crypto with no I/O, and
 // an orphan URL on transaction failure simply expires unused. encode
-// renders the exact response bytes stored for replay.
+// renders the exact response bytes stored for replay. On replay the
+// stored upload_id is reused but a fresh URL is minted so retries after
+// the 15m expiry still receive a usable URL.
 func (s *UploadService) CreateUploadIdempotent(
 	ctx context.Context,
 	userID string,
@@ -129,27 +141,13 @@ func (s *UploadService) CreateUploadIdempotent(
 	}
 
 	now := s.now()
-	uploadID := uuid.NewString()
-	upload := &domain.Upload{
-		ID:               uploadID,
-		UserID:           userID,
-		Bucket:           s.bucket,
-		ObjectKey:        domain.ObjectKeyFor(userID, uploadID, now),
-		OriginalFilename: cmd.Filename,
-		ContentType:      cmd.ContentType,
-		ExpectedSize:     &cmd.SizeBytes,
-		Status:           domain.StatusUploading,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	}
-	expiresAt := now.Add(UploadURLExpiry)
-	upload.UploadExpiresAt = &expiresAt
+	upload := s.buildUpload(userID, cmd, now)
 
-	putURL, err := s.storage.CreateUploadURL(ctx, s.bucket, upload.ObjectKey, cmd.ContentType, UploadURLExpiry)
+	putURL, err := s.storage.CreateUploadURL(ctx, s.bucket, upload.ObjectKey, upload.ContentType, UploadURLExpiry)
 	if err != nil {
 		return nil, fmt.Errorf("presign upload: %w", err)
 	}
-	res := &CreateResult{Upload: upload, UploadURL: putURL, ExpiresAt: expiresAt}
+	res := &CreateResult{Upload: upload, UploadURL: putURL, ExpiresAt: *upload.UploadExpiresAt}
 	body := encode(res)
 
 	stored, err := s.uploads.CreateUploadIdempotent(ctx, repository.IdempotentCreateParams{
@@ -164,9 +162,48 @@ func (s *UploadService) CreateUploadIdempotent(
 		return nil, fmt.Errorf("persist upload: %w", err)
 	}
 	if stored.Replay {
+		freshBody, freshRes := s.refreshReplay(ctx, userID, stored.Stored, encode)
+		if freshRes != nil {
+			return &IdempotentCreateOutcome{Stored: stored.Stored, Result: freshRes, Body: freshBody, Replay: true}, nil
+		}
 		return &IdempotentCreateOutcome{Stored: stored.Stored, Replay: true}, nil
 	}
 	return &IdempotentCreateOutcome{Result: res, Body: body}, nil
+}
+
+// refreshReplay mints a fresh presigned URL for the winner upload so
+// retries after expiry still work. It returns nil when the upload row
+// cannot be resolved, letting the caller fall back to the stored body.
+func (s *UploadService) refreshReplay(ctx context.Context, userID string, stored *repository.IdempotencyRecord, encode func(*CreateResult) []byte) ([]byte, *CreateResult) {
+	if stored == nil {
+		return nil, nil
+	}
+	uploadID := parseUploadID(stored.ResponseBody)
+	if uploadID == "" {
+		return nil, nil
+	}
+	upload, err := s.uploads.GetByIDForUser(ctx, userID, uploadID)
+	if err != nil {
+		return nil, nil
+	}
+	now := s.now()
+	freshURL, err := s.storage.CreateUploadURL(ctx, upload.Bucket, upload.ObjectKey, upload.ContentType, UploadURLExpiry)
+	if err != nil {
+		return nil, nil
+	}
+	expiresAt := now.Add(UploadURLExpiry)
+	fresh := &CreateResult{Upload: upload, UploadURL: freshURL, ExpiresAt: expiresAt}
+	return encode(fresh), fresh
+}
+
+func parseUploadID(body []byte) string {
+	var v struct {
+		UploadID string `json:"upload_id"`
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(v.UploadID)
 }
 
 // CompleteCommand carries the optional /complete confirmation fields.
@@ -180,6 +217,12 @@ type CompleteCommand struct {
 // with its VAD event in one transaction. Repeats for READY/SUBMITTED
 // uploads succeed without touching MinIO.
 func (s *UploadService) CompleteUpload(ctx context.Context, userID, uploadID string, cmd CompleteCommand) (*domain.Upload, error) {
+	if cmd.SizeBytes < 0 {
+		return nil, domain.ErrInvalidSize
+	}
+	if err := domain.ValidateChecksumFormat(cmd.Checksum); err != nil {
+		return nil, err
+	}
 	upload, err := s.uploads.GetByIDForUser(ctx, userID, uploadID)
 	if err != nil {
 		return nil, err
@@ -195,8 +238,16 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID, uploadID str
 	if err != nil {
 		return nil, err
 	}
-	if info.Size <= 0 || info.Size > domain.MaxUploadBytes {
+	if info.Size <= 0 {
 		return nil, fmt.Errorf("%w: object is %d bytes", ErrSizeMismatch, info.Size)
+	}
+	if info.Size > domain.MaxUploadBytes {
+		return nil, fmt.Errorf("%w: object is %d bytes exceeds %d", domain.ErrTooLarge, info.Size, domain.MaxUploadBytes)
+	}
+	if actual := strings.ToLower(strings.TrimSpace(info.ContentType)); actual != "" {
+		if _, normalized := domain.NormalizeCreate("", upload.ContentType); actual != normalized {
+			return nil, fmt.Errorf("%w: declared %q but object is %q", domain.ErrUnsupportedMediaType, upload.ContentType, info.ContentType)
+		}
 	}
 	if cmd.SizeBytes != 0 && cmd.SizeBytes != info.Size {
 		return nil, fmt.Errorf("%w: client reported %d, object is %d", ErrSizeMismatch, cmd.SizeBytes, info.Size)

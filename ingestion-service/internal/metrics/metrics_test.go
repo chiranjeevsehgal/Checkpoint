@@ -45,6 +45,27 @@ func TestHistogramBucketsCumulative(t *testing.T) {
 	}
 }
 
+func TestHistogramOverflowCountsInf(t *testing.T) {
+	r := NewRegistry()
+	h := r.Histogram("http_request_duration_seconds", []float64{0.1, 1}, "path")
+	h.Observe(15, "/v1/uploads")
+
+	var b strings.Builder
+	r.Write(&b)
+	out := b.String()
+	for _, want := range []string{
+		`http_request_duration_seconds_bucket{path="/v1/uploads",le="0.1"} 0`,
+		`http_request_duration_seconds_bucket{path="/v1/uploads",le="1"} 0`,
+		`http_request_duration_seconds_bucket{path="/v1/uploads",le="+Inf"} 1`,
+		`http_request_duration_seconds_count{path="/v1/uploads"} 1`,
+		`http_request_duration_seconds_sum{path="/v1/uploads"} 15`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
 func TestGaugeSet(t *testing.T) {
 	r := NewRegistry()
 	r.Gauge("outbox_pending_total").Set(7)

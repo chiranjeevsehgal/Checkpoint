@@ -10,10 +10,14 @@ import (
 )
 
 type fakeStore struct {
-	stale []repository.ExpiredUpload
+	stale     []repository.ExpiredUpload
+	olderThan time.Time
+	nowArg    time.Time
 }
 
-func (f *fakeStore) ExpireStaleUploads(_ context.Context, _, _ time.Time) ([]repository.ExpiredUpload, error) {
+func (f *fakeStore) ExpireStaleUploads(_ context.Context, olderThan, now time.Time) ([]repository.ExpiredUpload, error) {
+	f.olderThan = olderThan
+	f.nowArg = now
 	return f.stale, nil
 }
 
@@ -56,5 +60,18 @@ func TestSweepDeleteFailureIsNonFatal(t *testing.T) {
 	expired, deleted, err := c.Sweep(context.Background())
 	if err != nil || expired != 2 || deleted != 1 {
 		t.Fatalf("expired=%d deleted=%d err=%v", expired, deleted, err)
+	}
+}
+
+func TestSweepCutoff(t *testing.T) {
+	store := &fakeStore{}
+	fixed := time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC)
+	c := NewCleaner(store, &fakeDeleter{}, 24*time.Hour, time.Minute, nil)
+	c.now = func() time.Time { return fixed }
+	if _, _, err := c.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !store.olderThan.Equal(fixed.Add(-24 * time.Hour)) || !store.nowArg.Equal(fixed) {
+		t.Fatalf("cutoff wrong: olderThan=%v now=%v", store.olderThan, store.nowArg)
 	}
 }
