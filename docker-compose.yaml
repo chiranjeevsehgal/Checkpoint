@@ -150,8 +150,10 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+    environment:
+      KAFKA_TOPIC_TRANSCRIPTION: ${KAFKA_TOPIC_TRANSCRIPTION:-transcription.jobs.v1}
     command: >
       /bin/bash -c "
-      /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic transcription.jobs.v1 --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
-      /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic transcription.jobs.v1.dlq --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_TRANSCRIPTION} --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_TRANSCRIPTION}.dlq --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
       "

@@ -1,15 +1,17 @@
-// Package config loads service configuration from the environment.
-//
-// Only stdlib is used here so the scaffold builds without external
-// dependencies.
+// Package config loads service configuration from the environment and
+// from ingestion-service/config.yaml (single source of truth for shared
+// queue names). Load fails fast if the YAML is missing or values drift.
 package config
 
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	yaml "go.yaml.in/yaml/v3"
 )
 
 const (
@@ -61,7 +63,17 @@ type Config struct {
 // Load reads configuration from the environment. Development keeps
 // lenient defaults; production requires explicit secrets and endpoints
 // and rejects invalid values instead of silently falling back.
+// The Kafka transcription topic comes from config.yaml (single source of
+// truth): KAFKA_TOPIC_TRANSCRIPTION must be unset or exactly match it,
+// otherwise Load fails.
 func Load() (Config, error) {
+	canonicalTopic, err := loadCanonicalTopic()
+	if err != nil {
+		return Config{}, err
+	}
+	if v := strings.TrimSpace(os.Getenv("KAFKA_TOPIC_TRANSCRIPTION")); v != "" && v != canonicalTopic {
+		return Config{}, fmt.Errorf("KAFKA_TOPIC_TRANSCRIPTION %q does not match config.yaml %q: single source of truth is ingestion-service/config.yaml", v, canonicalTopic)
+	}
 	useSSL, err := parseBoolStrict("MINIO_USE_SSL", false)
 	if err != nil {
 		return Config{}, err
@@ -85,7 +97,7 @@ func Load() (Config, error) {
 		MinIOBucket:         envOr("MINIO_BUCKET", "audio"),
 		MinIOPublicEndpoint: os.Getenv("MINIO_PUBLIC_ENDPOINT"),
 		KafkaBrokers:        envOr("KAFKA_BROKERS", "kafka:9092"),
-		KafkaTopic:          envOr("KAFKA_TOPIC_TRANSCRIPTION", "transcription.jobs.v1"),
+		KafkaTopic:          canonicalTopic,
 		KafkaClientID:       envOr("KAFKA_CLIENT_ID", "ingestion"),
 		UploadExpiry:        time.Duration(uploadHours) * time.Hour,
 		CleanupInterval:     time.Duration(cleanupMinutes) * time.Minute,
@@ -127,12 +139,64 @@ func Load() (Config, error) {
 		if strings.TrimSpace(os.Getenv("KAFKA_BROKERS")) == "" {
 			return Config{}, fmt.Errorf("KAFKA_BROKERS must be set in production")
 		}
-		if strings.TrimSpace(os.Getenv("KAFKA_TOPIC_TRANSCRIPTION")) == "" {
-			return Config{}, fmt.Errorf("KAFKA_TOPIC_TRANSCRIPTION must be set in production")
-		}
+		// KAFKA_TOPIC_TRANSCRIPTION intentionally not required here: the
+		// canonical value comes from config.yaml and env mismatch already
+		// fails above in all environments.
 	}
 
 	return cfg, nil
+}
+
+// fileConfig mirrors ingestion-service/config.yaml (single source of truth).
+type fileConfig struct {
+	Kafka struct {
+		TopicTranscription string `yaml:"topic_transcription"`
+	} `yaml:"kafka"`
+}
+
+// loadCanonicalTopic reads the transcription topic from config.yaml.
+// CONFIG_FILE overrides the path. Otherwise search: ./config.yaml (go run
+// from ingestion-service), ../../config.yaml (go test from internal/config),
+// /config.yaml (distroless image). Missing file, parse error, or empty
+// topic all fail fast.
+func loadCanonicalTopic() (string, error) {
+	if p := strings.TrimSpace(os.Getenv("CONFIG_FILE")); p != "" {
+		return readTopicFile(p)
+	}
+	candidates := []string{"config.yaml", filepath.Join("..", "..", "config.yaml"), filepath.Join(string(filepath.Separator), "config.yaml")}
+	// Also try relative to the working directory's parent (repo root layouts).
+	if wd, err := os.Getwd(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(wd, "config.yaml"),
+			filepath.Join(wd, "..", "..", "config.yaml"),
+			filepath.Join(wd, "ingestion-service", "config.yaml"),
+		)
+	}
+	var lastErr error
+	for _, p := range candidates {
+		topic, err := readTopicFile(p)
+		if err == nil {
+			return topic, nil
+		}
+		lastErr = err
+	}
+	return "", fmt.Errorf("load config.yaml (single source of truth for kafka topic): %v", lastErr)
+}
+
+func readTopicFile(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var fc fileConfig
+	if err := yaml.Unmarshal(raw, &fc); err != nil {
+		return "", fmt.Errorf("parse %s: %w", path, err)
+	}
+	topic := strings.TrimSpace(fc.Kafka.TopicTranscription)
+	if topic == "" {
+		return "", fmt.Errorf("parse %s: kafka.topic_transcription must not be empty", path)
+	}
+	return topic, nil
 }
 
 func envOr(key, fallback string) string {

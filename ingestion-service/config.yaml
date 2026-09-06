@@ -1,0 +1,2 @@
+kafka:
+  topic_transcription: transcription.jobs.v1

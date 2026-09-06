@@ -11,6 +11,7 @@ RUN CGO_ENABLED=0 go build -o /out/api ./cmd/api && \
 
 FROM gcr.io/distroless/static-debian12 AS api
 COPY --from=build /out/api /api
+COPY config.yaml /config.yaml
 EXPOSE 8080
 ENTRYPOINT ["/api"]
 
