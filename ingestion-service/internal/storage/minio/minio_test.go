@@ -41,7 +41,7 @@ func testStorage(t *testing.T) (*Storage, string) {
 func TestPresignPutStatDelete(t *testing.T) {
 	s, bucket := testStorage(t)
 	ctx := context.Background()
-	key := "audio/test/2026/09/" + uuid.NewString()
+	key := "audio/test/2026/09/06/" + uuid.NewString()
 	body := []byte("fake-audio-bytes")
 
 	putURL, err := s.CreateUploadURL(ctx, bucket, key, "audio/wav", 15*time.Minute)

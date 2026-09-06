@@ -128,6 +128,10 @@ Idempotency: `Idempotency-Key` retries return the same `upload_id` with a
 freshly minted 15m `upload.url`. `/complete` verifies MinIO size and
 `audio/ogg` type; `checksum_sha256` must be 64-char lowercase hex if sent.
 
+Storage layout in bucket `audio`: `{userID}/{YYYY}/{MM}/{DD}/<uploadUUID>`
+(day-partitioned for future daily summarization; existing `.../{MM}/<id>`
+objects remain valid and are never rewritten).
+
 ---
 
 ## 7. Stop containers

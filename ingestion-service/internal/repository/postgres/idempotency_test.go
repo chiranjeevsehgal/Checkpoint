@@ -19,7 +19,7 @@ func idempotentParams(userID, key string) repository.IdempotentCreateParams {
 	return repository.IdempotentCreateParams{
 		Upload: &domain.Upload{
 			ID: uuid.NewString(), UserID: userID, Bucket: "audio",
-			ObjectKey: "u/2026/09/" + uuid.NewString(), OriginalFilename: "m.ogg",
+			ObjectKey: "u/2026/09/06/" + uuid.NewString(), OriginalFilename: "m.ogg",
 			ContentType: "audio/ogg", ExpectedSize: &size,
 			Status: domain.StatusUploading, CreatedAt: now, UpdatedAt: now,
 		},

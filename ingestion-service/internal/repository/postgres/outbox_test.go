@@ -20,7 +20,7 @@ func seedReadyEvent(t *testing.T, p *Pool) (uploadID, eventID string) {
 	size := int64(64)
 	u := &domain.Upload{
 		ID: uploadID, UserID: uuid.NewString(), Bucket: "audio",
-		ObjectKey: "u/2026/09/" + uploadID, OriginalFilename: "m.wav",
+		ObjectKey: "u/2026/09/06/" + uploadID, OriginalFilename: "m.wav",
 		ContentType: "audio/wav", ExpectedSize: &size,
 		Status:    domain.StatusUploading,
 		CreatedAt: now,

@@ -70,7 +70,7 @@ func testPayload(t *testing.T) []byte {
 		EventType:     domain.EventAudioReadyForVAD,
 		Data: domain.AudioReadyData{
 			AudioID: "audio-1", Bucket: "audio",
-			ObjectKey: "u/2026/09/audio-1", ContentType: "audio/wav", SizeBytes: 100,
+			ObjectKey: "u/2026/09/06/audio-1", ContentType: "audio/wav", SizeBytes: 100,
 		},
 	})
 	if err != nil {
@@ -100,7 +100,7 @@ func TestTickUsesAggregateID(t *testing.T) {
 		EventType:     domain.EventAudioReadyForVAD,
 		Data: domain.AudioReadyData{
 			AudioID: "payload-audio", Bucket: "audio",
-			ObjectKey: "u/2026/09/x", ContentType: "audio/ogg", SizeBytes: 100,
+			ObjectKey: "u/2026/09/06/x", ContentType: "audio/ogg", SizeBytes: 100,
 		},
 	})
 	if err != nil {

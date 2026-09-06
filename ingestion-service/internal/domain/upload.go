@@ -141,8 +141,9 @@ func IsCompletionIdempotent(status string) bool {
 // ObjectKeyFor builds the MinIO key for an upload. Generated keys avoid
 // filename collisions and path traversal; the original filename stays in
 // PostgreSQL only. The bucket name already scopes the namespace, so the
-// key holds only tenant grouping and time partitioning.
+// key holds only tenant grouping and day-level time partitioning
+// ({userID}/{YYYY}/{MM}/{DD}/{uploadID}) for future daily summarization.
 func ObjectKeyFor(userID, uploadID string, now time.Time) string {
-	return fmt.Sprintf("%s/%04d/%02d/%s",
-		userID, now.Year(), int(now.Month()), uploadID)
+	return fmt.Sprintf("%s/%04d/%02d/%02d/%s",
+		userID, now.Year(), int(now.Month()), now.Day(), uploadID)
 }

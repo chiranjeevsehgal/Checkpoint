@@ -25,7 +25,7 @@ func TestSubmitJobAccepted(t *testing.T) {
 
 	err := New(srv.URL).SubmitJob(context.Background(), JobRequest{
 		EventID: "e1", AudioID: "a1", Bucket: "audio",
-		ObjectKey: "u/2026/09/a1", ContentType: "audio/wav", SizeBytes: 100,
+		ObjectKey: "u/2026/09/06/a1", ContentType: "audio/wav", SizeBytes: 100,
 	})
 	if err != nil {
 		t.Fatalf("submit: %v", err)

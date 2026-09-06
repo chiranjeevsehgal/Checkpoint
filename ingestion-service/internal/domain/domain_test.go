@@ -95,7 +95,7 @@ func TestCompletionStates(t *testing.T) {
 
 func TestObjectKeyFor(t *testing.T) {
 	key := ObjectKeyFor("user-1", "upload-1", time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC))
-	want := "user-1/2026/09/upload-1"
+	want := "user-1/2026/09/06/upload-1"
 	if key != want {
 		t.Fatalf("got %q, want %q", key, want)
 	}
