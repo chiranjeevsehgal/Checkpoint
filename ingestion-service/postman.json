@@ -1,0 +1,277 @@
+{
+	"info": {
+		"_postman_id": "c41a9c1e-7b2a-4f3e-9c1d-8e5f6a7b8c9d",
+		"name": "Checkpoint Ingestion Service",
+		"description": "Local-dev collection for the ingestion API (see ingestion-service/README or docs/SETUP.md).\n\nRun order: 1 Create → 2 PUT file → 3 Complete → 4 Get.\nBefore running: set the `fileSize` collection variable to the EXACT byte size of the file you attach in request 2, and attach the file itself (Body → Select File). `upload_id` and `uploadUrl` are filled in automatically by request 1's test script.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{userId}}",
+				"type": "string"
+			}
+		]
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8080"
+		},
+		{
+			"key": "mockVadUrl",
+			"value": "http://localhost:8081"
+		},
+		{
+			"key": "userId",
+			"value": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+			"description": "Dev stand-in identity: any UUID works as the Bearer token."
+		},
+		{
+			"key": "fileSize",
+			"value": "8",
+			"description": "MUST equal the exact byte size of the file attached in '2. PUT file to MinIO', otherwise the service returns 409 SIZE_MISMATCH."
+		},
+		{
+			"key": "upload_id",
+			"value": "",
+			"description": "Auto-filled by request 1's test script."
+		},
+		{
+			"key": "uploadUrl",
+			"value": "",
+			"description": "Auto-filled by request 1's test script (presigned MinIO PUT URL)."
+		}
+	],
+	"item": [
+		{
+			"name": "Upload flow (run 1-4 in order)",
+			"item": [
+				{
+					"name": "1. Create upload",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"filename\": \"speech.ogg\",\n  \"content_type\": \"audio/ogg\",\n  \"size_bytes\": {{fileSize}}\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/v1/uploads",
+							"host": ["{{baseUrl}}"],
+							"path": ["v1", "uploads"]
+						},
+						"description": "Creates the upload (status UPLOADING) and returns a presigned MinIO PUT URL. Saves upload_id + uploadUrl to collection variables."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"201 Created\", function () {",
+									"    pm.response.to.have.status(201);",
+									"});",
+									"var json = pm.response.json();",
+									"pm.collectionVariables.set(\"upload_id\", json.upload_id);",
+									"pm.collectionVariables.set(\"uploadUrl\", json.upload.url);"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "2. PUT file to MinIO",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "audio/ogg"
+							}
+						],
+						"body": {
+							"mode": "file",
+							"file": {}
+						},
+						"url": {
+							"raw": "{{uploadUrl}}",
+							"host": ["{{uploadUrl}}"]
+						},
+						"description": "Uploads bytes DIRECTLY to MinIO (bypasses the API). First attach your audio file: Body → Select File. No Authorization header — the presigned URL is the credential."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"200 PUT accepted\", function () {",
+									"    pm.expect(pm.response.code).to.be.oneOf([200, 204]);",
+									"});"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "3. Complete upload",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"size_bytes\": {{fileSize}}\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/v1/uploads/{{upload_id}}/complete",
+							"host": ["{{baseUrl}}"],
+							"path": ["v1", "uploads", "{{upload_id}}", "complete"]
+						},
+						"description": "Verifies the MinIO object and flips the upload to READY (idempotent — safe to resend). Without step 2 this returns 409 OBJECT_NOT_FOUND."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"200 READY\", function () {",
+									"    pm.response.to.have.status(200);",
+									"    pm.expect(pm.response.json().status).to.be.oneOf([\"READY\", \"SUBMITTED\"]);",
+									"});"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "4. Get upload",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/v1/uploads/{{upload_id}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["v1", "uploads", "{{upload_id}}"]
+						},
+						"description": "Shows upload state. READY flips to SUBMITTED once the outbox dispatcher hands the job to VAD (~2s with mock-vad running)."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"200 OK\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});"
+								]
+							}
+						}
+					],
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Health & debug",
+			"item": [
+				{
+					"name": "Health live",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/health/live",
+							"host": ["{{baseUrl}}"],
+							"path": ["health", "live"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Health ready",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/health/ready",
+							"host": ["{{baseUrl}}"],
+							"path": ["health", "ready"]
+						},
+						"description": "Checks Postgres + MinIO. VAD is deliberately excluded."
+					},
+					"response": []
+				},
+				{
+					"name": "Mock VAD received jobs",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{mockVadUrl}}/received",
+							"host": ["{{mockVadUrl}}"],
+							"path": ["received"]
+						},
+						"description": "Lists jobs the mock VAD accepted. Your upload's audio_id should appear here after step 4 shows SUBMITTED."
+					},
+					"response": []
+				},
+				{
+					"name": "Metrics",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/metrics",
+							"host": ["{{baseUrl}}"],
+							"path": ["metrics"]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}

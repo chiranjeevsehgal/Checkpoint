@@ -91,7 +91,50 @@ Press `Ctrl+C` to exit.
 
 ---
 
-## 6. Stop containers
+## 6. Ingestion service (local dev)
+
+From `ingestion-service/`:
+
+```bash
+make infra-up   # postgres + minio
+make migrate    # goose up (needs DATABASE_URL)
+make run        # API on :8080
+```
+
+Or the full composed stack (API + migrate + mock VAD):
+
+```bash
+docker compose --profile dev up --build
+```
+
+Smoke flow (Bearer token is the dev user UUID):
+
+Uploads are OGG-only (`audio/ogg`) and capped at 10 MB — anything else
+is rejected with 415/413 before any bytes move.
+
+```bash
+UID=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+curl -X POST localhost:8080/v1/uploads \
+  -H "Authorization: Bearer $UID" \
+  -d '{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":8}'
+# PUT 8 bytes to the returned upload.url, then:
+curl -X POST localhost:8080/v1/uploads/<id>/complete \
+  -H "Authorization: Bearer $UID" \
+  -d '{"size_bytes":8}'
+# GET /v1/uploads/<id> flips READY -> SUBMITTED once mock-vad accepts.
+```
+
+Idempotency: `Idempotency-Key` retries return the same `upload_id` with a
+freshly minted 15m `upload.url`. `/complete` verifies MinIO size and
+`audio/ogg` type; `checksum_sha256` must be 64-char lowercase hex if sent.
+
+Storage layout in bucket `audio`: `{userID}/{YYYY}/{MM}/{DD}/<uploadUUID>`
+(day-partitioned for future daily summarization; existing `.../{MM}/<id>`
+objects remain valid and are never rewritten).
+
+---
+
+## 7. Stop containers
 
 Stop and remove containers:
 
