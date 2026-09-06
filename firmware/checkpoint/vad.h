@@ -10,12 +10,18 @@
 // formant-structured speech.
 //
 // State machine (frame-counted, all derives from ms config):
-//   IDLE --[60% voiced density over trailing onset window
-//           AND syllabic energy swing (IAC: 6dB-hysteresis flips + 3.5dB range
-//           over 400ms)]--> ONSET -> SPEECH
-//     (a lip smack is 1-3 voiced frames and never reaches density;
-//      a hum is flat and fails the modulation gate;
-//      sustained speech passes both — including short words at mode 2)
+//   IDLE --[~50% voiced density over trailing 200ms onset window (5/10)
+//           AND >=2 consecutive voiced frames (40ms)
+//           AND syllabic energy swing (IAC: 6dB-hysteresis flips >=1 + >=3.5dB
+//           range over 400ms) AND IDLE-only impulse veto (crest <= 10)]-->
+//           ONSET -> SPEECH
+//     (recall-first: onset is moderately easy, then MIN_SPEECH on true
+//      voiced frames discards blips afterward — a false clip can be
+//      deleted, a missed word cannot be recovered. NOTE: the 750ms
+//      pre-roll preserves audio from before the trigger but cannot cause
+//      one — onset still needs ~100ms of voiced evidence, so isolated
+//      sub-100ms clicks cannot trigger even though they would be
+//      preserved if one did.)
 //   SPEECH --[HANGOVER_MS silent]--> PAUSE (file stays open, writes suspended)
 //   SPEECH --[2s voiced-but-flat]--> DISCARD (hum/tune: purge, drop file)
 //   PAUSE --[voiced]--> SPEECH (resume same file)
@@ -57,10 +63,10 @@ enum VadState {
 
 struct VadConfig {
   int mode;              // 0..3 aggressiveness (default 2, WebRTC mapping)
-  int onset_ms;          // trailing density window; fires at 60% voiced (default 175)
-  int hangover_ms;       // silence to suspend writes (default 1000)
+  int onset_ms;          // trailing density window; fires at ~50% voiced (default 200)
+  int hangover_ms;       // silence to suspend writes (default 1500)
   int session_extend_ms; // extra silence to keep file open (default 2000)
-  int min_speech_ms;     // utterances shorter than this are discarded (default 250)
+  int min_speech_ms;     // true voiced frames below this are discarded (default 120)
   int preroll_ms;        // pre-roll to flush on onset (default 750)
   float abs_floor_dbfs;  // below this level force unvoiced (default -50)
 };

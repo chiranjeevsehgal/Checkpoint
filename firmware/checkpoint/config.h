@@ -54,19 +54,24 @@
 #define REC_CODEC_OPUS 1
 
 // VAD — voice-triggered recording (spectral VAD in vad.{h,cpp}, 16k 20ms frames)
-// IDLE: mic ON, VAD running, no SD file. ONSET (60% voiced density over a
-// 175ms window + syllabic energy wobble, mode 2) opens a chunk and flushes
-// pre-roll — clicks never reach density, hums fail the wobble gate, short
-// words ("yes") pass both; HANGOVER (1000ms silence) suspends writes but
-// keeps the file open; +SESSION_EXTEND (2000ms) with no speech closes it.
-// A 2s spectrally-flat session is discarded as hum. Utterances shorter than
-// MIN_SPEECH are discarded. VAD_ENABLE 0 = legacy continuous 50s chunks.
+// IDLE: mic ON, VAD running, no SD file. ONSET (~50% voiced density over a
+// 200ms window + 40ms consecutive run + syllabic energy wobble with >=1 IAC
+// flip and >=3.5dB range, mode 2, IDLE-only impulse veto) opens a chunk and
+// flushes pre-roll. Philosophy is recall-first: onset is moderately easy,
+// then MIN_SPEECH (true voiced frames) discards blips afterward — a missed
+// word cannot be recovered, but a false clip can be deleted. NOTE: pre-roll
+// preserves audio from BEFORE the trigger but cannot cause one — onset still
+// needs ~100ms of voiced evidence (5/10), so isolated sub-100ms clicks
+// cannot trigger. HANGOVER (1500ms silence) suspends writes but keeps the
+// file open; +SESSION_EXTEND (2000ms) with no speech closes it.
+// A 2s spectrally-flat session is discarded as hum. VAD_ENABLE 0 = legacy
+// continuous 50s chunks.
 #define VAD_ENABLE 1
 #define VAD_MODE 2
-#define VAD_ONSET_MS 175
-#define VAD_HANGOVER_MS 1000
+#define VAD_ONSET_MS 200
+#define VAD_HANGOVER_MS 1500
 #define VAD_SESSION_EXTEND_MS 2000
-#define VAD_MIN_SPEECH_MS 250
+#define VAD_MIN_SPEECH_MS 120
 #define VAD_PREROLL_MS 750
 #define VAD_ABS_FLOOR_DBFS -50.0f
 

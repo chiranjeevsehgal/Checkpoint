@@ -57,7 +57,8 @@ static uint32_t s_encode_frames = 0;
 static volatile bool s_vad_open_req = false;  // ONSET: recorder_task should open_chunk()
 static volatile bool s_vad_close_req = false; // OFFSET: recorder_task should close_chunk()
 static volatile bool s_vad_discard_req = false; // DISCARD: hum — purge opus_ring, drop file
-static volatile uint32_t s_vad_utt_frames = 0; // voiced+hangover frames in open utterance
+static volatile uint32_t s_vad_utt_frames = 0; // encoded frames in open utterance (incl. pre-roll; debug/rotation)
+static volatile uint32_t s_vad_speech_frames = 0; // true voiced frames in utterance (min-speech verdict; excludes pre-roll padding)
 static int16_t *s_preroll = nullptr; // circular PCM pre-roll (VAD_PREROLL_MS of 20ms frames)
 static uint32_t s_preroll_frames = 0;
 static uint32_t s_preroll_head = 0; // next write slot
@@ -508,6 +509,7 @@ bool recorder_init() {
   s_vad_open_req = false;
   s_vad_close_req = false;
   s_vad_utt_frames = 0;
+  s_vad_speech_frames = 0;
 #else
   Serial.println("REC VAD OFF (continuous chunks)");
 #endif
@@ -557,6 +559,7 @@ bool recorder_start() {
   s_vad_close_req = false;
   s_vad_discard_req = false;
   s_vad_utt_frames = 0;
+  s_vad_speech_frames = 0;
   s_preroll_head = 0;
   s_preroll_count = 0;
 #endif
@@ -601,6 +604,7 @@ void recorder_stop() {
   s_vad_close_req = false;
   s_vad_discard_req = false;
   s_vad_utt_frames = 0;
+  s_vad_speech_frames = 0;
 #endif
   if (!s_task) Serial.println("REC stop: no task handle, mic OFF");
 }
@@ -747,7 +751,8 @@ void recorder_task(void *arg) {
           vTaskDelay(pdMS_TO_TICKS(200));
         } else {
           // NOTE: s_vad_utt_frames already counts the flushed pre-roll
-          // (zeroed at ONSET before flush) — do not reset here.
+          // (zeroed at ONSET before flush) and s_vad_speech_frames holds
+          // the onset window's voiced count — do not reset either here.
           ui_signal_recording(true);
           Serial.printf("REC VAD onset open %s\n", s_tmp_path.c_str());
         }
@@ -887,7 +892,7 @@ void recorder_task(void *arg) {
         uint32_t i2s_hz = elapsed ? (uint32_t)((uint64_t)s_i2s_frames * 1000 / elapsed) : 0;
         Serial.printf("REC dbg file=%s bytes=%lu elapsed=%lu ms i2s=%luHz exp_frames=%lu opus_frames=%lu drop=%lu events=%lu pending=%u avg_enc=%luus stack_rec=%u stack_enc=%u"
 #if VAD_ENABLE
-                      " vad_st=%d vad_lvl=%.1f vad_mod=%.1f utt=%lu utt_fr=%lu"
+                      " vad_st=%d vad_lvl=%.1f vad_mod=%.1f utt=%lu utt_fr=%lu speech_fr=%lu"
 #endif
                       "\n",
                       s_tmp_path.c_str(), (unsigned long)s_bytes_in_chunk,
@@ -899,19 +904,24 @@ void recorder_task(void *arg) {
                       (unsigned)rec_hw, (unsigned)enc_hw
 #if VAD_ENABLE
                       , (int)vad_state(), vad_level_dbfs(), vad_mod_db(),
-                      (unsigned long)vad_utterances(), (unsigned long)s_vad_utt_frames
+                      (unsigned long)vad_utterances(), (unsigned long)s_vad_utt_frames,
+                      (unsigned long)s_vad_speech_frames
 #endif
                       );
       }
     }
 #if VAD_ENABLE
     // VAD OFFSET: close the utterance file (or discard blips).
+    // MIN_SPEECH verdict uses true voiced frames (s_vad_speech_frames),
+    // not encoded frames: the 750ms pre-roll flush would otherwise make
+    // every false trigger pass (~37 frames vs 15 needed for 300ms).
     if (s_vad_close_req && s_file) {
       s_vad_close_req = false;
       uint32_t min_fr = vad_min_speech_frames_cfg();
-      bool too_short = (min_fr > 0 && s_vad_utt_frames < min_fr);
-      Serial.printf("REC VAD offset close utt_frames=%lu min=%lu bytes=%lu\n",
-                    (unsigned long)s_vad_utt_frames, (unsigned long)min_fr,
+      bool too_short = (min_fr > 0 && s_vad_speech_frames < min_fr);
+      Serial.printf("REC VAD offset close utt_frames=%lu speech_fr=%lu min=%lu bytes=%lu\n",
+                    (unsigned long)s_vad_utt_frames, (unsigned long)s_vad_speech_frames,
+                    (unsigned long)min_fr,
                     (unsigned long)s_bytes_in_chunk);
       // flush remaining opus_ring before closing (same as rotation path)
       size_t item_sz0 = 0;
@@ -925,11 +935,13 @@ void recorder_task(void *arg) {
       }
       close_chunk(!too_short);
       s_vad_utt_frames = 0;
+      s_vad_speech_frames = 0;
       ui_signal_vad_listening();
       // Do not reopen here: next ONSET will open. Skip rotation check below.
     } else if (s_vad_close_req && !s_file) {
       s_vad_close_req = false;
       s_vad_utt_frames = 0;
+      s_vad_speech_frames = 0;
     }
     // VAD HUMDISCARD: sustained flat hum — purge buffered encoded frames
     // WITHOUT writing (unlike OFFSET/rotation flushes), then drop the tmp.
@@ -946,6 +958,7 @@ void recorder_task(void *arg) {
                     (unsigned long)purged, s_tmp_path.c_str());
       if (s_file) close_chunk(false);
       s_vad_utt_frames = 0;
+      s_vad_speech_frames = 0;
       ui_signal_vad_listening();
     }
 #endif
@@ -989,12 +1002,13 @@ void recorder_task(void *arg) {
           ui_signal_error();
           vTaskDelay(pdMS_TO_TICKS(500));
         } else {
-          // Utterance continues across the 50s rotation: keep the counter so
-          // MIN_SPEECH accounting spans the whole utterance, not per file.
+          // Utterance continues across the 50s rotation: keep both counters
+          // so MIN_SPEECH accounting spans the whole utterance, not per file.
           ui_signal_recording(true);
         }
       } else {
         s_vad_utt_frames = 0;
+        s_vad_speech_frames = 0;
         ui_signal_vad_listening();
       }
 #else
@@ -1110,11 +1124,16 @@ static void opus_encode_task(void *arg) {
       if (s_preroll_count < s_preroll_frames) s_preroll_count++;
     }
     {
+      enum VadState prev_vad_state = vad_state();
       int voiced = vad_process_frame(pcm_s16, REC_OPUS_SAMPLES_PER_FRAME);
       if (voiced < 0) voiced = 0;
       enum VadEvent ev = vad_update(voiced);
       if (ev == VAD_EV_ONSET) {
         s_vad_utt_frames = 0;
+        // Seed with the VAD's own voiced count in the onset window — the
+        // pre-roll flush below must NOT count toward MIN_SPEECH, otherwise
+        // 750ms of buffered audio always passes the minimum.
+        s_vad_speech_frames = vad_utterance_frames();
         if (!s_file) s_vad_open_req = true;
         // Flush pre-roll oldest->newest, then the trigger frame itself.
         // opus_ring buffers them in order; recorder_task drains after open.
@@ -1131,21 +1150,52 @@ static void opus_encode_task(void *arg) {
           }
         }
         vad_encode_push(pcm_s16, frame_bytes, packet);
-        Serial.printf("REC VAD ONSET lvl=%.1fdB pre=%lu\n",
-                      vad_level_dbfs(), (unsigned long)s_preroll_count);
+        Serial.printf("REC VAD ONSET lvl=%.1fdB pre=%lu speech_fr=%lu\n",
+                      vad_level_dbfs(), (unsigned long)s_preroll_count,
+                      (unsigned long)s_vad_speech_frames);
       } else if (ev == VAD_EV_SPEECH) {
+        // MIN_SPEECH counts true voiced frames only — hangover silence
+        // inside SPEECH stretches the file but is not speech evidence.
+        if (voiced) s_vad_speech_frames++;
+        if (prev_vad_state == VAD_ST_PAUSE) {
+          // PAUSE threw away unvoiced lead-in (fricatives like "s"/"f"/"th"
+          // in "seven" often classify unvoiced before the vowel hits).
+          // Recover ~500ms from the circular pre-roll so resumption does
+          // not chop word onsets. History pushes before the current frame
+          // to preserve order; the newest slot (current frame) is skipped
+          // here and encoded once below. Flushed audio counts as encoded
+          // frames but NOT as speech evidence.
+          const uint32_t resume_frames = 25; // 25 * 20ms = 500ms
+          if (s_preroll && s_preroll_frames > 0 && s_preroll_count > 0) {
+            uint32_t count = s_preroll_count;
+            if (count > resume_frames) count = resume_frames;
+            uint32_t start =
+                (s_preroll_head + s_preroll_frames - count) % s_preroll_frames;
+            uint32_t newest =
+                (s_preroll_head + s_preroll_frames - 1) % s_preroll_frames;
+            for (uint32_t k = 0; k < count; k++) {
+              uint32_t slot = (start + k) % s_preroll_frames;
+              if (slot == newest) continue; // current frame encoded below
+              vad_encode_push(&s_preroll[slot * REC_OPUS_SAMPLES_PER_FRAME],
+                              frame_bytes, packet);
+            }
+          }
+        }
         vad_encode_push(pcm_s16, frame_bytes, packet);
       } else if (ev == VAD_EV_PAUSE) {
-        Serial.printf("REC VAD PAUSE lvl=%.1fdB utt_fr=%lu (writes suspended, file kept)\n",
-                      vad_level_dbfs(), (unsigned long)s_vad_utt_frames);
+        Serial.printf("REC VAD PAUSE lvl=%.1fdB utt_fr=%lu speech_fr=%lu (writes suspended, file kept)\n",
+                      vad_level_dbfs(), (unsigned long)s_vad_utt_frames,
+                      (unsigned long)s_vad_speech_frames);
       } else if (ev == VAD_EV_OFFSET) {
         s_vad_close_req = true;
-        Serial.printf("REC VAD OFFSET utt_fr=%lu\n", (unsigned long)s_vad_utt_frames);
+        Serial.printf("REC VAD OFFSET utt_fr=%lu speech_fr=%lu\n",
+                      (unsigned long)s_vad_utt_frames, (unsigned long)s_vad_speech_frames);
       } else if (ev == VAD_EV_DISCARD) {
         // 2s spectrally-flat session (hum/tune): drop everything, keep nothing.
         s_vad_discard_req = true;
-        Serial.printf("REC VAD HUMDISCARD utt_fr=%lu mod=%.1fdB\n",
-                      (unsigned long)s_vad_utt_frames, vad_mod_db());
+        Serial.printf("REC VAD HUMDISCARD utt_fr=%lu speech_fr=%lu mod=%.1fdB\n",
+                      (unsigned long)s_vad_utt_frames, (unsigned long)s_vad_speech_frames,
+                      vad_mod_db());
       } else {
         // VAD_EV_SILENCE: fileless idle or in-session pause — discard frame.
         // (s_ring already drained above, so no overflow. opus_encode skipped

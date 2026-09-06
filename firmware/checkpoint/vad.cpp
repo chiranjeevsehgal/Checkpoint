@@ -33,14 +33,15 @@ struct VadInst {
   // Level + machine state.
   float level_dbfs;
   enum VadState st;
-  unsigned voiced_run;  // consecutive voiced (informational)
+  unsigned voiced_run;  // consecutive voiced (onset needs >=2 = 40ms)
   unsigned silence_run; // consecutive silent (hangover debouncer)
   unsigned sess_silence; // silence since last voiced while SPEECH/PAUSE
   unsigned utt_frames;  // frames in current utterance (voiced + hangover)
   unsigned utterances;
   // Onset density window: trailing voiced flags. A lip smack is 1-3 voiced
-  // frames; real speech sustains. Requiring density (not a consecutive run)
-  // rejects isolated transients while tolerating intra-word gaps.
+  // frames; real speech sustains. Requiring ~50% density over 200ms plus a
+  // short consecutive run rejects isolated transients while tolerating
+  // intra-word gaps.
 #define VAD_WIN_MAX 50 // 1000ms @20ms — onset windows clamp to this
   uint8_t win[VAD_WIN_MAX];
   unsigned win_head;  // next write slot
@@ -83,10 +84,10 @@ static int utterance_is_sustained_tone(void) {
 
 static void cfg_defaults(struct VadConfig *c, int mode) {
   c->mode = clamp_mode(mode);
-  c->onset_ms = 175;
-  c->hangover_ms = 1000;
+  c->onset_ms = 200;
+  c->hangover_ms = 1500;
   c->session_extend_ms = 2000;
-  c->min_speech_ms = 250;
+  c->min_speech_ms = 120;
   c->preroll_ms = 750;
   c->abs_floor_dbfs = 0.0f; // 0 = use per-mode table
 }
@@ -156,11 +157,16 @@ int vad_process_frame(const int16_t *pcm, size_t n) {
   double e_low = 0, e_mid = 0, e_high = 0, e_tot = 0;
   long zc = 0;
   float prev = 0;
+  float peak = 0.0f;
   for (size_t i = 0; i < n; i++) {
     float x = (float)pcm[i] / 32768.0f;
     // DC blocker (running mean, fast enough for mic bias drift).
     s_v.dc += 0.001f * (x - s_v.dc);
     x -= s_v.dc;
+
+    float ax = fabsf(x);
+    if (ax > peak)
+      peak = ax;
     // Band split: lp500 (fundamental), bp 500-2k (formants), hp 2k+ (fricatives).
     s_v.lp500 += VAD_A500 * (x - s_v.lp500);
     s_v.lp2000 += VAD_A2000 * (x - s_v.lp2000);
@@ -228,6 +234,19 @@ int vad_process_frame(const int16_t *pcm, size_t n) {
   // gain jump suppress obvious speech.
   if (level > -25.0f && e_mid > 2.0f * (e_low + e_high + eps)) voiced = 1;
 
+  // Sharp impulse/click/tap rejection: a click has a huge peak but little
+  // sustained RMS (high crest factor); voice spreads energy across the
+  // frame. Apply only while trying to START speech — once speaking, sharp
+  // consonants must not veto. Loosened 8 -> 10: loud plosive onsets
+  // ("p"/"t"/"k") also spike crest and must still trigger.
+  {
+    float rms = sqrtf((float)e_tot + 1e-12f);
+    float crest = peak / (rms + 1e-6f);
+    if (s_v.st == VAD_ST_IDLE && crest > 10.0f) {
+      voiced = 0;
+    }
+  }
+
   // Utterance portrait: count voiced frames dwelling on the whistle shelf
   // while capturing (resumed-after-pause frames count too — same file).
   if (voiced && (s_v.st == VAD_ST_SPEECH || s_v.st == VAD_ST_PAUSE)) {
@@ -251,7 +270,7 @@ static unsigned frames_for(int ms) {
   return f < 1 ? 1 : f;
 }
 
-// Onset window: trailing N decisions, fires at 60% voiced density.
+// Onset window: trailing N decisions, fires at ~50% voiced density.
 // N derives from onset_ms (clamped 5..50 frames = 100..1000ms).
 static unsigned win_frames(void) {
   unsigned f = frames_for(s_v.cfg.onset_ms);
@@ -334,13 +353,13 @@ static unsigned iac_flips_last(unsigned n) {
 }
 
 // Onset modulation gate: needs a real syllabic swing in the trailing 400ms
-// (>=1 IAC flip AND >=3.5dB range). Skipped until the ring holds 12 frames so
-// cold-start / direct-_update callers (host tests) keep pure-density behavior.
-// (Sweet spot: was 4dB, loosened to 3dB, settled at 3.5dB — hum still sits
-// ~1-2dB so rejection holds, flat chair/environment noise mostly fails,
-//  while normal speech at 6-15dB passes with margin.)
+// (>=1 IAC flip AND >=3.5dB range). Deliberately light: density over 200ms
+// + 2-frame run + crest veto already reject clicks/taps; the gate only has
+// to reject flat hums (~1-2dB), and short words ("yes"/"no"/"okay") must
+// not be gated out. No cold-start bypass: until the ring holds 12 frames
+// there is not enough evidence to start, so gate fails.
 static int mod_gate_pass(void) {
-  if (s_v.ering_count < 12) return 1;
+  if (s_v.ering_count < 12) return 0;
   return (iac_flips_last(20) >= 1) && (erange_last(20) >= 3.5f);
 }
 
@@ -349,10 +368,14 @@ enum VadEvent vad_update(int voiced) {
   unsigned session_need = hangover_need;
   if (s_v.cfg.session_extend_ms > 0)
     session_need += frames_for(s_v.cfg.session_extend_ms);
-  // Density onset: 60% voiced over the trailing onset window. Clicks/pops
-  // contribute 1-3 frames and never reach density; sustained speech does.
+  // Density onset: ~50% voiced over the trailing onset window (5/10 at
+  // 200ms). Clicks/pops contribute 1-3 frames and never reach density;
+  // sustained speech does. Plus a short consecutive run (2 frames = 40ms)
+  // so isolated transients cannot trip density alone. Recall-first:
+  // residual false starts are rejected afterward by MIN_SPEECH on true
+  // voiced frames, so onset need not be near-perfect.
   unsigned wf = win_frames();
-  unsigned onset_need = (wf * 3 + 4) / 5;
+  unsigned onset_need = (wf + 1) / 2;
   if (onset_need < 1) onset_need = 1;
 
   win_push(voiced);
@@ -372,7 +395,7 @@ enum VadEvent vad_update(int voiced) {
   switch (s_v.st) {
     case VAD_ST_IDLE:
       if (s_v.win_count >= wf && s_v.win_voiced >= onset_need &&
-          mod_gate_pass()) {
+          s_v.voiced_run >= 2 && mod_gate_pass()) {
         s_v.st = VAD_ST_SPEECH;
         s_v.utt_frames = s_v.win_voiced;
         s_v.sess_silence = 0;
