@@ -1,7 +1,7 @@
 # Ingestion service workflows. Run from this directory.
 # Local infra (Postgres, MinIO) is defined in the repo-root compose file.
 
-.PHONY: infra-up infra-down migrate status run mock-vad test build vet
+.PHONY: infra-up infra-down migrate status run test build vet
 
 infra-up:
 	cd .. && docker compose up -d postgres minio
@@ -17,9 +17,6 @@ status:
 
 run:
 	go run ./cmd/api
-
-mock-vad:
-	go run ./mockvad
 
 test:
 	go test ./...

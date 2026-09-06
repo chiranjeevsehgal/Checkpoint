@@ -85,7 +85,7 @@ func TestScheduleRetryAndExpiryReclaim(t *testing.T) {
 		t.Fatalf("claim: %+v %v", claimed, err)
 	}
 	next := now.Add(domain.NextRetryDelay(claimed[0].Attempt))
-	if err := p.ScheduleRetry(context.Background(), claimed[0].ID, claimed[0].Attempt, next, "vad down"); err != nil {
+	if err := p.ScheduleRetry(context.Background(), claimed[0].ID, claimed[0].Attempt, next, "kafka down"); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 
@@ -151,7 +151,7 @@ func TestStaleLeaseCannotRegressDelivered(t *testing.T) {
 
 	// The stale worker wakes up: its retry must be refused and the
 	// DELIVERED state must stand.
-	if err := p.ScheduleRetry(ctx, stale[0].ID, stale[0].Attempt, now.Add(time.Minute), "slow vad"); !errors.Is(err, repository.ErrStaleLease) {
+	if err := p.ScheduleRetry(ctx, stale[0].ID, stale[0].Attempt, now.Add(time.Minute), "slow publisher"); !errors.Is(err, repository.ErrStaleLease) {
 		t.Fatalf("stale retry must be refused, got %v", err)
 	}
 	var status, upStatus string

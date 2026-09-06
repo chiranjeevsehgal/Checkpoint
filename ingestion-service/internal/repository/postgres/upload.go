@@ -122,9 +122,10 @@ func (p *Pool) GetByIDForUser(ctx context.Context, userID, uploadID string) (*do
 }
 
 // MarkReadyAndCreateEvent runs the service's most important transaction:
-// the upload becomes READY and the VAD outbox event exists, atomically.
-// Concurrent /complete calls serialize on the row lock and collapse to a
-// single event through the unique (aggregate_id, event_type) index.
+// the upload becomes READY and the transcription outbox event exists,
+// atomically. Concurrent /complete calls serialize on the row lock and
+// collapse to a single event through the unique (aggregate_id, event_type)
+// index.
 func (p *Pool) MarkReadyAndCreateEvent(ctx context.Context, params repository.CompleteParams) (*repository.CompleteResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -177,7 +178,7 @@ func (p *Pool) MarkReadyAndCreateEvent(ctx context.Context, params repository.Co
 	_, err = tx.Exec(ctx, `
 		INSERT INTO outbox_events (id, aggregate_id, event_type, payload)
 		VALUES ($1, $2, $3, $4) ON CONFLICT (aggregate_id, event_type) DO NOTHING`,
-		params.EventID, params.UploadID, domain.EventAudioReadyForVAD, params.Payload)
+		params.EventID, params.UploadID, domain.EventTranscriptionRequested, params.Payload)
 	if err != nil {
 		return nil, err
 	}
@@ -192,8 +193,8 @@ func (p *Pool) MarkReadyAndCreateEvent(ctx context.Context, params repository.Co
 	return &repository.CompleteResult{Upload: upload}, nil
 }
 
-// MarkSubmitted records that VAD durably accepted the job. Called by the
-// outbox dispatcher after a 200/202 response.
+// MarkSubmitted records that the job was durably queued to Kafka. Called
+// by the outbox dispatcher after a successful publish.
 func (p *Pool) MarkSubmitted(ctx context.Context, userID, uploadID string, now time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

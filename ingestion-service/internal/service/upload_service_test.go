@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -10,6 +11,8 @@ import (
 	"checkpoint/ingestion/internal/repository"
 	"checkpoint/ingestion/internal/storage"
 )
+
+func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
 
 type fakeUploads struct {
 	rows     map[string]*domain.Upload
@@ -54,13 +57,15 @@ func (f *fakeUploads) GetByIDForUser(_ context.Context, userID, uploadID string)
 }
 
 type fakeCompletion struct {
-	events    int
-	committed map[string]bool
+	events      int
+	committed   map[string]bool
+	lastPayload []byte
 }
 
 func (f *fakeCompletion) MarkReadyAndCreateEvent(_ context.Context, p repository.CompleteParams) (*repository.CompleteResult, error) {
 	f.events++
 	f.committed[p.UploadID] = true
+	f.lastPayload = append([]byte(nil), p.Payload...)
 	return &repository.CompleteResult{Upload: &domain.Upload{ID: p.UploadID, Status: domain.StatusReady}}, nil
 }
 
@@ -146,6 +151,31 @@ func TestCompleteUpload(t *testing.T) {
 	}
 	if st.statCalls != calls || completion.events != 1 {
 		t.Fatal("repeat /complete must skip StatObject and event insert")
+	}
+}
+
+func TestCompleteEmitsTranscriptionEvent(t *testing.T) {
+	svc, _, completion, _ := newTestService(100)
+	res, _ := svc.CreateUpload(context.Background(), "user-1", CreateCommand{
+		Filename: "m.ogg", ContentType: "audio/ogg", SizeBytes: 100,
+	})
+	checksum := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if _, err := svc.CompleteUpload(context.Background(), "user-1", res.Upload.ID,
+		CompleteCommand{Checksum: checksum}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	var payload domain.AudioReadyPayload
+	if err := jsonUnmarshal(completion.lastPayload, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.EventType != domain.EventTranscriptionRequested {
+		t.Fatalf("event type: got %q", payload.EventType)
+	}
+	if payload.Data.UserID != "user-1" || payload.Data.AudioID != res.Upload.ID {
+		t.Fatalf("identity: %+v", payload.Data)
+	}
+	if payload.Data.ChecksumSHA256 != checksum || payload.Data.Bucket == "" || payload.Data.ObjectKey == "" {
+		t.Fatalf("by-reference/checksum: %+v", payload.Data)
 	}
 }
 

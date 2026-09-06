@@ -1,6 +1,7 @@
-// Package outbox reliably hands READY uploads to VAD. The dispatcher
-// claims due events, submits them, and retries with capped backoff until
-// VAD accepts. VAD downtime only grows the outbox; uploads keep working.
+// Package outbox reliably queues READY uploads for transcription. The
+// dispatcher claims due events, publishes them to Kafka, and retries with
+// capped backoff until the broker accepts. Broker downtime only grows the
+// outbox; uploads keep working.
 package outbox
 
 import (
@@ -12,12 +13,12 @@ import (
 
 	"checkpoint/ingestion/internal/domain"
 	"checkpoint/ingestion/internal/metrics"
+	"checkpoint/ingestion/internal/queue"
 	"checkpoint/ingestion/internal/repository"
-	"checkpoint/ingestion/internal/vadclient"
 )
 
-// BatchSize bounds one claim round. Invariant: BatchSize times the VAD
-// request timeout (5s) must stay comfortably below LockFor, because one
+// BatchSize bounds one claim round. Invariant: BatchSize times the Kafka
+// publish timeout (5s) must stay comfortably below LockFor, because one
 // tick delivers its batch sequentially and every event must still hold
 // its lease when its turn comes.
 const (
@@ -26,15 +27,16 @@ const (
 	PollInterval = 2 * time.Second
 )
 
-// Submitter delivers one job to VAD. *vadclient.Client satisfies it.
-type Submitter interface {
-	SubmitJob(ctx context.Context, req vadclient.JobRequest) error
+// Publisher publishes one outbox event to Kafka. *queue.FranzProducer
+// satisfies it.
+type Publisher interface {
+	Publish(ctx context.Context, msg queue.Message) error
 }
 
 // Dispatcher runs the claim-deliver loop for one process.
 type Dispatcher struct {
 	store      repository.OutboxRepository
-	vad        Submitter
+	pub        Publisher
 	instanceID string
 	batch      int
 	poll       time.Duration
@@ -49,7 +51,7 @@ type Dispatcher struct {
 // NewDispatcher wires a dispatcher. Pass nil logger for a default one.
 func NewDispatcher(
 	store repository.OutboxRepository,
-	vad Submitter,
+	pub Publisher,
 	instanceID string,
 	log *slog.Logger,
 	reg *metrics.Registry,
@@ -59,7 +61,7 @@ func NewDispatcher(
 	}
 	return &Dispatcher{
 		store:      store,
-		vad:        vad,
+		pub:        pub,
 		instanceID: instanceID,
 		batch:      BatchSize,
 		poll:       PollInterval,
@@ -121,7 +123,7 @@ func (d *Dispatcher) Tick(ctx context.Context) (int, error) {
 }
 
 // refreshBacklogGauges publishes queue depth and head-of-line age. Age
-// climbing past seconds into minutes means VAD delivery is unhealthy.
+// climbing past seconds into minutes means Kafka delivery is unhealthy.
 func (d *Dispatcher) refreshBacklogGauges(ctx context.Context) {
 	pending, age, err := d.store.OutboxStats(ctx)
 	if err != nil {
@@ -158,16 +160,16 @@ func (d *Dispatcher) deliver(ctx context.Context, ev repository.ClaimedEvent) ou
 		return outcomeFailed
 	}
 
-	err := d.vad.SubmitJob(ctx, vadclient.JobRequest{
-		EventID:     payload.EventID,
-		AudioID:     payload.Data.AudioID,
-		Bucket:      payload.Data.Bucket,
-		ObjectKey:   payload.Data.ObjectKey,
-		ContentType: payload.Data.ContentType,
-		SizeBytes:   payload.Data.SizeBytes,
+	err := d.pub.Publish(ctx, queue.Message{
+		Key: ev.AggregateID,
+		Headers: map[string]string{
+			"event_id":   payload.EventID,
+			"event_type": payload.EventType,
+		},
+		Value: ev.Payload,
 	})
 	if err != nil {
-		d.log.Warn("vad submission failed",
+		d.log.Warn("kafka publish failed",
 			"event_id", ev.ID, "upload_id", ev.AggregateID,
 			"attempt", ev.Attempt, "error", err)
 		next := now.Add(domain.NextRetryDelay(ev.Attempt))
@@ -188,6 +190,6 @@ func (d *Dispatcher) deliver(ctx context.Context, ev repository.ClaimedEvent) ou
 		d.log.Error("mark delivered failed", "event_id", ev.ID, "error", err)
 		return outcomeRetry
 	}
-	d.log.Info("vad job accepted", "event_id", ev.ID, "upload_id", ev.AggregateID)
+	d.log.Info("transcription job queued", "event_id", ev.ID, "upload_id", ev.AggregateID)
 	return outcomeDelivered
 }

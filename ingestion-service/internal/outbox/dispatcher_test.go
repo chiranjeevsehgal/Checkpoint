@@ -9,8 +9,8 @@ import (
 
 	"checkpoint/ingestion/internal/domain"
 	"checkpoint/ingestion/internal/metrics"
+	"checkpoint/ingestion/internal/queue"
 	"checkpoint/ingestion/internal/repository"
-	"checkpoint/ingestion/internal/vadclient"
 )
 
 type fakeStore struct {
@@ -52,25 +52,29 @@ func (f *fakeStore) OutboxStats(_ context.Context) (int64, time.Duration, error)
 	return int64(len(f.claimed)), 0, nil
 }
 
-type fakeVAD struct {
+type fakePublisher struct {
 	err   error
 	calls int
+	msgs  []queue.Message
 }
 
-func (f *fakeVAD) SubmitJob(_ context.Context, _ vadclient.JobRequest) error {
+func (f *fakePublisher) Publish(_ context.Context, msg queue.Message) error {
 	f.calls++
+	if f.err == nil {
+		f.msgs = append(f.msgs, msg)
+	}
 	return f.err
 }
 
 func testPayload(t *testing.T) []byte {
 	t.Helper()
 	raw, err := json.Marshal(domain.AudioReadyPayload{
-		SchemaVersion: 1,
+		SchemaVersion: domain.SchemaVersion,
 		EventID:       "event-1",
-		EventType:     domain.EventAudioReadyForVAD,
+		EventType:     domain.EventTranscriptionRequested,
 		Data: domain.AudioReadyData{
-			AudioID: "audio-1", Bucket: "audio",
-			ObjectKey: "u/2026/09/06/audio-1", ContentType: "audio/wav", SizeBytes: 100,
+			AudioID: "audio-1", UserID: "user-1", Bucket: "audio",
+			ObjectKey: "u/2026/09/06/audio-1", ContentType: "audio/ogg", SizeBytes: 100,
 		},
 	})
 	if err != nil {
@@ -83,7 +87,8 @@ func TestTickDelivers(t *testing.T) {
 	store := &fakeStore{claimed: []repository.ClaimedEvent{
 		{ID: "event-1", AggregateID: "audio-1", Payload: testPayload(t), Attempt: 1},
 	}}
-	d := NewDispatcher(store, &fakeVAD{}, "test-1", nil, metrics.NewRegistry())
+	pub := &fakePublisher{}
+	d := NewDispatcher(store, pub, "test-1", nil, metrics.NewRegistry())
 	n, err := d.Tick(context.Background())
 	if err != nil || n != 1 {
 		t.Fatalf("n=%d err=%v", n, err)
@@ -91,15 +96,21 @@ func TestTickDelivers(t *testing.T) {
 	if len(store.delivered) != 1 || len(store.retried) != 0 {
 		t.Fatalf("delivered=%v retried=%v", store.delivered, store.retried)
 	}
+	if len(pub.msgs) != 1 || pub.msgs[0].Key != "audio-1" {
+		t.Fatalf("must publish keyed by AggregateID, got %+v", pub.msgs)
+	}
+	if len(pub.msgs[0].Value) == 0 {
+		t.Fatal("published value must carry the stored outbox payload")
+	}
 }
 
 func TestTickUsesAggregateID(t *testing.T) {
 	raw, err := json.Marshal(domain.AudioReadyPayload{
-		SchemaVersion: 1,
+		SchemaVersion: domain.SchemaVersion,
 		EventID:       "event-9",
-		EventType:     domain.EventAudioReadyForVAD,
+		EventType:     domain.EventTranscriptionRequested,
 		Data: domain.AudioReadyData{
-			AudioID: "payload-audio", Bucket: "audio",
+			AudioID: "payload-audio", UserID: "user-1", Bucket: "audio",
 			ObjectKey: "u/2026/09/06/x", ContentType: "audio/ogg", SizeBytes: 100,
 		},
 	})
@@ -109,12 +120,16 @@ func TestTickUsesAggregateID(t *testing.T) {
 	store := &fakeStore{claimed: []repository.ClaimedEvent{
 		{ID: "event-9", AggregateID: "agg-9", Payload: raw, Attempt: 1},
 	}}
-	d := NewDispatcher(store, &fakeVAD{}, "test-1", nil, metrics.NewRegistry())
+	pub := &fakePublisher{}
+	d := NewDispatcher(store, pub, "test-1", nil, metrics.NewRegistry())
 	if _, err := d.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(store.deliverUpID) != 1 || store.deliverUpID[0] != "agg-9" {
 		t.Fatalf("MarkDelivered must use AggregateID, got %v", store.deliverUpID)
+	}
+	if len(pub.msgs) != 1 || pub.msgs[0].Key != "agg-9" {
+		t.Fatalf("Kafka key must use AggregateID, got %+v", pub.msgs)
 	}
 }
 
@@ -123,7 +138,7 @@ func TestTickRetriesWithBackoff(t *testing.T) {
 	store := &fakeStore{claimed: []repository.ClaimedEvent{
 		{ID: "event-1", AggregateID: "audio-1", Payload: testPayload(t), Attempt: 2},
 	}}
-	d := NewDispatcher(store, &fakeVAD{err: errors.New("vad down")}, "test-1", nil, metrics.NewRegistry())
+	d := NewDispatcher(store, &fakePublisher{err: errors.New("kafka down")}, "test-1", nil, metrics.NewRegistry())
 	if _, err := d.Tick(context.Background()); err != nil {
 		t.Fatalf("tick must not fail on delivery error: %v", err)
 	}
@@ -140,12 +155,16 @@ func TestTickPoisonPayloadFails(t *testing.T) {
 	store := &fakeStore{claimed: []repository.ClaimedEvent{
 		{ID: "event-1", AggregateID: "audio-1", Payload: []byte("{bad"), Attempt: 1},
 	}}
-	d := NewDispatcher(store, &fakeVAD{}, "test-1", nil, metrics.NewRegistry())
+	pub := &fakePublisher{}
+	d := NewDispatcher(store, pub, "test-1", nil, metrics.NewRegistry())
 	if _, err := d.Tick(context.Background()); err != nil {
 		t.Fatalf("tick must not fail on poison event: %v", err)
 	}
 	if len(store.failed) != 1 || len(store.delivered) != 0 {
 		t.Fatalf("poison event must be FAILED, got failed=%v delivered=%v", store.failed, store.retried)
+	}
+	if pub.calls != 0 {
+		t.Fatal("poison payload must never reach Kafka")
 	}
 }
 
@@ -159,7 +178,7 @@ func TestTickStaleLeaseIsQuiet(t *testing.T) {
 		},
 		deliverErr: repository.ErrStaleLease,
 	}
-	d := NewDispatcher(store, &fakeVAD{}, "test-1", nil, metrics.NewRegistry())
+	d := NewDispatcher(store, &fakePublisher{}, "test-1", nil, metrics.NewRegistry())
 	n, err := d.Tick(context.Background())
 	if err != nil {
 		t.Fatalf("stale lease must not fail the tick: %v", err)

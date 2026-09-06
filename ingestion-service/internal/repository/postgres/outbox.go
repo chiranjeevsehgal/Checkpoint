@@ -46,7 +46,7 @@ func (p *Pool) ClaimDue(ctx context.Context, instanceID string, batch int, lockF
 	})
 }
 
-// MarkDelivered records VAD acceptance and flips the upload to
+// MarkDelivered records Kafka acceptance and flips the upload to
 // SUBMITTED in one transaction, so the two can never disagree. The
 // outbox update is fenced on the claimed attempt: a worker whose lease
 // expired reports ErrStaleLease and touches nothing.
@@ -106,7 +106,7 @@ func (p *Pool) ScheduleRetry(ctx context.Context, eventID string, attempt int, n
 
 // OutboxStats reports the dispatcher backlog: how many events await
 // delivery and how old the oldest one is. The age is the key pipeline
-// health signal: it stays near zero and climbs when VAD delivery stalls.
+// health signal: it stays near zero and climbs when Kafka delivery stalls.
 func (p *Pool) OutboxStats(ctx context.Context) (pending int64, oldestAge time.Duration, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

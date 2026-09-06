@@ -14,7 +14,8 @@ func TestLoadProductionRequiresExplicit(t *testing.T) {
 	setEnv(t, "DATABASE_URL", "postgres://u:p@localhost:5432/db?sslmode=disable")
 	setEnv(t, "MINIO_ACCESS_KEY", "ak")
 	setEnv(t, "MINIO_SECRET_KEY", "sk")
-	setEnv(t, "VAD_BASE_URL", "http://vad:8081")
+	setEnv(t, "KAFKA_BROKERS", "kafka:9092")
+	setEnv(t, "KAFKA_TOPIC_TRANSCRIPTION", "transcription.jobs.v1")
 	setEnv(t, "PORT", "8080")
 	if _, err := Load(); err != nil {
 		t.Fatalf("valid prod must load: %v", err)
@@ -26,48 +27,32 @@ func TestLoadProductionRequiresExplicit(t *testing.T) {
 	}
 	setEnv(t, "DATABASE_URL", "postgres://u:p@localhost:5432/db?sslmode=disable")
 
-	setEnv(t, "VAD_BASE_URL", "http://localhost:8081")
+	setEnv(t, "KAFKA_BROKERS", "")
 	if _, err := Load(); err == nil {
-		t.Fatal("localhost VAD in prod must fail")
+		t.Fatal("missing KAFKA_BROKERS in prod must fail")
 	}
-	setEnv(t, "VAD_BASE_URL", "http://mock-vad:8081")
+	setEnv(t, "KAFKA_BROKERS", "kafka:9092")
+
+	setEnv(t, "KAFKA_TOPIC_TRANSCRIPTION", "")
 	if _, err := Load(); err == nil {
-		t.Fatal("mock-vad in prod must fail")
+		t.Fatal("missing KAFKA_TOPIC_TRANSCRIPTION in prod must fail")
 	}
 }
 
-func TestLoadProductionVADHostnames(t *testing.T) {
-	setEnv(t, "ENV", "production")
-	setEnv(t, "DATABASE_URL", "postgres://u:p@localhost:5432/db?sslmode=disable")
-	setEnv(t, "MINIO_ACCESS_KEY", "ak")
-	setEnv(t, "MINIO_SECRET_KEY", "sk")
-	setEnv(t, "PORT", "8080")
-
-	for _, allow := range []string{
-		"http://vad:8081",
-		"http://vad-service:8081",
-		"http://host.docker.internal:8081",
-		"http://vad.internal.example.com:8081",
-	} {
-		setEnv(t, "VAD_BASE_URL", allow)
-		if _, err := Load(); err != nil {
-			t.Fatalf("%s must load in prod: %v", allow, err)
-		}
+func TestLoadKafkaDefaults(t *testing.T) {
+	setEnv(t, "ENV", "development")
+	setEnv(t, "KAFKA_BROKERS", "")
+	setEnv(t, "KAFKA_TOPIC_TRANSCRIPTION", "")
+	setEnv(t, "KAFKA_CLIENT_ID", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("dev defaults must load: %v", err)
 	}
-	for _, deny := range []string{
-		"http://localhost:8081",
-		"http://LOCALHOST:8081",
-		"http://foo.localhost:8081",
-		"http://127.0.0.1:8081",
-		"http://127.0.0.2:8081",
-		"http://[::1]:8081",
-		"http://0.0.0.0:8081",
-		"http://mock-vad:8081",
-	} {
-		setEnv(t, "VAD_BASE_URL", deny)
-		if _, err := Load(); err == nil {
-			t.Fatalf("%s must fail in prod", deny)
-		}
+	if cfg.KafkaBrokers != "kafka:9092" {
+		t.Fatalf("brokers default: got %q", cfg.KafkaBrokers)
+	}
+	if cfg.KafkaTopic != "transcription.jobs.v1" {
+		t.Fatalf("topic default: got %q", cfg.KafkaTopic)
 	}
 }
 

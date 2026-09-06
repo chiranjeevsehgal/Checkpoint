@@ -56,7 +56,7 @@ func seedUploading(t *testing.T, p *Pool, userID string) *domain.Upload {
 
 func completeParams(u *domain.Upload) repository.CompleteParams {
 	eventID := uuid.NewString()
-	payload, _ := json.Marshal(domain.NewAudioReadyPayload(eventID, u, 1024, time.Now().UTC()))
+	payload, _ := json.Marshal(domain.NewAudioReadyPayload(eventID, u, 1024, "", time.Now().UTC()))
 	return repository.CompleteParams{
 		UploadID:   u.ID,
 		UserID:     u.UserID,

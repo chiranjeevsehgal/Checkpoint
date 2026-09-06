@@ -1,14 +1,11 @@
 // Package config loads service configuration from the environment.
 //
 // Only stdlib is used here so the scaffold builds without external
-// dependencies. Later tasks add DATABASE_URL, MinIO and VAD settings
-// consumers; the field names are fixed now to avoid rework.
+// dependencies.
 package config
 
 import (
 	"fmt"
-	"net"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -42,8 +39,10 @@ type Config struct {
 	// Defaults to MinIOEndpoint when unset.
 	MinIOPublicEndpoint string
 
-	// VADBaseURL is the internal VAD job endpoint, consumed from task 8.
-	VADBaseURL string
+	// Kafka settings for the transcription queue.
+	KafkaBrokers  string
+	KafkaTopic    string
+	KafkaClientID string
 
 	// UploadExpiry is how long an UPLOADING row may sit untouched before
 	// the cleanup job marks it EXPIRED.
@@ -85,7 +84,9 @@ func Load() (Config, error) {
 		MinIOUseSSL:         useSSL,
 		MinIOBucket:         envOr("MINIO_BUCKET", "audio"),
 		MinIOPublicEndpoint: os.Getenv("MINIO_PUBLIC_ENDPOINT"),
-		VADBaseURL:          envOr("VAD_BASE_URL", "http://localhost:8081"),
+		KafkaBrokers:        envOr("KAFKA_BROKERS", "kafka:9092"),
+		KafkaTopic:          envOr("KAFKA_TOPIC_TRANSCRIPTION", "transcription.jobs.v1"),
+		KafkaClientID:       envOr("KAFKA_CLIENT_ID", "ingestion"),
 		UploadExpiry:        time.Duration(uploadHours) * time.Hour,
 		CleanupInterval:     time.Duration(cleanupMinutes) * time.Minute,
 		ReadHeaderTimeout:   5 * time.Second,
@@ -123,32 +124,15 @@ func Load() (Config, error) {
 		if cfg.MinIOBucket == "" {
 			return Config{}, fmt.Errorf("MINIO_BUCKET must be set in production")
 		}
-		if err := validateVADBaseURL(cfg.VADBaseURL); err != nil {
-			return Config{}, err
+		if strings.TrimSpace(os.Getenv("KAFKA_BROKERS")) == "" {
+			return Config{}, fmt.Errorf("KAFKA_BROKERS must be set in production")
+		}
+		if strings.TrimSpace(os.Getenv("KAFKA_TOPIC_TRANSCRIPTION")) == "" {
+			return Config{}, fmt.Errorf("KAFKA_TOPIC_TRANSCRIPTION must be set in production")
 		}
 	}
 
 	return cfg, nil
-}
-
-func validateVADBaseURL(v string) error {
-	u, err := url.Parse(v)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return fmt.Errorf("invalid VAD_BASE_URL %q: must be http(s)://host", v)
-	}
-	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
-	if host == "" {
-		return fmt.Errorf("invalid VAD_BASE_URL %q: must be http(s)://host", v)
-	}
-	if host == "localhost" || host == "mock-vad" || strings.HasSuffix(host, ".localhost") {
-		return fmt.Errorf("invalid VAD_BASE_URL %q: must be explicit in production (use the Compose service name, e.g. http://vad:8081)", v)
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsUnspecified() {
-			return fmt.Errorf("invalid VAD_BASE_URL %q: loopback/unspecified IP is not reachable from the ingestion container in production", v)
-		}
-	}
-	return nil
 }
 
 func envOr(key, fallback string) string {

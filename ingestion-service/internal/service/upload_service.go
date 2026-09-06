@@ -69,7 +69,7 @@ type CreateResult struct {
 }
 
 // buildUpload normalizes the command once so validation, persistence,
-// presigning and VAD payloads share one canonical form.
+// presigning and transcription payloads share one canonical form.
 func (s *UploadService) buildUpload(userID string, cmd CreateCommand, now time.Time) *domain.Upload {
 	filename, contentType := domain.NormalizeCreate(cmd.Filename, cmd.ContentType)
 	uploadID := uuid.NewString()
@@ -214,7 +214,7 @@ type CompleteCommand struct {
 }
 
 // CompleteUpload verifies the MinIO object and flips the upload to READY
-// with its VAD event in one transaction. Repeats for READY/SUBMITTED
+// with its transcription event in one transaction. Repeats for READY/SUBMITTED
 // uploads succeed without touching MinIO.
 func (s *UploadService) CompleteUpload(ctx context.Context, userID, uploadID string, cmd CompleteCommand) (*domain.Upload, error) {
 	if cmd.SizeBytes < 0 {
@@ -258,7 +258,7 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID, uploadID str
 
 	now := s.now()
 	eventID := uuid.NewString()
-	payload, err := json.Marshal(domain.NewAudioReadyPayload(eventID, upload, info.Size, now))
+	payload, err := json.Marshal(domain.NewAudioReadyPayload(eventID, upload, info.Size, cmd.Checksum, now))
 	if err != nil {
 		return nil, fmt.Errorf("marshal event: %w", err)
 	}

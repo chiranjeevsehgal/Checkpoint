@@ -1,7 +1,5 @@
 // Command api is the ingestion service entrypoint. It wires PostgreSQL,
-// MinIO and the upload routes, then serves until SIGTERM/SIGINT. The
-// outbox dispatcher and cleanup loop are added by later tasks on top of
-// the lifecycle defined here.
+// MinIO, Kafka and the upload routes, then serves until SIGTERM/SIGINT.
 package main
 
 import (
@@ -20,10 +18,10 @@ import (
 	apihttp "checkpoint/ingestion/internal/http"
 	"checkpoint/ingestion/internal/metrics"
 	"checkpoint/ingestion/internal/outbox"
+	"checkpoint/ingestion/internal/queue"
 	"checkpoint/ingestion/internal/repository/postgres"
 	"checkpoint/ingestion/internal/service"
 	minioimpl "checkpoint/ingestion/internal/storage/minio"
-	"checkpoint/ingestion/internal/vadclient"
 )
 
 func main() {
@@ -60,7 +58,13 @@ func main() {
 
 	// The outbox dispatcher runs in-process. Every replica runs one, and
 	// SKIP LOCKED claiming keeps them from stepping on each other.
-	dispatcher := outbox.NewDispatcher(pool, vadclient.New(cfg.VADBaseURL), instanceID(), logger, reg)
+	// Published records point workers at MinIO objects for Deepgram.
+	publisher, err := queue.NewFranzProducer(cfg.KafkaBrokers, cfg.KafkaTopic, cfg.KafkaClientID+"-"+instanceID())
+	if err != nil {
+		logger.Error("kafka connect failed", "error", err)
+		os.Exit(1)
+	}
+	dispatcher := outbox.NewDispatcher(pool, publisher, instanceID(), logger, reg)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -101,6 +105,7 @@ func main() {
 	}
 	cancelRun()
 	wg.Wait()
+	publisher.Close()
 	pool.Close()
 	logger.Info("shutdown complete")
 }

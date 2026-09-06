@@ -101,10 +101,10 @@ make migrate    # goose up (needs DATABASE_URL)
 make run        # API on :8080
 ```
 
-Or the full composed stack (API + migrate + mock VAD):
+Or the full composed stack (API + migrate + Kafka):
 
 ```bash
-docker compose --profile dev up --build
+docker compose up --build
 ```
 
 Smoke flow (Bearer token is the dev user UUID):
@@ -121,7 +121,9 @@ curl -X POST localhost:8080/v1/uploads \
 curl -X POST localhost:8080/v1/uploads/<id>/complete \
   -H "Authorization: Bearer $UID" \
   -d '{"size_bytes":8}'
-# GET /v1/uploads/<id> flips READY -> SUBMITTED once mock-vad accepts.
+# GET /v1/uploads/<id> flips READY -> SUBMITTED once the outbox dispatcher
+# publishes to Kafka (transcription.jobs.v1, ~2s). Verify with:
+# docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --topic transcription.jobs.v1 --bootstrap-server kafka:9092
 ```
 
 Idempotency: `Idempotency-Key` retries return the same `upload_id` with a

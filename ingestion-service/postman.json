@@ -21,8 +21,8 @@
 			"value": "http://localhost:8080"
 		},
 		{
-			"key": "mockVadUrl",
-			"value": "http://localhost:8081"
+			"key": "kafkaTopic",
+			"value": "transcription.jobs.v1"
 		},
 		{
 			"key": "userId",
@@ -183,7 +183,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["v1", "uploads", "{{upload_id}}"]
 						},
-						"description": "Shows upload state. READY flips to SUBMITTED once the outbox dispatcher hands the job to VAD (~2s with mock-vad running)."
+						"description": "Shows upload state. READY flips to SUBMITTED once the outbox dispatcher publishes the job to Kafka (~2s). Verify with kafka-console-consumer on transcription.jobs.v1."
 					},
 					"event": [
 						{
@@ -234,12 +234,12 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["health", "ready"]
 						},
-						"description": "Checks Postgres + MinIO. VAD is deliberately excluded."
+						"description": "Checks Postgres + MinIO. The transcription queue is deliberately excluded."
 					},
 					"response": []
 				},
 				{
-					"name": "Mock VAD received jobs",
+					"name": "Kafka transcription jobs (via console consumer)",
 					"request": {
 						"auth": {
 							"type": "noauth"
@@ -247,11 +247,11 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{mockVadUrl}}/received",
-							"host": ["{{mockVadUrl}}"],
-							"path": ["received"]
+							"raw": "{{baseUrl}}/metrics",
+							"host": ["{{baseUrl}}"],
+							"path": ["metrics"]
 						},
-						"description": "Lists jobs the mock VAD accepted. Your upload's audio_id should appear here after step 4 shows SUBMITTED."
+						"description": "SUBMITTED means queued to Kafka topic transcription.jobs.v1. Consume with: docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --topic transcription.jobs.v1 --bootstrap-server kafka:9092. Your upload's audio_id should appear there after step 4 shows SUBMITTED."
 					},
 					"response": []
 				},
