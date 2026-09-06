@@ -1,13 +1,13 @@
 # Ingestion service workflows. Run from this directory.
-# Local infra (Postgres, MinIO) is defined in the repo-root compose file.
+# Local infra (Postgres, MinIO, Kafka) is defined in the repo-root compose file.
 
 .PHONY: infra-up infra-down migrate status run test build vet
 
 infra-up:
-	cd .. && docker compose up -d postgres minio
+	cd .. && docker compose up -d postgres minio kafka kafka-init
 
 infra-down:
-	cd .. && docker compose stop postgres minio
+	cd .. && docker compose stop postgres minio kafka
 
 migrate:
 	go run ./cmd/migrate up

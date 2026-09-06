@@ -128,6 +128,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
       ingestion-migrate:
         condition: service_completed_successfully
     environment:
@@ -143,6 +145,11 @@ services:
       KAFKA_CLIENT_ID: ingestion-api
 
   kafka-init:
+    # Creates the transcription topic and its DLQ up front so the first
+    # publish does not auto-create with wrong partitions. Ingestion only
+    # produces to the main topic; the .dlq is reserved for the future
+    # transcription-service consumer. Dispatcher retries broker errors
+    # indefinitely by design (see outbox dispatcher).
     image: apache/kafka:4.3.1
     container_name: kafka-init
     networks:

@@ -120,14 +120,6 @@ func TestMarkReadyAndCreateEvent(t *testing.T) {
 	if n := outboxCount(t, p, u.ID); n != 1 {
 		t.Fatalf("repeat must not duplicate event, got %d", n)
 	}
-
-	if err := p.MarkSubmitted(context.Background(), u.UserID, u.ID, time.Now().UTC()); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	got, _ := p.GetByIDForUser(context.Background(), u.UserID, u.ID)
-	if got.Status != domain.StatusSubmitted {
-		t.Fatalf("want SUBMITTED, got %s", got.Status)
-	}
 }
 
 func TestConcurrentCompleteSingleEvent(t *testing.T) {

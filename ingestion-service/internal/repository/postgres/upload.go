@@ -193,25 +193,6 @@ func (p *Pool) MarkReadyAndCreateEvent(ctx context.Context, params repository.Co
 	return &repository.CompleteResult{Upload: upload}, nil
 }
 
-// MarkSubmitted records that the job was durably queued to Kafka. Called
-// by the outbox dispatcher after a successful publish.
-func (p *Pool) MarkSubmitted(ctx context.Context, userID, uploadID string, now time.Time) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	tag, err := p.inner.Exec(ctx, `
-		UPDATE uploads SET status = 'SUBMITTED', submitted_at = $1, updated_at = $1
-		WHERE id = $2 AND user_id = $3 AND status = 'READY'`,
-		now, uploadID, userID)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return repository.ErrInvalidState
-	}
-	return nil
-}
-
 func getTxUpload(ctx context.Context, tx pgx.Tx, uploadID, userID string) (*domain.Upload, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id, user_id, bucket, object_key,

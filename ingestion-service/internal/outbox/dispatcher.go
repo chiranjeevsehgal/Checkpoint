@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"checkpoint/ingestion/internal/domain"
@@ -160,11 +161,30 @@ func (d *Dispatcher) deliver(ctx context.Context, ev repository.ClaimedEvent) ou
 		return outcomeFailed
 	}
 
+	// Guard against pre-migration v1 payloads that missed the 00005
+	// backfill (e.g. old replica inserted after migrate). Downstream
+	// expects v2 TRANSCRIPTION_REQUESTED; emitting stale schema would
+	// silently break the consumer, so park for inspection instead.
+	if payload.SchemaVersion != domain.SchemaVersion || payload.EventType != domain.EventTranscriptionRequested {
+		msg := "unsupported payload schema_version=" + strconv.Itoa(payload.SchemaVersion) + " event_type=" + payload.EventType
+		if markErr := d.store.MarkFailed(ctx, ev.ID, msg, now); markErr != nil {
+			if errors.Is(markErr, repository.ErrStaleLease) {
+				d.log.Info("outbox lease lost before failed", "event_id", ev.ID, "attempt", ev.Attempt)
+				return outcomeStale
+			}
+			d.log.Error("mark event failed", "event_id", ev.ID, "error", markErr)
+		}
+		return outcomeFailed
+	}
+
+	// At-least-once delivery: Publish then MarkDelivered cannot be atomic
+	// across Kafka and Postgres. A DB failure after a successful publish
+	// retries and duplicates. Consumers must dedup on event_id.
 	err := d.pub.Publish(ctx, queue.Message{
 		Key: ev.AggregateID,
 		Headers: map[string]string{
-			"event_id":   payload.EventID,
-			"event_type": payload.EventType,
+			"event_id":   ev.ID,
+			"event_type": ev.EventType,
 		},
 		Value: ev.Payload,
 	})

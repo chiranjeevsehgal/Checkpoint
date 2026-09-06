@@ -69,10 +69,6 @@ func (f *fakeCompletion) MarkReadyAndCreateEvent(_ context.Context, p repository
 	return &repository.CompleteResult{Upload: &domain.Upload{ID: p.UploadID, Status: domain.StatusReady}}, nil
 }
 
-func (f *fakeCompletion) MarkSubmitted(_ context.Context, _, _ string, _ time.Time) error {
-	return nil
-}
-
 type fakeStorage struct {
 	size        int64
 	contentType string

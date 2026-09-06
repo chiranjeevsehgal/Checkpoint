@@ -29,15 +29,19 @@ type Publisher interface {
 	Close()
 }
 
-// FranzProducer publishes to a fixed topic with an idempotent producer
-// (acks=all, retries, exactly-once partitioning on Key).
+// FranzProducer publishes to a fixed topic with acks=all and key-based
+// partitioning. Delivery is at-least-once: the dispatcher may retry after
+// a successful publish if MarkDelivered fails, so consumers must dedup on
+// the event_id header.
 type FranzProducer struct {
 	client *kgo.Client
 	topic  string
 }
 
-// NewFranzProducer dials brokers for topic. brokers is a comma-separated
-// list like "kafka:9092". clientID identifies this replica in broker logs.
+// NewFranzProducer builds a producer for topic. brokers is a
+// comma-separated list like "kafka:9092". clientID identifies this replica
+// in broker logs. The client connects lazily; unreachable brokers surface
+// as Publish errors for the dispatcher to retry, not as constructor errors.
 func NewFranzProducer(brokers, topic, clientID string) (*FranzProducer, error) {
 	seeds := splitBrokers(brokers)
 	if len(seeds) == 0 {

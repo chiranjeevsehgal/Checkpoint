@@ -85,7 +85,7 @@ func testPayload(t *testing.T) []byte {
 
 func TestTickDelivers(t *testing.T) {
 	store := &fakeStore{claimed: []repository.ClaimedEvent{
-		{ID: "event-1", AggregateID: "audio-1", Payload: testPayload(t), Attempt: 1},
+		{ID: "event-1", AggregateID: "audio-1", EventType: domain.EventTranscriptionRequested, Payload: testPayload(t), Attempt: 1},
 	}}
 	pub := &fakePublisher{}
 	d := NewDispatcher(store, pub, "test-1", nil, metrics.NewRegistry())
@@ -101,6 +101,9 @@ func TestTickDelivers(t *testing.T) {
 	}
 	if len(pub.msgs[0].Value) == 0 {
 		t.Fatal("published value must carry the stored outbox payload")
+	}
+	if pub.msgs[0].Headers["event_id"] != "event-1" || pub.msgs[0].Headers["event_type"] != domain.EventTranscriptionRequested {
+		t.Fatalf("headers must use canonical IDs, got %+v", pub.msgs[0].Headers)
 	}
 }
 
@@ -118,7 +121,7 @@ func TestTickUsesAggregateID(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &fakeStore{claimed: []repository.ClaimedEvent{
-		{ID: "event-9", AggregateID: "agg-9", Payload: raw, Attempt: 1},
+		{ID: "event-9", AggregateID: "agg-9", EventType: domain.EventTranscriptionRequested, Payload: raw, Attempt: 1},
 	}}
 	pub := &fakePublisher{}
 	d := NewDispatcher(store, pub, "test-1", nil, metrics.NewRegistry())
@@ -136,7 +139,7 @@ func TestTickUsesAggregateID(t *testing.T) {
 func TestTickRetriesWithBackoff(t *testing.T) {
 	before := time.Now().UTC()
 	store := &fakeStore{claimed: []repository.ClaimedEvent{
-		{ID: "event-1", AggregateID: "audio-1", Payload: testPayload(t), Attempt: 2},
+		{ID: "event-1", AggregateID: "audio-1", EventType: domain.EventTranscriptionRequested, Payload: testPayload(t), Attempt: 2},
 	}}
 	d := NewDispatcher(store, &fakePublisher{err: errors.New("kafka down")}, "test-1", nil, metrics.NewRegistry())
 	if _, err := d.Tick(context.Background()); err != nil {
@@ -153,7 +156,7 @@ func TestTickRetriesWithBackoff(t *testing.T) {
 
 func TestTickPoisonPayloadFails(t *testing.T) {
 	store := &fakeStore{claimed: []repository.ClaimedEvent{
-		{ID: "event-1", AggregateID: "audio-1", Payload: []byte("{bad"), Attempt: 1},
+		{ID: "event-1", AggregateID: "audio-1", EventType: domain.EventTranscriptionRequested, Payload: []byte("{bad"), Attempt: 1},
 	}}
 	pub := &fakePublisher{}
 	d := NewDispatcher(store, pub, "test-1", nil, metrics.NewRegistry())
@@ -174,7 +177,7 @@ func TestTickPoisonPayloadFails(t *testing.T) {
 func TestTickStaleLeaseIsQuiet(t *testing.T) {
 	store := &fakeStore{
 		claimed: []repository.ClaimedEvent{
-			{ID: "event-1", AggregateID: "audio-1", Payload: testPayload(t), Attempt: 1},
+			{ID: "event-1", AggregateID: "audio-1", EventType: domain.EventTranscriptionRequested, Payload: testPayload(t), Attempt: 1},
 		},
 		deliverErr: repository.ErrStaleLease,
 	}
@@ -186,5 +189,94 @@ func TestTickStaleLeaseIsQuiet(t *testing.T) {
 	if n != 0 || len(store.delivered) != 0 || len(store.retried) != 0 {
 		t.Fatalf("stale event must be dropped quietly, got n=%d delivered=%v retried=%v",
 			n, store.delivered, store.retried)
+	}
+}
+
+func TestTickRejectsV1Payload(t *testing.T) {
+	raw, err := json.Marshal(domain.AudioReadyPayload{
+		SchemaVersion: 1,
+		EventID:       "event-old",
+		EventType:     domain.EventAudioReadyForVAD,
+		Data: domain.AudioReadyData{
+			AudioID: "audio-1", Bucket: "audio",
+			ObjectKey: "u/2026/09/06/audio-1", ContentType: "audio/ogg", SizeBytes: 100,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeStore{claimed: []repository.ClaimedEvent{
+		{ID: "event-old", AggregateID: "audio-1", EventType: domain.EventAudioReadyForVAD, Payload: raw, Attempt: 1},
+	}}
+	pub := &fakePublisher{}
+	d := NewDispatcher(store, pub, "test-1", nil, metrics.NewRegistry())
+	n, err := d.Tick(context.Background())
+	if err != nil {
+		t.Fatalf("tick must not fail on stale schema: %v", err)
+	}
+	if n != 0 || len(store.delivered) != 0 {
+		t.Fatalf("v1 payload must not count as delivered, got n=%d delivered=%v", n, store.delivered)
+	}
+	if len(store.failed) != 1 {
+		t.Fatalf("v1 payload must be FAILED for inspection, got failed=%v", store.failed)
+	}
+	if pub.calls != 0 {
+		t.Fatal("v1 payload must never reach Kafka")
+	}
+}
+
+func TestTickHeadersUseCanonicalIDs(t *testing.T) {
+	raw, err := json.Marshal(domain.AudioReadyPayload{
+		SchemaVersion: domain.SchemaVersion,
+		EventID:       "payload-event-different",
+		EventType:     domain.EventTranscriptionRequested,
+		Data: domain.AudioReadyData{
+			AudioID: "audio-1", UserID: "user-1", Bucket: "audio",
+			ObjectKey: "u/2026/09/06/audio-1", ContentType: "audio/ogg", SizeBytes: 100,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeStore{claimed: []repository.ClaimedEvent{
+		{ID: "event-canonical", AggregateID: "audio-1", EventType: domain.EventTranscriptionRequested, Payload: raw, Attempt: 1},
+	}}
+	pub := &fakePublisher{}
+	d := NewDispatcher(store, pub, "test-1", nil, metrics.NewRegistry())
+	if _, err := d.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(pub.msgs) != 1 {
+		t.Fatalf("want 1 publish, got %+v", pub.msgs)
+	}
+	if pub.msgs[0].Headers["event_id"] != "event-canonical" {
+		t.Fatalf("event_id header must use row ID, got %+v", pub.msgs[0].Headers)
+	}
+	if pub.msgs[0].Headers["event_type"] != domain.EventTranscriptionRequested {
+		t.Fatalf("event_type header must use row type, got %+v", pub.msgs[0].Headers)
+	}
+}
+
+func TestTickDuplicateOnMarkDeliveredError(t *testing.T) {
+	store := &fakeStore{
+		claimed: []repository.ClaimedEvent{
+			{ID: "event-1", AggregateID: "audio-1", EventType: domain.EventTranscriptionRequested, Payload: testPayload(t), Attempt: 1},
+		},
+		deliverErr: errors.New("db down"),
+	}
+	pub := &fakePublisher{}
+	d := NewDispatcher(store, pub, "test-1", nil, metrics.NewRegistry())
+	n, err := d.Tick(context.Background())
+	if err != nil {
+		t.Fatalf("tick must not fail on DB error: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("failed MarkDelivered must not count, got n=%d", n)
+	}
+	if pub.calls != 1 {
+		t.Fatalf("Kafka publish already happened before DB failure, calls=%d", pub.calls)
+	}
+	if len(store.delivered) != 0 || len(store.failed) != 0 {
+		t.Fatalf("must neither deliver nor fail, got delivered=%v failed=%v", store.delivered, store.failed)
 	}
 }

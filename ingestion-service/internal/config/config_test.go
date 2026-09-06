@@ -73,6 +73,50 @@ func TestLoadMissingYAMLFails(t *testing.T) {
 	}
 }
 
+func TestLoadInvalidTopicNameFails(t *testing.T) {
+	for _, topic := range []string{"bad topic!", "has/slash", "has space", "semi;colon", string(make([]byte, 0))} {
+		if topic == "" {
+			continue
+		}
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		content := "kafka:\n  topic_transcription: " + topic + "\n"
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		setEnv(t, "CONFIG_FILE", path)
+		setEnv(t, "ENV", "development")
+		setEnv(t, "KAFKA_TOPIC_TRANSCRIPTION", "")
+		if _, err := Load(); err == nil {
+			t.Fatalf("invalid topic %q must fail", topic)
+		}
+	}
+	long := string(make([]byte, 0))
+	for i := 0; i < 250; i++ {
+		long += "a"
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("kafka:\n  topic_transcription: "+long+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	setEnv(t, "CONFIG_FILE", path)
+	if _, err := Load(); err == nil {
+		t.Fatal("overlong topic must fail")
+	}
+	_ = long
+}
+
+func TestLoadMalformedYAMLFailsFast(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("kafka:\n  topic_transcription: [unclosed\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	setEnv(t, "CONFIG_FILE", path)
+	setEnv(t, "ENV", "development")
+	if _, err := Load(); err == nil {
+		t.Fatal("malformed config.yaml must fail fast")
+	}
+}
+
 func TestLoadKafkaDefaults(t *testing.T) {
 	canonical := canonicalForTest(t)
 	setEnv(t, "ENV", "development")
@@ -111,22 +155,26 @@ func TestLoadInvalidBoolAndPort(t *testing.T) {
 }
 
 // TestTopicSingleSourceOfTruth fails on drift between config.yaml and its
-// mirrors. config.yaml is canonical; .env, .env.example and
-// docker-compose.yaml must carry the same value, and config.go must not
-// hardcode another topic literal.
+// mirrors. config.yaml is canonical; .env.example and docker-compose.yaml
+// must carry the same value, and config.go must not hardcode another topic
+// literal. Local .env (gitignored) is checked only when present.
 func TestTopicSingleSourceOfTruth(t *testing.T) {
 	canonical := canonicalForTest(t)
 
 	repoRoot := filepath.Join("..", "..", "..")
-	for _, name := range []string{".env", ".env.example"} {
-		raw, err := os.ReadFile(filepath.Join(repoRoot, name))
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
+	raw, err := os.ReadFile(filepath.Join(repoRoot, ".env.example"))
+	if err != nil {
+		t.Fatalf("read .env.example: %v", err)
+	}
+	if got := envFileTopic(t, string(raw), ".env.example"); got != canonical {
+		t.Fatalf(".env.example KAFKA_TOPIC_TRANSCRIPTION=%q does not match config.yaml %q", got, canonical)
+	}
+	if raw, err := os.ReadFile(filepath.Join(repoRoot, ".env")); err == nil {
+		if got := envFileTopic(t, string(raw), ".env"); got != canonical {
+			t.Fatalf(".env KAFKA_TOPIC_TRANSCRIPTION=%q does not match config.yaml %q", got, canonical)
 		}
-		got := envFileTopic(t, string(raw), name)
-		if got != canonical {
-			t.Fatalf("%s KAFKA_TOPIC_TRANSCRIPTION=%q does not match config.yaml %q", name, got, canonical)
-		}
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("read .env: %v", err)
 	}
 
 	compose, err := os.ReadFile(filepath.Join(repoRoot, "docker-compose.yaml"))

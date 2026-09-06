@@ -157,8 +157,9 @@ type fileConfig struct {
 // loadCanonicalTopic reads the transcription topic from config.yaml.
 // CONFIG_FILE overrides the path. Otherwise search: ./config.yaml (go run
 // from ingestion-service), ../../config.yaml (go test from internal/config),
-// /config.yaml (distroless image). Missing file, parse error, or empty
-// topic all fail fast.
+// /config.yaml (distroless image). Missing files are skipped; a file that
+// exists but fails to parse or validate fails fast instead of silently
+// falling through to a different config.yaml.
 func loadCanonicalTopic() (string, error) {
 	if p := strings.TrimSpace(os.Getenv("CONFIG_FILE")); p != "" {
 		return readTopicFile(p)
@@ -178,6 +179,9 @@ func loadCanonicalTopic() (string, error) {
 		if err == nil {
 			return topic, nil
 		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
 		lastErr = err
 	}
 	return "", fmt.Errorf("load config.yaml (single source of truth for kafka topic): %v", lastErr)
@@ -196,7 +200,23 @@ func readTopicFile(path string) (string, error) {
 	if topic == "" {
 		return "", fmt.Errorf("parse %s: kafka.topic_transcription must not be empty", path)
 	}
+	if err := validateTopicName(path, topic); err != nil {
+		return "", err
+	}
 	return topic, nil
+}
+
+func validateTopicName(path, topic string) error {
+	if len(topic) > 249 {
+		return fmt.Errorf("parse %s: kafka.topic_transcription %q too long (max 249)", path, topic)
+	}
+	for _, r := range topic {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			continue
+		}
+		return fmt.Errorf("parse %s: kafka.topic_transcription %q contains invalid character %q (allowed: A-Z a-z 0-9 . _ -)", path, topic, string(r))
+	}
+	return nil
 }
 
 func envOr(key, fallback string) string {
