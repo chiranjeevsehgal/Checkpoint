@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/metrics"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/repository"
+	"checkpoint/ingestion/internal/metrics"
+	"checkpoint/ingestion/internal/repository"
 )
 
 // Pinger reports dependency reachability for the readiness probe.

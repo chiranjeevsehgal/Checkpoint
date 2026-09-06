@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/domain"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/repository"
+	"checkpoint/ingestion/internal/domain"
+	"checkpoint/ingestion/internal/repository"
 )
 
 func idempotentParams(userID, key string) repository.IdempotentCreateParams {

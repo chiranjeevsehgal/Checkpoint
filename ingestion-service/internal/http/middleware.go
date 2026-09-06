@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/metrics"
+	"checkpoint/ingestion/internal/metrics"
 )
 
 type ctxKey string

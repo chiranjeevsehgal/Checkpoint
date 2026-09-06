@@ -6,7 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/repository"
+	"checkpoint/ingestion/internal/repository"
 )
 
 // ClaimDue leases up to batch due events to one dispatcher instance.

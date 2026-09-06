@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/domain"
+	"checkpoint/ingestion/internal/domain"
 )
 
 func TestExpireStaleUploads(t *testing.T) {

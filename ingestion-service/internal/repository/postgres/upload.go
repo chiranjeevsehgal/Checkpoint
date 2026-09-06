@@ -8,8 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/domain"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/repository"
+	"checkpoint/ingestion/internal/domain"
+	"checkpoint/ingestion/internal/repository"
 )
 
 // Create inserts a new UPLOADING row. The caller assigns ID, bucket,

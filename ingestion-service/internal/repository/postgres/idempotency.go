@@ -7,7 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/repository"
+	"checkpoint/ingestion/internal/repository"
 )
 
 // Find returns the stored response for an idempotency key, or nil when

@@ -14,15 +14,15 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/cleanup"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/config"
-	apihttp "github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/http"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/metrics"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/outbox"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/repository/postgres"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/service"
-	minioimpl "github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/storage/minio"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/vadclient"
+	"checkpoint/ingestion/internal/cleanup"
+	"checkpoint/ingestion/internal/config"
+	apihttp "checkpoint/ingestion/internal/http"
+	"checkpoint/ingestion/internal/metrics"
+	"checkpoint/ingestion/internal/outbox"
+	"checkpoint/ingestion/internal/repository/postgres"
+	"checkpoint/ingestion/internal/service"
+	minioimpl "checkpoint/ingestion/internal/storage/minio"
+	"checkpoint/ingestion/internal/vadclient"
 )
 
 func main() {

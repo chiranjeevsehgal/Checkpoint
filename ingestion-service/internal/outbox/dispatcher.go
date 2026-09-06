@@ -10,10 +10,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/domain"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/metrics"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/repository"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/vadclient"
+	"checkpoint/ingestion/internal/domain"
+	"checkpoint/ingestion/internal/metrics"
+	"checkpoint/ingestion/internal/repository"
+	"checkpoint/ingestion/internal/vadclient"
 )
 
 // BatchSize bounds one claim round. Invariant: BatchSize times the VAD

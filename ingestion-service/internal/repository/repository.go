@@ -8,7 +8,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/domain"
+	"checkpoint/ingestion/internal/domain"
 )
 
 var (

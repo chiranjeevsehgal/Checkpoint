@@ -5,10 +5,10 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/domain"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/repository"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/service"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/storage"
+	"checkpoint/ingestion/internal/domain"
+	"checkpoint/ingestion/internal/repository"
+	"checkpoint/ingestion/internal/service"
+	"checkpoint/ingestion/internal/storage"
 )
 
 // Error codes from the LLD error model.

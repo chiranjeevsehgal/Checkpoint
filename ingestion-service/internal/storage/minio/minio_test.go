@@ -14,7 +14,7 @@ import (
 	minioapi "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/storage"
+	"checkpoint/ingestion/internal/storage"
 )
 
 func testStorage(t *testing.T) (*Storage, string) {

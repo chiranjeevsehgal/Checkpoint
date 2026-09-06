@@ -1,4 +1,4 @@
-module github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service
+module checkpoint/ingestion
 
 go 1.25.0
 

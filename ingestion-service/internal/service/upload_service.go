@@ -12,9 +12,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/domain"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/repository"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/storage"
+	"checkpoint/ingestion/internal/domain"
+	"checkpoint/ingestion/internal/repository"
+	"checkpoint/ingestion/internal/storage"
 )
 
 // UploadURLExpiry is how long a presigned PUT URL stays usable.

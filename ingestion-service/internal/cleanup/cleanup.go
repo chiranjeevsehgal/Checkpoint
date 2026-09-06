@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/repository"
+	"checkpoint/ingestion/internal/repository"
 )
 
 // Defaults: uploads abandoned for a day expire; the sweep runs every

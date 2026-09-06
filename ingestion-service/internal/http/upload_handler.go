@@ -12,10 +12,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/domain"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/metrics"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/repository"
-	"github.com/chiranjeevsehgal/Checkpoint-1.0.0/ingestion-service/internal/service"
+	"checkpoint/ingestion/internal/domain"
+	"checkpoint/ingestion/internal/metrics"
+	"checkpoint/ingestion/internal/repository"
+	"checkpoint/ingestion/internal/service"
 )
 
 // uploadService is the subset of service.UploadService used by HTTP.
