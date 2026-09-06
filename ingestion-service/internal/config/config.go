@@ -7,6 +7,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -135,9 +136,17 @@ func validateVADBaseURL(v string) error {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("invalid VAD_BASE_URL %q: must be http(s)://host", v)
 	}
-	lower := strings.ToLower(v)
-	if strings.Contains(lower, "localhost") || strings.Contains(lower, "mock-vad") {
-		return fmt.Errorf("invalid VAD_BASE_URL %q: must be explicit in production", v)
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if host == "" {
+		return fmt.Errorf("invalid VAD_BASE_URL %q: must be http(s)://host", v)
+	}
+	if host == "localhost" || host == "mock-vad" || strings.HasSuffix(host, ".localhost") {
+		return fmt.Errorf("invalid VAD_BASE_URL %q: must be explicit in production (use the Compose service name, e.g. http://vad:8081)", v)
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsUnspecified() {
+			return fmt.Errorf("invalid VAD_BASE_URL %q: loopback/unspecified IP is not reachable from the ingestion container in production", v)
+		}
 	}
 	return nil
 }
