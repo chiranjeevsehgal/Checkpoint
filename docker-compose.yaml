@@ -5,6 +5,8 @@ networks:
 volumes:
   kafka-data:
     driver: local
+  postgres-data:
+    driver: local
   # Named (Linux-native) volume for MinIO. A Windows bind mount was
   # measured at p95 ~27s for 88 KB PUTs under 1000-VU load and made
   # bucket listings hang; the named volume keeps load-test results
@@ -49,10 +51,26 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: Asia/Kolkata
     volumes:
-      - ./data/postgres:/var/lib/postgresql
+      - postgres-data:/var/lib/postgresql/data
+    # Server display timezone. Storage is TIMESTAMPTZ (always UTC); this only
+    # affects display of NOW()/timestamps in psql/DBeaver sessions that don't
+    # set their own TimeZone.
+    # The ln step restores the tzdata backward-compat link Asia/Calcutta ->
+    # Asia/Kolkata (slim images ship only Kolkata). Older DBeaver/Java clients
+    # send TimeZone=Asia/Calcutta as a connection startup parameter, which the
+    # server rejects before auth without this alias. Re-created on every start
+    # because the container filesystem is ephemeral. Delegates to the stock
+    # entrypoint so first-init (POSTGRES_* env) keeps working; still prefer
+    # fixing the client driver property to Asia/Kolkata long-term.
+    command: >
+      /bin/bash -c "ln -sf Kolkata /usr/share/zoneinfo/Asia/Calcutta && exec docker-entrypoint.sh postgres -c timezone=Asia/Kolkata"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      # Use TCP + password auth so a wrong POSTGRES_PASSWORD marks the
+      # service unhealthy instead of passing via socket trust.
+      test: ["CMD-SHELL", "PGPASSWORD=${POSTGRES_PASSWORD} pg_isready -h localhost -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5

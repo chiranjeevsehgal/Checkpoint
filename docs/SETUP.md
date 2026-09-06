@@ -2,18 +2,18 @@
 
 ## 1. Create `.env`
 
-Create `.env` from `env.example`.
+Create `.env` from `.env.example`.
 
 ### Windows
 
 ```bash
-copy env.example .env
+copy .env.example .env
 ```
 
 ### Linux / macOS
 
 ```bash
-cp env.example .env
+cp .env.example .env
 ```
 
 Update `.env` with your actual values..
@@ -49,6 +49,14 @@ Both `postgres` and `kafka` should be up and healthy.
 ```bash
 docker-compose exec postgres psql -U <POSTGRES_USER> -d <POSTGRES_DB> -c "SELECT version();"
 ```
+
+Troubleshooting `FATAL: password authentication failed`:
+
+* `POSTGRES_PASSWORD` only applies on first init (empty `postgres-data` volume). Changing `.env` later is ignored — the healthcheck now uses TCP password auth so it correctly goes `unhealthy`.
+* Keep data: `docker exec postgres psql -U <POSTGRES_USER> -d <POSTGRES_DB> -c "ALTER USER <POSTGRES_USER> WITH PASSWORD '<new>';"`
+* Wipe dev data: `docker compose down postgres minio && docker volume rm <project>_postgres-data <project>_minio-data && docker compose up -d postgres minio` (expect `initializing`, not `Skipping initialization` in `docker logs postgres`).
+* DBeaver/pgAdmin on laptop: Host `localhost`, Port `5432`, SSL Disable. Host `postgres` only inside the `backend` network.
+* `FATAL: invalid value for parameter "TimeZone": "Asia/Calcutta"`: older DBeaver/Java sends the pre-rename zone name. The compose file recreates the `Calcutta -> Kolkata` tzdata link on every postgres start as a compat shim, so it connects; still prefer setting the client driver `TimeZone` to `Asia/Kolkata` (server default is `Asia/Kolkata`).
 
 ---
 
