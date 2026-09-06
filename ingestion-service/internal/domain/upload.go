@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// Upload lifecycle states. VAD-owned states (processing/completed) are
-// intentionally absent: this service stops at SUBMITTED.
+// Upload lifecycle states. Worker-owned states (processing/completed) are
+// intentionally absent: this service stops at SUBMITTED (queued to Kafka).
 const (
 	StatusUploading = "UPLOADING"
 	StatusReady     = "READY"
@@ -26,7 +26,8 @@ const MaxUploadBytes = 10 * 1024 * 1024
 
 // AllowedContentTypes lists the MIME types accepted at creation time.
 // OGG-only: the recording pipeline emits OGG, and anything else is a
-// client mistake. Authoritative decoding validation belongs to VAD.
+// client mistake. Authoritative decoding validation belongs to downstream
+// transcription workers.
 var AllowedContentTypes = map[string]struct{}{
 	"audio/ogg": {},
 }
@@ -45,7 +46,7 @@ const (
 )
 
 // NormalizeCreate trims and lowercases create fields so validation,
-// persistence, presigning and VAD payloads share one canonical form.
+// persistence, presigning and transcription payloads share one canonical form.
 func NormalizeCreate(filename, contentType string) (string, string) {
 	return strings.TrimSpace(filename), strings.ToLower(strings.TrimSpace(contentType))
 }

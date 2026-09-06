@@ -1,18 +1,17 @@
-// Package config loads service configuration from the environment.
-//
-// Only stdlib is used here so the scaffold builds without external
-// dependencies. Later tasks add DATABASE_URL, MinIO and VAD settings
-// consumers; the field names are fixed now to avoid rework.
+// Package config loads service configuration from the environment and
+// from ingestion-service/config.yaml (single source of truth for shared
+// queue names). Load fails fast if the YAML is missing or values drift.
 package config
 
 import (
 	"fmt"
-	"net"
-	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	yaml "go.yaml.in/yaml/v3"
 )
 
 const (
@@ -42,8 +41,10 @@ type Config struct {
 	// Defaults to MinIOEndpoint when unset.
 	MinIOPublicEndpoint string
 
-	// VADBaseURL is the internal VAD job endpoint, consumed from task 8.
-	VADBaseURL string
+	// Kafka settings for the transcription queue.
+	KafkaBrokers  string
+	KafkaTopic    string
+	KafkaClientID string
 
 	// UploadExpiry is how long an UPLOADING row may sit untouched before
 	// the cleanup job marks it EXPIRED.
@@ -62,7 +63,17 @@ type Config struct {
 // Load reads configuration from the environment. Development keeps
 // lenient defaults; production requires explicit secrets and endpoints
 // and rejects invalid values instead of silently falling back.
+// The Kafka transcription topic comes from config.yaml (single source of
+// truth): KAFKA_TOPIC_TRANSCRIPTION must be unset or exactly match it,
+// otherwise Load fails.
 func Load() (Config, error) {
+	canonicalTopic, err := loadCanonicalTopic()
+	if err != nil {
+		return Config{}, err
+	}
+	if v := strings.TrimSpace(os.Getenv("KAFKA_TOPIC_TRANSCRIPTION")); v != "" && v != canonicalTopic {
+		return Config{}, fmt.Errorf("KAFKA_TOPIC_TRANSCRIPTION %q does not match config.yaml %q: single source of truth is ingestion-service/config.yaml", v, canonicalTopic)
+	}
 	useSSL, err := parseBoolStrict("MINIO_USE_SSL", false)
 	if err != nil {
 		return Config{}, err
@@ -85,7 +96,9 @@ func Load() (Config, error) {
 		MinIOUseSSL:         useSSL,
 		MinIOBucket:         envOr("MINIO_BUCKET", "audio"),
 		MinIOPublicEndpoint: os.Getenv("MINIO_PUBLIC_ENDPOINT"),
-		VADBaseURL:          envOr("VAD_BASE_URL", "http://localhost:8081"),
+		KafkaBrokers:        envOr("KAFKA_BROKERS", "kafka:9092"),
+		KafkaTopic:          canonicalTopic,
+		KafkaClientID:       envOr("KAFKA_CLIENT_ID", "ingestion"),
 		UploadExpiry:        time.Duration(uploadHours) * time.Hour,
 		CleanupInterval:     time.Duration(cleanupMinutes) * time.Minute,
 		ReadHeaderTimeout:   5 * time.Second,
@@ -123,30 +136,85 @@ func Load() (Config, error) {
 		if cfg.MinIOBucket == "" {
 			return Config{}, fmt.Errorf("MINIO_BUCKET must be set in production")
 		}
-		if err := validateVADBaseURL(cfg.VADBaseURL); err != nil {
-			return Config{}, err
+		if strings.TrimSpace(os.Getenv("KAFKA_BROKERS")) == "" {
+			return Config{}, fmt.Errorf("KAFKA_BROKERS must be set in production")
 		}
+		// KAFKA_TOPIC_TRANSCRIPTION intentionally not required here: the
+		// canonical value comes from config.yaml and env mismatch already
+		// fails above in all environments.
 	}
 
 	return cfg, nil
 }
 
-func validateVADBaseURL(v string) error {
-	u, err := url.Parse(v)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return fmt.Errorf("invalid VAD_BASE_URL %q: must be http(s)://host", v)
+// fileConfig mirrors ingestion-service/config.yaml (single source of truth).
+type fileConfig struct {
+	Kafka struct {
+		TopicTranscription string `yaml:"topic_transcription"`
+	} `yaml:"kafka"`
+}
+
+// loadCanonicalTopic reads the transcription topic from config.yaml.
+// CONFIG_FILE overrides the path. Otherwise search: ./config.yaml (go run
+// from ingestion-service), ../../config.yaml (go test from internal/config),
+// /config.yaml (distroless image). Missing files are skipped; a file that
+// exists but fails to parse or validate fails fast instead of silently
+// falling through to a different config.yaml.
+func loadCanonicalTopic() (string, error) {
+	if p := strings.TrimSpace(os.Getenv("CONFIG_FILE")); p != "" {
+		return readTopicFile(p)
 	}
-	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
-	if host == "" {
-		return fmt.Errorf("invalid VAD_BASE_URL %q: must be http(s)://host", v)
+	candidates := []string{"config.yaml", filepath.Join("..", "..", "config.yaml"), filepath.Join(string(filepath.Separator), "config.yaml")}
+	// Also try relative to the working directory's parent (repo root layouts).
+	if wd, err := os.Getwd(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(wd, "config.yaml"),
+			filepath.Join(wd, "..", "..", "config.yaml"),
+			filepath.Join(wd, "ingestion-service", "config.yaml"),
+		)
 	}
-	if host == "localhost" || host == "mock-vad" || strings.HasSuffix(host, ".localhost") {
-		return fmt.Errorf("invalid VAD_BASE_URL %q: must be explicit in production (use the Compose service name, e.g. http://vad:8081)", v)
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsUnspecified() {
-			return fmt.Errorf("invalid VAD_BASE_URL %q: loopback/unspecified IP is not reachable from the ingestion container in production", v)
+	var lastErr error
+	for _, p := range candidates {
+		topic, err := readTopicFile(p)
+		if err == nil {
+			return topic, nil
 		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		lastErr = err
+	}
+	return "", fmt.Errorf("load config.yaml (single source of truth for kafka topic): %v", lastErr)
+}
+
+func readTopicFile(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var fc fileConfig
+	if err := yaml.Unmarshal(raw, &fc); err != nil {
+		return "", fmt.Errorf("parse %s: %w", path, err)
+	}
+	topic := strings.TrimSpace(fc.Kafka.TopicTranscription)
+	if topic == "" {
+		return "", fmt.Errorf("parse %s: kafka.topic_transcription must not be empty", path)
+	}
+	if err := validateTopicName(path, topic); err != nil {
+		return "", err
+	}
+	return topic, nil
+}
+
+func validateTopicName(path, topic string) error {
+	if len(topic) > 249 {
+		return fmt.Errorf("parse %s: kafka.topic_transcription %q too long (max 249)", path, topic)
+	}
+	for _, r := range topic {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			continue
+		}
+		return fmt.Errorf("parse %s: kafka.topic_transcription %q contains invalid character %q (allowed: A-Z a-z 0-9 . _ -)", path, topic, string(r))
 	}
 	return nil
 }

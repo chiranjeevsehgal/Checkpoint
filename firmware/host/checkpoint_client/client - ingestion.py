@@ -30,6 +30,7 @@ Usage:
     #        INGEST_ENABLED  (1/0, default 1)
     #        INGEST_DELETE_AFTER (1/0, default 1 — temp-then-delete)
     # flags: --ingest / --no-ingest, --ingest-url <url>, --user-id <uuid>, --keep
+    # flags: --no-rebond (disable automatic unpair+fresh-pair on stale bond)
     # With VAD gate (filter non-speech before upload):
     #   env: VAD_ENABLED (1/0, default 1), VAD_THRESHOLD (default 0.85),
     #        VAD_MIN_SPEECH_S (default 1.5), VAD_MIN_SPEECH_MS (800),
@@ -112,6 +113,11 @@ VAD_MIN_SPEECH_S = float(os.getenv("VAD_MIN_SPEECH_S", "1.5"))
 VAD_MIN_SPEECH_MS = int(os.getenv("VAD_MIN_SPEECH_MS", "800"))
 VAD_MIN_SILENCE_MS = int(os.getenv("VAD_MIN_SILENCE_MS", "500"))
 VAD_PAD_MS = int(os.getenv("VAD_PAD_MS", "200"))
+
+# Auto-rebond: on persistent HELLO 0x01 (stale OS bond — device lost its LTK,
+# e.g. reboot with RAM-only bonds), delete the bond and pair fresh once.
+# This automates the manual "unpair in system settings" workaround.
+BLE_AUTO_REBOND_DEFAULT = os.getenv("BLE_AUTO_REBOND", "1") == "1"
 
 BENCH_FIELDNAMES = ["ts","file_id","total_bytes","total_frags","mtu","frag_size","goodput_kBps","median_rtt_ms","p95_rtt_ms","duplicates","retries","decrypt_fail","crc_ok","resume_from","elapsed_s","ingest_upload_id","ingest_status","ingest_error","vad_status","vad_speech_s"]
 
@@ -596,6 +602,7 @@ class CheckpointClient:
                  vad_model=None,
                  vad_threshold: float = VAD_THRESHOLD,
                  vad_min_speech_s: float = VAD_MIN_SPEECH_S,
+                 auto_rebond: bool = BLE_AUTO_REBOND_DEFAULT,
                  on_event=None):
         self.address = address
         self.client: BleakClient | None = None
@@ -638,6 +645,8 @@ class CheckpointClient:
         self.bench_csv = bench_csv
         # Optional GUI/event callback: on_event(dict). Never raises into BLE path.
         self.on_event = on_event
+        # Auto-rebond on persistent 0x01 (stale bond). Disable with --no-rebond.
+        self.auto_rebond = auto_rebond
         self._bench_rows: list[dict] = []
         self._bench_t_send: dict[int, float] = {}
         self._bench_rtts: list[float] = []
@@ -925,7 +934,9 @@ class CheckpointClient:
 
         Stops notifications first so the firmware stops sending, waits for
         decoupled VAD/upload tasks to finish, then disconnects. The OS bond
-        is kept, so the next Connect reuses it without re-pairing.
+        is kept, so the next Connect normally reuses it without re-pairing.
+        (If the device drops its side of the bond, do_handshake() rebonds
+        automatically — see _rebond.)
         """
         try:
             if self.client and self.client.is_connected:
@@ -972,16 +983,62 @@ class CheckpointClient:
 
     # -- Handshake -------------------------------------------------------
 
+    async def _rebond(self) -> bool:
+        """Delete a stale OS bond and pair fresh. Fixes persistent HELLO 0x01.
+
+        When the device loses its LTK (e.g. reboot with RAM-only bonds) while
+        Windows still holds its side, every reconnect comes up unencrypted and
+        pair() is a no-op — the manual fix is unpairing in system settings.
+        This automates it. Returns True if HELLO should be retried.
+        Never raises.
+        """
+        c = self.client
+        if c is None or not hasattr(c, "unpair"):
+            print("  [bond] unpair() unavailable — cannot rebond")
+            return False
+        try:
+            print("  [bond] removing stale bond (unpair) ...")
+            await c.unpair()
+            print("  [bond] unpair ok")
+        except Exception as e:
+            print(f"  [bond] unpair failed: {e}")
+            return False
+        try:
+            await self.disconnect()
+        except Exception:
+            pass
+        await asyncio.sleep(1.0)
+        try:
+            await self.connect()  # pairs + resubscribes
+        except Exception as e:
+            print(f"  [bond] reconnect after unpair failed: {e}")
+            return False
+        print("  Waiting 2s for encryption to settle before HELLO retry...")
+        await asyncio.sleep(2.0)
+        return True
+
     async def do_handshake(self):
         # Matches ble_service.cpp HELLO gate (s_encrypted + PROTO_VER) and
-        # 5 s BLE_HANDSHAKE_TIMEOUT_MS. Retries up to 5x on 0x01 (Windows bonding/MIC race).
-        for attempt in range(5):
+        # 5 s BLE_HANDSHAKE_TIMEOUT_MS. pair() retries cover the first-connect
+        # Windows bonding/MIC race; one unpair+fresh-pair covers a stale bond.
+        rebonded = False
+        for attempt in range(7):
             self.hello_acked.clear()
             self.error_event.clear()
             self.last_error = None
             seq = self.next_seq()
-            print(f"Sending HELLO (seq={seq}) attempt {attempt + 1}/5 ...")
-            await self.write_ctrl(PKT_HELLO, seq)
+            print(f"Sending HELLO (seq={seq}) attempt {attempt + 1}/7 ...")
+            try:
+                await self.write_ctrl(PKT_HELLO, seq)
+            except Exception as e:
+                if "not connected" in str(e).lower() or "disconnected" in str(e).lower():
+                    print(f"  link dropped ({e}) — reconnecting ...")
+                    try:
+                        await self.connect()
+                        continue
+                    except Exception as e2:
+                        raise RuntimeError(f"Reconnect failed: {e2}")
+                raise
             try:
                 await asyncio.wait_for(
                     self._wait_for_handshake_result(), timeout=ACK_TIMEOUT_S
@@ -993,7 +1050,13 @@ class CheckpointClient:
                       f"mtu={self.mtu} chunk_sec={self.chunk_sec} frag_size={self.frag_size}, "
                       f"key={'present' if self.master_key else 'ABSENT (unencrypted transfer!)'}")
                 return
-            if self.last_error == 0x01 and attempt < 4:
+            if self.last_error == 0x01 and attempt < 6:
+                if self.auto_rebond and not rebonded and attempt >= 1:
+                    print("  HELLO rejected (0x01) persists after pair() — stale bond suspected, rebonding ...")
+                    rebonded = True
+                    if await self._rebond():
+                        continue
+                    print("  rebond failed/unavailable — falling back to pair() retry...")
                 print("  HELLO rejected (0x01 not encrypted) — pairing then retrying...")
                 try:
                     paired = await self.client.pair()
@@ -1358,6 +1421,7 @@ async def main():
             except ValueError:
                 pass
     ingest_delete = INGEST_DELETE_AFTER_DEFAULT and ("--keep" not in flags)
+    auto_rebond = BLE_AUTO_REBOND_DEFAULT and ("--no-rebond" not in flags)
     # also support: python client.py --bench [device]
     arg = args[0] if args else None
     bench_csv = None
@@ -1389,7 +1453,8 @@ async def main():
                               vad_enabled=vad_enabled,
                               vad_model=vad_model,
                               vad_threshold=vad_threshold,
-                              vad_min_speech_s=vad_min_speech)
+                              vad_min_speech_s=vad_min_speech,
+                              auto_rebond=auto_rebond)
     await client.connect()
     await client.do_handshake()
 

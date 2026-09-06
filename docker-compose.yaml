@@ -126,6 +126,10 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
       ingestion-migrate:
         condition: service_completed_successfully
     environment:
@@ -136,18 +140,27 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: audio
-      VAD_BASE_URL: ${VAD_BASE_URL:-http://mock-vad:8081}
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_TRANSCRIPTION: ${KAFKA_TOPIC_TRANSCRIPTION:-transcription.jobs.v1}
+      KAFKA_CLIENT_ID: ingestion-api
 
-  mock-vad:
-    build:
-      context: ./ingestion-service
-      target: mockvad
-    container_name: mock-vad
+  kafka-init:
+    # Creates the transcription topic and its DLQ up front so the first
+    # publish does not auto-create with wrong partitions. Ingestion only
+    # produces to the main topic; the .dlq is reserved for the future
+    # transcription-service consumer. Dispatcher retries broker errors
+    # indefinitely by design (see outbox dispatcher).
+    image: apache/kafka:4.3.1
+    container_name: kafka-init
     networks:
       - backend
-    ports:
-      - "8081:8081"
-    profiles:
-      - dev
+    depends_on:
+      kafka:
+        condition: service_healthy
     environment:
-      PORT: 8081
+      KAFKA_TOPIC_TRANSCRIPTION: ${KAFKA_TOPIC_TRANSCRIPTION:-transcription.jobs.v1}
+    command: >
+      /bin/bash -c "
+      /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_TRANSCRIPTION} --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_TRANSCRIPTION}.dlq --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
+      "

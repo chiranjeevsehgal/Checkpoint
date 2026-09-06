@@ -91,12 +91,12 @@ type CompleteResult struct {
 	AlreadyCompleted bool
 }
 
-// UploadCompletionRepository owns the atomic READY + outbox transaction
-// and the SUBMITTED handoff marker. Kept narrow on purpose instead of a
+// UploadCompletionRepository owns the atomic READY + outbox transaction.
+// MarkDelivered (outbox) is the only path that flips READY to SUBMITTED,
+// keeping the two in one transaction. Kept narrow on purpose instead of a
 // generic transaction abstraction.
 type UploadCompletionRepository interface {
 	MarkReadyAndCreateEvent(ctx context.Context, params CompleteParams) (*CompleteResult, error)
-	MarkSubmitted(ctx context.Context, userID, uploadID string, now time.Time) error
 }
 
 // ClaimedEvent is one outbox row leased to a dispatcher instance.

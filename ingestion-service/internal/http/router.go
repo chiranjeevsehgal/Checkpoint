@@ -58,8 +58,9 @@ func (r *Router) serveMetrics(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte(b.String()))
 }
 
-// ready checks PostgreSQL and object storage only. VAD is deliberately
-// excluded so VAD downtime never takes ingestion out of service.
+// ready checks PostgreSQL and object storage only. The transcription
+// queue is deliberately excluded so broker downtime never takes ingestion
+// out of service.
 func (r *Router) ready(w http.ResponseWriter, req *http.Request) {
 	ctx, cancel := context.WithTimeout(req.Context(), 3*time.Second)
 	defer cancel()
