@@ -1,0 +1,21 @@
+# Checkpoint BLE host client (firmware/host/checkpoint_client)
+# Loose minimums. Python >= 3.10 required (uses X | None syntax).
+#
+# CPU-only torch (recommended on Windows, no CUDA needed for Silero VAD):
+#   pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cpu
+# System dependency (not pip): ffmpeg with libopus, for OGG decode fallback.
+#   Windows: winget install Gyan.FFmpeg   (already present on dev host: ffmpeg 9.x)
+#
+# Troubleshooting:
+# - WinError 1114 on torch c10.dll: a WinRT Bluetooth scan poisons c10.dll
+#   loading afterwards. Handled automatically — the client/GUI pre-imports
+#   torch before the first scan (vad_prewarm). If it still occurs: reinstall
+#   torch for your exact Python version + MSVC redistributable. Uploads keep
+#   working in fail-open mode meanwhile; Disconnect -> Connect reloads VAD.
+
+bleak>=1.0
+cryptography>=41
+numpy>=1.26
+torch>=2.2
+torchaudio>=2.2
+silero-vad>=6.0

@@ -17,6 +17,8 @@ crypto mutex (crypto.cpp), UI non-blocking (ui.cpp)
 
 Requires:
     pip install bleak cryptography
+    # For VAD gate (optional, fail-open if missing):
+    #   pip install torch torchaudio silero-vad
 
 Usage:
     python client.py [device_name_or_address]
@@ -28,6 +30,11 @@ Usage:
     #        INGEST_ENABLED  (1/0, default 1)
     #        INGEST_DELETE_AFTER (1/0, default 1 — temp-then-delete)
     # flags: --ingest / --no-ingest, --ingest-url <url>, --user-id <uuid>, --keep
+    # With VAD gate (filter non-speech before upload):
+    #   env: VAD_ENABLED (1/0, default 1), VAD_THRESHOLD (default 0.85),
+    #        VAD_MIN_SPEECH_S (default 1.5), VAD_MIN_SPEECH_MS (800),
+    #        VAD_MIN_SILENCE_MS (500), VAD_PAD_MS (200)
+    # flags: --vad / --no-vad, --vad-threshold <f>, --min-speech <seconds>
 """
 
 import asyncio
@@ -93,7 +100,20 @@ INGEST_DELETE_AFTER_DEFAULT = os.getenv("INGEST_DELETE_AFTER", "1") == "1"
 INGEST_TIMEOUT_S = float(os.getenv("INGEST_TIMEOUT_S", "15"))
 INGEST_MAX_BYTES = 10 * 1024 * 1024  # mirrors domain.MaxUploadBytes
 
-BENCH_FIELDNAMES = ["ts","file_id","total_bytes","total_frags","mtu","frag_size","goodput_kBps","median_rtt_ms","p95_rtt_ms","duplicates","retries","decrypt_fail","crc_ok","resume_from","elapsed_s","ingest_upload_id","ingest_status","ingest_error"]
+# ---------------------------------------------------------------------------
+# VAD gate — Silero VAD filters non-speech BEFORE the ingestion upload.
+# Sample logic preserved verbatim (OGG repair for firmware's combined
+# OpusHead+OpusTags page 0). Fail-open: any VAD error uploads anyway.
+# ---------------------------------------------------------------------------
+
+VAD_ENABLED_DEFAULT = os.getenv("VAD_ENABLED", "1") == "1"
+VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "0.85"))
+VAD_MIN_SPEECH_S = float(os.getenv("VAD_MIN_SPEECH_S", "1.5"))
+VAD_MIN_SPEECH_MS = int(os.getenv("VAD_MIN_SPEECH_MS", "800"))
+VAD_MIN_SILENCE_MS = int(os.getenv("VAD_MIN_SILENCE_MS", "500"))
+VAD_PAD_MS = int(os.getenv("VAD_PAD_MS", "200"))
+
+BENCH_FIELDNAMES = ["ts","file_id","total_bytes","total_frags","mtu","frag_size","goodput_kBps","median_rtt_ms","p95_rtt_ms","duplicates","retries","decrypt_fail","crc_ok","resume_from","elapsed_s","ingest_upload_id","ingest_status","ingest_error","vad_status","vad_speech_s"]
 
 # ---------------------------------------------------------------------------
 # Packet types — must match protocol.h PacketType enum
@@ -308,6 +328,225 @@ class IngestionUploader:
 
 
 # ---------------------------------------------------------------------------
+# VAD gate — Silero VAD + OGG repair (sample logic, runs in executor)
+# ---------------------------------------------------------------------------
+
+def ogg_crc(data) -> int:
+    crc = 0
+    for byte in data:
+        crc ^= byte << 24
+        for _ in range(8):
+            if crc & 0x80000000:
+                crc = ((crc << 1) & 0xFFFFFFFF) ^ 0x04C11DB7
+            else:
+                crc = (crc << 1) & 0xFFFFFFFF
+    return crc
+
+
+def make_ogg_page(header_type, granule_position, serial, sequence, segments, payload) -> bytes:
+    page = bytearray()
+    page += b"OggS"
+    page += b"\x00"
+    page += bytes([header_type])
+    page += struct.pack("<Q", granule_position)
+    page += struct.pack("<I", serial)
+    page += struct.pack("<I", sequence)
+    page += b"\x00\x00\x00\x00"  # CRC placeholder
+    page += bytes([len(segments)])
+    page += bytes(segments)
+    page += payload
+    crc = ogg_crc(page)
+    page[22:26] = struct.pack("<I", crc)
+    return bytes(page)
+
+
+def parse_ogg_pages(data: bytes) -> list:
+    pages = []
+    pos = 0
+    while pos < len(data):
+        if data[pos:pos + 4] != b"OggS":
+            raise ValueError(f"Invalid OGG page at byte {pos}")
+        n_segments = data[pos + 26]
+        table_start = pos + 27
+        table_end = table_start + n_segments
+        segments = data[table_start:table_end]
+        payload_size = sum(segments)
+        page_end = table_end + payload_size
+        pages.append(data[pos:page_end])
+        pos = page_end
+    return pages
+
+
+def repair_opus_ogg(data: bytes) -> bytes:
+    """Split firmware's combined OpusHead+OpusTags page 0 into two pages, in RAM."""
+    pages = parse_ogg_pages(data)
+    if not pages:
+        raise ValueError("No OGG pages found")
+    first = pages[0]
+    header_type = first[5]
+    serial = struct.unpack("<I", first[14:18])[0]
+    n_segments = first[26]
+    segments = list(first[27:27 + n_segments])
+    payload_start = 27 + n_segments
+    payload = first[payload_start:]
+    # Already normal?
+    if payload.startswith(b"OpusHead") and len(segments) == 1:
+        return data
+    if len(segments) < 2:
+        raise ValueError(f"Unexpected OGG layout: {segments}")
+    head_size = segments[0]
+    tags_size = segments[1]
+    opus_head = payload[:head_size]
+    opus_tags = payload[head_size:head_size + tags_size]
+    if not opus_head.startswith(b"OpusHead"):
+        raise ValueError("OpusHead not found")
+    if not opus_tags.startswith(b"OpusTags"):
+        raise ValueError("OpusTags not found")
+    head_page = make_ogg_page(0x02, 0, serial, 0, [head_size], opus_head)
+    tags_page = make_ogg_page(0x00, 0, serial, 1, [tags_size], opus_tags)
+    fixed_pages = [head_page, tags_page]
+    for original in pages[1:]:
+        page = bytearray(original)
+        page_serial = struct.unpack("<I", page[14:18])[0]
+        if page_serial == serial:
+            old_sequence = struct.unpack("<I", page[18:22])[0]
+            page[18:22] = struct.pack("<I", old_sequence + 1)
+            page[22:26] = b"\x00\x00\x00\x00"
+            page[22:26] = struct.pack("<I", ogg_crc(page))
+        fixed_pages.append(bytes(page))
+    return b"".join(fixed_pages)
+
+
+def vad_prewarm() -> None:
+    """Import the torch stack BEFORE any BLE/WinRT activity (call before scan).
+
+    A WinRT Bluetooth scan poisons c10.dll loading afterwards (deterministic
+    WinError 1114, any thread), so torch/torchaudio/silero_vad must be
+    imported first. Import-only: no weights, safe to call early. Raises
+    RuntimeError with install hint when packages are absent.
+    """
+    try:
+        import torch  # noqa: F401
+        import torchaudio  # noqa: F401
+        import silero_vad  # noqa: F401
+    except ModuleNotFoundError as e:
+        raise RuntimeError(
+            f"VAD package missing (pip install silero-vad torch torchaudio): {e}"
+        )
+
+
+def vad_load_model(retries: int = 2):
+    """Load Silero VAD once at startup. Retries transient native failures.
+
+    A first-import WinError 1114 on c10.dll (transient Windows DLL lock) is
+    retried after a short sleep instead of giving up. Missing packages raise
+    immediately with an install hint; native load failures raise the real
+    cause (not "silero_vad missing"). Fail-open decision stays with caller.
+    """
+    import time as _time
+    last: Exception | None = None
+    for attempt in range(max(1, retries)):
+        try:
+            from silero_vad import load_silero_vad
+            return load_silero_vad()
+        except ModuleNotFoundError as e:
+            raise RuntimeError(
+                f"VAD package missing (pip install silero-vad torch torchaudio): {e}"
+            )
+        except Exception as e:
+            last = e
+            if attempt + 1 < max(1, retries):
+                print(f"[vad] load attempt {attempt + 1} failed ({e}) — retrying in 3s ...")
+                _time.sleep(3)
+    raise RuntimeError(f"VAD model load failed after retries: {last}")
+
+
+def _decode_ogg_to_tensor(repaired: bytes):
+    """Decode (repaired) Opus OGG bytes to (mono Tensor, sample_rate).
+
+    Tries torchaudio/torchcodec first, then ffmpeg subprocess (Opus-capable,
+    present on this host), then soundfile. Raises RuntimeError with combined
+    detail if every backend fails.
+    """
+    import io as _io
+    errors = []
+    # 1. torchaudio (needs torchcodec since torchaudio 2.9)
+    try:
+        import torchaudio
+        waveform, sample_rate = torchaudio.load(_io.BytesIO(repaired))
+        if waveform.shape[0] > 1:
+            waveform = waveform.mean(dim=0)
+        else:
+            waveform = waveform.squeeze(0)
+        return waveform, sample_rate
+    except Exception as e:
+        errors.append(f"torchaudio: {e}")
+    # 2. ffmpeg subprocess -> 16k mono f32le (handles Opus OGG reliably)
+    try:
+        import shutil
+        import subprocess
+        exe = shutil.which("ffmpeg")
+        if exe is None:
+            raise RuntimeError("ffmpeg not on PATH")
+        proc = subprocess.run(
+            [exe, "-hide_banner", "-loglevel", "error",
+             "-i", "pipe:0", "-ar", "16000", "-ac", "1",
+             "-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"],
+            input=repaired, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr.decode(errors="ignore")[:300])
+        if not proc.stdout or len(proc.stdout) < 4:
+            raise RuntimeError("ffmpeg produced no audio")
+        import torch
+        import numpy as np
+        pcm = np.frombuffer(proc.stdout, dtype=np.float32).copy()
+        return torch.from_numpy(pcm), 16000
+    except Exception as e:
+        errors.append(f"ffmpeg: {e}")
+    # 3. soundfile (if installed; Vorbis ok, Opus depends on libsndfile build)
+    try:
+        import soundfile as sf
+        import torch
+        wav, sr = sf.read(_io.BytesIO(repaired), dtype="float32", always_2d=True)
+        import numpy as np
+        mono = np.mean(wav, axis=1).astype("float32")
+        return torch.from_numpy(mono), sr
+    except Exception as e:
+        errors.append(f"soundfile: {e}")
+    raise RuntimeError("OGG decode failed [" + " | ".join(errors) + "]")
+
+
+def vad_has_speech(data: bytes, model, threshold: float = VAD_THRESHOLD,
+                   min_speech_s: float = VAD_MIN_SPEECH_S) -> tuple:
+    """Blocking VAD check. Returns (vad_status, total_speech_s, segments).
+
+    vad_status: 'speech' | 'no-speech' | 'error'. Never raises — errors
+    map to 'error' so the caller can fail-open to upload.
+    """
+    try:
+        from silero_vad import get_speech_timestamps
+        import torchaudio
+        repaired = repair_opus_ogg(data)
+        waveform, sample_rate = _decode_ogg_to_tensor(repaired)
+        if sample_rate != 16000:
+            waveform = torchaudio.functional.resample(waveform, sample_rate, 16000)
+        stamps = get_speech_timestamps(
+            waveform, model, sampling_rate=16000, threshold=threshold,
+            min_speech_duration_ms=VAD_MIN_SPEECH_MS,
+            min_silence_duration_ms=VAD_MIN_SILENCE_MS,
+            speech_pad_ms=VAD_PAD_MS, return_seconds=True,
+        )
+        total = sum(s["end"] - s["start"] for s in stamps)
+        if total >= min_speech_s:
+            return "speech", float(total), stamps
+        return "no-speech", float(total), stamps
+    except Exception as e:
+        return "error", 0.0, [{"error": str(e)[:200]}]
+
+
+# ---------------------------------------------------------------------------
 # Transfer state + benchmark
 # ---------------------------------------------------------------------------
 
@@ -352,7 +591,12 @@ class CheckpointClient:
                  ingest_enabled: bool = INGEST_ENABLED_DEFAULT,
                  ingest_base_url: str = INGEST_BASE_URL,
                  ingest_user_id: str = INGEST_USER_ID,
-                 ingest_delete_after: bool = INGEST_DELETE_AFTER_DEFAULT):
+                 ingest_delete_after: bool = INGEST_DELETE_AFTER_DEFAULT,
+                 vad_enabled: bool = VAD_ENABLED_DEFAULT,
+                 vad_model=None,
+                 vad_threshold: float = VAD_THRESHOLD,
+                 vad_min_speech_s: float = VAD_MIN_SPEECH_S,
+                 on_event=None):
         self.address = address
         self.client: BleakClient | None = None
         self.session_id: int | None = None
@@ -380,8 +624,20 @@ class CheckpointClient:
             print(f"[ingest] enabled -> {self.uploader.base_url} user={self.uploader.user_id[:8]}... delete_after={self.ingest_delete_after}")
         else:
             print("[ingest] disabled — files stay in ./received/")
+        # VAD gate (Silero, loaded once at startup; fail-open if missing)
+        self.vad_enabled = vad_enabled
+        self.vad_model = vad_model
+        self.vad_threshold = vad_threshold
+        self.vad_min_speech_s = vad_min_speech_s
+        if self.vad_enabled:
+            state = "loaded" if self.vad_model is not None else "MISSING-fail-open"
+            print(f"[vad] enabled ({state}) threshold={self.vad_threshold} min_speech={self.vad_min_speech_s}s")
+        else:
+            print("[vad] disabled — all OGG go straight to ingestion")
         # Bench metrics — per-file + aggregate csv
         self.bench_csv = bench_csv
+        # Optional GUI/event callback: on_event(dict). Never raises into BLE path.
+        self.on_event = on_event
         self._bench_rows: list[dict] = []
         self._bench_t_send: dict[int, float] = {}
         self._bench_rtts: list[float] = []
@@ -402,6 +658,16 @@ class CheckpointClient:
         s = self._seq_gen
         self._seq_gen = (self._seq_gen + 1) & 0xFFFF
         return s
+
+    def _emit(self, evt: dict):
+        """Fire GUI/event callback without breaking the BLE path."""
+        cb = getattr(self, "on_event", None)
+        if cb is None:
+            return
+        try:
+            cb(evt)
+        except Exception:
+            pass
 
     # -- Bench helpers -------------------------------------------------
     def _bench_reset_file(self, file_id: int, total: int, total_frags: int, resume_from: int):
@@ -426,7 +692,8 @@ class CheckpointClient:
 
     def _bench_finalize(self, crc_ok: bool, total: int,
                         ingest_upload_id: str = "", ingest_status: str = "",
-                        ingest_error: str = ""):
+                        ingest_error: str = "", vad_status: str = "",
+                        vad_speech_s: str = ""):
         if not self._bench_file_start or not self._bench_file_meta:
             return None
         elapsed = time.perf_counter() - self._bench_file_start
@@ -455,6 +722,8 @@ class CheckpointClient:
             "ingest_upload_id": ingest_upload_id,
             "ingest_status": ingest_status,
             "ingest_error": ingest_error,
+            "vad_status": vad_status,
+            "vad_speech_s": vad_speech_s,
         }
         self._bench_rows.append(row)
         if self._csv_writer:
@@ -467,7 +736,9 @@ class CheckpointClient:
         return row
 
     def _bench_update_ingest(self, file_id_hex: str, upload_id: str,
-                             status: str, error: str = ""):
+                             status: str, error: str = "",
+                             vad_status: str | None = None,
+                             vad_speech_s: str | None = None):
         """Mutate in-memory bench row + rewrite CSV so final ingest result persists.
 
         Called from the decoupled background upload task (event-loop thread,
@@ -478,9 +749,16 @@ class CheckpointClient:
                 r["ingest_upload_id"] = upload_id
                 r["ingest_status"] = status
                 r["ingest_error"] = error[:200] if error else ""
+                if vad_status is not None:
+                    r["vad_status"] = vad_status
+                if vad_speech_s is not None:
+                    r["vad_speech_s"] = vad_speech_s
                 break
         else:
             return
+        self._emit({"type": "ingest", "file_id": file_id_hex, "upload_id": upload_id,
+                    "ingest_status": status, "ingest_error": error[:200] if error else "",
+                    "vad_status": vad_status, "vad_speech_s": vad_speech_s})
         if self._csv_file and self._csv_writer:
             try:
                 self._csv_file.seek(0)
@@ -516,10 +794,69 @@ class CheckpointClient:
 
     async def _ingest_in_background(self, data: bytes, out_path: Path,
                                     meta_path: Path, file_id: int):
-        """Decoupled upload: BLE already ACKed ok. Upload, log, temp-delete."""
+        """Decoupled VAD gate + upload: BLE already ACKed ok. Filter, upload, temp-delete."""
         file_hex = f"{file_id:08x}"
         filename = out_path.name
         idem_key = f"{self.session_id:08x}-{file_hex}" if self.session_id is not None else file_hex
+        # -- VAD gate (fail-open): only speech reaches the ingestion API --
+        vad_status = "disabled"
+        vad_speech = 0.0
+        if self.vad_enabled:
+            if self.vad_model is None:
+                vad_status = "model-missing-fail-open"
+                print(f"  [vad] {filename}: model unavailable — fail-open to upload")
+            else:
+                print(f"  [vad] checking {filename} ({len(data)}B) threshold={self.vad_threshold} min={self.vad_min_speech_s}s ...")
+                try:
+                    loop = asyncio.get_event_loop()
+                    vad_status, vad_speech, segments = await loop.run_in_executor(
+                        None, vad_has_speech, data, self.vad_model,
+                        self.vad_threshold, self.vad_min_speech_s,
+                    )
+                except Exception as e:
+                    vad_status, vad_speech, segments = "error", 0.0, [{"error": str(e)[:200]}]
+                print(f"VAD,{file_hex},{vad_status},{vad_speech:.2f}")
+                self._emit({"type": "vad", "file_id": file_hex, "vad_status": vad_status,
+                            "vad_speech_s": round(vad_speech, 2)})
+                if isinstance(segments, list) and segments and isinstance(segments[0], dict) and "error" in segments[0]:
+                    print(f"  [vad] detail: {segments[0]['error']}")
+                    try:
+                        meta_err = {}
+                        if meta_path.exists():
+                            meta_err = json.loads(meta_path.read_text())
+                        meta_err.update({"vad_status": vad_status, "vad_error": segments[0]["error"]})
+                        meta_path.write_text(json.dumps(meta_err, indent=2))
+                    except Exception:
+                        pass
+                if vad_status == "no-speech":
+                    msg = f"no human speech ({vad_speech:.2f}s < {self.vad_min_speech_s}s)"
+                    print(f"  [vad] filtered {filename}: {msg} — skipping upload")
+                    print(f"INGEST,{file_hex},,skipped-no-speech,{msg}")
+                    self._bench_update_ingest(file_hex, "", "skipped-no-speech", msg,
+                                              vad_status, f"{vad_speech:.2f}")
+                    try:
+                        meta = {}
+                        if meta_path.exists():
+                            meta = json.loads(meta_path.read_text())
+                        meta.update({"vad_status": vad_status, "vad_speech_s": round(vad_speech, 2),
+                                     "ingest_status": "skipped-no-speech"})
+                        meta_path.write_text(json.dumps(meta, indent=2))
+                    except Exception:
+                        pass
+                    if self.ingest_delete_after and "--keep" not in sys.argv:
+                        try:
+                            out_path.unlink(missing_ok=True)
+                            meta_path.unlink(missing_ok=True)
+                            print(f"  [vad] temp deleted (no-speech) {out_path.name}")
+                        except Exception as e:
+                            print(f"  [!] vad temp delete failed: {e}")
+                    else:
+                        print(f"  [vad] kept (no-speech, --keep) {out_path.name}")
+                    return
+                if vad_status == "error":
+                    print(f"  [vad] error on {filename} — fail-open to upload")
+                else:
+                    print(f"  [vad] speech {vad_speech:.2f}s in {filename} — uploading")
         print(f"  [ingest] uploading {filename} ({len(data)}B) -> {self.uploader.base_url} ...")
         try:
             upload_id, status = await self.uploader.upload_async(
@@ -527,12 +864,14 @@ class CheckpointClient:
             )
             print(f"  [ingest] OK {filename} -> upload_id={upload_id} status={status}")
             print(f"INGEST,{file_hex},{upload_id},{status},,")
-            self._bench_update_ingest(file_hex, upload_id, status, "")
+            self._bench_update_ingest(file_hex, upload_id, status, "",
+                                      vad_status, f"{vad_speech:.2f}")
             try:
                 meta = {}
                 if meta_path.exists():
                     meta = json.loads(meta_path.read_text())
-                meta.update({"ingest_upload_id": upload_id, "ingest_status": status})
+                meta.update({"ingest_upload_id": upload_id, "ingest_status": status,
+                             "vad_status": vad_status, "vad_speech_s": round(vad_speech, 2)})
                 meta_path.write_text(json.dumps(meta, indent=2))
             except Exception:
                 pass
@@ -547,7 +886,8 @@ class CheckpointClient:
             err = str(e)[:200]
             print(f"  [!] ingest failed {filename}: {err} (kept {out_path})")
             print(f"INGEST,{file_hex},,,{err}")
-            self._bench_update_ingest(file_hex, "", "failed", err)
+            self._bench_update_ingest(file_hex, "", "failed", err,
+                                      vad_status, f"{vad_speech:.2f}")
 
     # -- BLE plumbing --------------------------------------------------
 
@@ -579,6 +919,39 @@ class CheckpointClient:
     async def disconnect(self):
         if self.client and self.client.is_connected:
             await self.client.disconnect()
+
+    async def disconnect_graceful(self, wait_pending_s: float = 10.0):
+        """Graceful shutdown that PRESERVES bonding (never unpairs).
+
+        Stops notifications first so the firmware stops sending, waits for
+        decoupled VAD/upload tasks to finish, then disconnects. The OS bond
+        is kept, so the next Connect reuses it without re-pairing.
+        """
+        try:
+            if self.client and self.client.is_connected:
+                for uuid in (CTRL_UUID, DATA_UUID):
+                    try:
+                        await self.client.stop_notify(uuid)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        try:
+            if self.ingest_enabled:
+                pending = [r for r in self._bench_rows if r.get("ingest_status") == "pending"]
+                if pending:
+                    import asyncio as _aio
+                    for _ in range(int(wait_pending_s * 10)):
+                        await _aio.sleep(0.1)
+                        if not any(r.get("ingest_status") == "pending" for r in self._bench_rows):
+                            break
+        except Exception:
+            pass
+        await self.disconnect()
+        try:
+            self._bench_rewrite_csv()
+        except Exception:
+            pass
 
     async def write_ctrl(self, ptype: int, seq: int, payload: bytes = b""):
         pkt = proto_build(ptype, seq, payload)
@@ -758,6 +1131,8 @@ class CheckpointClient:
         ack_payload = struct.pack("<HH", pkt.seq, resume_from)
         await self.write_ack(PKT_FILE_ANNOUNCE_ACK, self.next_seq(), ack_payload)
         print(f"  -> FILE_ANNOUNCE_ACK sent (resume_from={resume_from})")
+        self._emit({"type": "announce", "file_id": f"{file_id:08x}",
+                    "total_bytes": total, "total_frags": total_frags})
 
     async def _handle_data_packet(self, pkt: Packet):
         # Serialize to avoid concurrent buffer extends / ACK interleaving
@@ -804,6 +1179,8 @@ class CheckpointClient:
             n = len(self.current_file.received_frags)
             if n % 20 == 0 or n == self.current_file.total_frags:
                 print(f"  progress: {n}/{self.current_file.total_frags} fragments")
+                self._emit({"type": "progress", "file_id": f"{self.current_file.file_id:08x}",
+                            "received": n, "total_frags": self.current_file.total_frags})
         # For bench we approximate RTT as time between consecutive DATA arrivals
         # Real RTT would need firmware timestamps; client RTT is inter-frag gap proxy
         if len(self._bench_rtts) < 5000:
@@ -875,21 +1252,30 @@ class CheckpointClient:
         await self.write_ack(PKT_FILE_DONE_ACK, self.next_seq(), ack_payload)
         print(f"  -> FILE_DONE_ACK sent (status={'ok' if ok else 'fail'})")
         # Bench finalize — always emit row even on fail for throughput analysis.
-        # Decoupled: BLE ACK already sent; ingestion runs in background after this.
+        # Decoupled: BLE ACK already sent; VAD + ingestion run in background after this.
         ingest_init_status = ""
+        vad_init_status = ""
         if ok and out_path is not None:
             if not is_ogg:
                 ingest_init_status = "skipped-wav"
+                vad_init_status = "skipped"
             elif total > INGEST_MAX_BYTES:
                 ingest_init_status = "skipped-too-large"
+                vad_init_status = "skipped"
             elif not self.ingest_enabled:
                 ingest_init_status = "disabled"
+                vad_init_status = "disabled"
             else:
                 ingest_init_status = "pending"
+                vad_init_status = "pending" if self.vad_enabled else "disabled"
         try:
-            self._bench_finalize(ok, total, ingest_status=ingest_init_status)
+            self._bench_finalize(ok, total, ingest_status=ingest_init_status,
+                                 vad_status=vad_init_status)
         except Exception as e:
             print(f"  [!] bench finalize failed: {e}")
+        self._emit({"type": "file_done", "file_id": f"{file_id:08x}",
+                    "crc_ok": ok, "total_bytes": total,
+                    "ingest_status": ingest_init_status, "vad_status": vad_init_status})
 
         # Fire decoupled background upload (does NOT block BLE or ACK).
         if ok and out_path is not None and meta_path is not None and ingest_init_status == "pending":
@@ -934,6 +1320,14 @@ async def main():
         ingest_enabled = True
     ingest_url = INGEST_BASE_URL
     ingest_user = INGEST_USER_ID
+    # VAD flags: --vad / --no-vad, --vad-threshold <f>, --min-speech <seconds>
+    vad_enabled = VAD_ENABLED_DEFAULT
+    if "--no-vad" in flags:
+        vad_enabled = False
+    if "--vad" in flags:
+        vad_enabled = True
+    vad_threshold = VAD_THRESHOLD
+    vad_min_speech = VAD_MIN_SPEECH_S
     for i, tok in enumerate(raw):
         if tok == "--ingest-url" and i + 1 < len(raw):
             ingest_url = raw[i + 1].rstrip("/")
@@ -943,6 +1337,26 @@ async def main():
             ingest_user = raw[i + 1]
         elif tok.startswith("--user-id="):
             ingest_user = tok.split("=", 1)[1]
+        elif tok == "--vad-threshold" and i + 1 < len(raw):
+            try:
+                vad_threshold = float(raw[i + 1])
+            except ValueError:
+                pass
+        elif tok.startswith("--vad-threshold="):
+            try:
+                vad_threshold = float(tok.split("=", 1)[1])
+            except ValueError:
+                pass
+        elif tok == "--min-speech" and i + 1 < len(raw):
+            try:
+                vad_min_speech = float(raw[i + 1])
+            except ValueError:
+                pass
+        elif tok.startswith("--min-speech="):
+            try:
+                vad_min_speech = float(tok.split("=", 1)[1])
+            except ValueError:
+                pass
     ingest_delete = INGEST_DELETE_AFTER_DEFAULT and ("--keep" not in flags)
     # also support: python client.py --bench [device]
     arg = args[0] if args else None
@@ -951,13 +1365,31 @@ async def main():
         ts = time.strftime("%Y%m%d_%H%M%S")
         bench_csv = BENCH_DIR / f"benchmark_{ts}.csv"
         print(f"Benchmark capture -> {bench_csv}")
+    # Load Silero VAD once at startup (fail-open: continue without VAD on error)
+    vad_model = None
+    if vad_enabled and ingest_enabled:
+        print(f"[vad] loading Silero model (threshold={vad_threshold} min={vad_min_speech}s) ...")
+        try:
+            loop = asyncio.get_event_loop()
+            vad_model = await loop.run_in_executor(None, vad_load_model)
+            print("[vad] model loaded")
+        except Exception as e:
+            print(f"[vad] load failed — fail-open, uploads continue without filtering: {e}")
+            vad_model = None
+    elif vad_enabled and not ingest_enabled:
+        print("[vad] ingestion disabled — VAD not loaded")
+        vad_enabled = False
     address = await find_device(arg)
 
     client = CheckpointClient(address, bench_csv=bench_csv,
                               ingest_enabled=ingest_enabled,
                               ingest_base_url=ingest_url,
                               ingest_user_id=ingest_user,
-                              ingest_delete_after=ingest_delete)
+                              ingest_delete_after=ingest_delete,
+                              vad_enabled=vad_enabled,
+                              vad_model=vad_model,
+                              vad_threshold=vad_threshold,
+                              vad_min_speech_s=vad_min_speech)
     await client.connect()
     await client.do_handshake()
 
