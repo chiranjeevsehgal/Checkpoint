@@ -89,5 +89,59 @@ services:
       mc alias set minio http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
       mc mb --ignore-existing minio/temp-audio;
       mc mb --ignore-existing minio/filtered-audio;
+      mc mb --ignore-existing minio/audio;
       exit 0;
       "
+
+  ingestion-migrate:
+    build:
+      context: ./ingestion-service
+      target: migrate
+    container_name: ingestion-migrate
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+
+  ingestion-api:
+    build:
+      context: ./ingestion-service
+      target: api
+    container_name: ingestion-api
+    networks:
+      - backend
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      ingestion-migrate:
+        condition: service_completed_successfully
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      MINIO_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: localhost:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: audio
+      VAD_BASE_URL: ${VAD_BASE_URL:-http://mock-vad:8081}
+
+  mock-vad:
+    build:
+      context: ./ingestion-service
+      target: mockvad
+    container_name: mock-vad
+    networks:
+      - backend
+    ports:
+      - "8081:8081"
+    profiles:
+      - dev
+    environment:
+      PORT: 8081
