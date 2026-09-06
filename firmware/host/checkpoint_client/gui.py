@@ -2,6 +2,8 @@
 
 Reuses the existing application logic in `client - ingestion.py`
 (CheckpointClient, VAD gate, ingestion uploader) instead of rebuilding it.
+Ingest column: READY = complete accepted, Kafka publish pending;
+SUBMITTED = queued to Kafka topic transcription.jobs.v1 (queue-wait poll).
 
 Run:
     python gui.py
@@ -336,7 +338,11 @@ class App:
         self.client = cli.CheckpointClient(
             address, bench_csv=bench_csv, ingest_enabled=ingest,
             ingest_base_url=cli.INGEST_BASE_URL, ingest_user_id=cli.INGEST_USER_ID,
-            ingest_delete_after=(not keep), vad_enabled=vad, vad_model=vad_model,
+            ingest_delete_after=(not keep),
+            ingest_poll_enabled=cli.INGEST_POLL_ENABLED_DEFAULT,
+            ingest_poll_timeout=cli.INGEST_POLL_TIMEOUT_S,
+            ingest_poll_interval=cli.INGEST_POLL_INTERVAL_S,
+            vad_enabled=vad, vad_model=vad_model,
             vad_threshold=thr, vad_min_speech_s=min_s, on_event=self._on_event,
         )
         # stash for graceful close
@@ -347,6 +353,7 @@ class App:
         self.q.put(("status", ("listening", "green")))
         self.root.after(0, lambda: self._set_buttons(True, False))
         self.q.put(("log", "[gui] listening for file transfers …"))
+        self.q.put(("log", f"[gui] queue-wait until SUBMITTED (Kafka {cli.KAFKA_TOPIC_HINT}); verify: docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --topic {cli.KAFKA_TOPIC_HINT} --bootstrap-server kafka:9092"))
         self.listener_task = asyncio.current_task()
         try:
             while not self.stop_evt.is_set():

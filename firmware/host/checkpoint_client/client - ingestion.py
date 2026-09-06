@@ -29,7 +29,12 @@ Usage:
     #        INGEST_USER_ID  (default dev UUID aaaaaaaa-...; Bearer token)
     #        INGEST_ENABLED  (1/0, default 1)
     #        INGEST_DELETE_AFTER (1/0, default 1 — temp-then-delete)
+    #        INGEST_POLL_ENABLED (1/0, default 1 — poll GET until SUBMITTED)
+    #        INGEST_POLL_TIMEOUT_S (default 30 — queue-wait for Kafka publish)
+    #        INGEST_POLL_INTERVAL_S (default 1.0)
     # flags: --ingest / --no-ingest, --ingest-url <url>, --user-id <uuid>, --keep
+    # flags: --no-queue-wait (return on READY, skip SUBMITTED poll)
+    #        --queue-wait-timeout <s> (override INGEST_POLL_TIMEOUT_S)
     # flags: --no-rebond (disable automatic unpair+fresh-pair on stale bond)
     # With VAD gate (filter non-speech before upload):
     #   env: VAD_ENABLED (1/0, default 1), VAD_THRESHOLD (default 0.85),
@@ -90,8 +95,15 @@ ACK_TIMEOUT_S = 5.0
 #      -> {upload_id, upload:{method:PUT, url:presigned MinIO}}
 #   2. PUT <presignedUrl> raw bytes, Content-Type audio/ogg, no auth
 #   3. POST {base}/v1/uploads/{id}/complete {size_bytes, checksum_sha256}
-#      -> {upload_id, status:READY/SUBMITTED} (idempotent)
+#      -> {upload_id, status:READY} (idempotent; SUBMITTED only on replay)
+#   4. Poll GET {base}/v1/uploads/{id} until status SUBMITTED — the outbox
+#      dispatcher has published to Kafka topic transcription.jobs.v1 (~2s).
+#      SUBMITTED means queued to Kafka, not transcribed. At-least-once:
+#      duplicates share the same event_id. Verify with:
+#      docker compose exec kafka .../kafka-console-consumer.sh
+#        --topic transcription.jobs.v1 --bootstrap-server kafka:9092
 # Only audio/ogg accepted (domain/upload.go AllowedContentTypes), 10MB max.
+# API-only: this client never talks to Kafka directly (no kafka dep).
 # ---------------------------------------------------------------------------
 
 INGEST_BASE_URL = os.getenv("INGEST_BASE_URL", "http://localhost:8080").rstrip("/")
@@ -100,6 +112,11 @@ INGEST_ENABLED_DEFAULT = os.getenv("INGEST_ENABLED", "1") == "1"
 INGEST_DELETE_AFTER_DEFAULT = os.getenv("INGEST_DELETE_AFTER", "1") == "1"
 INGEST_TIMEOUT_S = float(os.getenv("INGEST_TIMEOUT_S", "15"))
 INGEST_MAX_BYTES = 10 * 1024 * 1024  # mirrors domain.MaxUploadBytes
+# Queue-wait: poll GET until SUBMITTED (Kafka publish). Display-only topic hint.
+INGEST_POLL_ENABLED_DEFAULT = os.getenv("INGEST_POLL_ENABLED", "1") == "1"
+INGEST_POLL_TIMEOUT_S = float(os.getenv("INGEST_POLL_TIMEOUT_S", "30"))
+INGEST_POLL_INTERVAL_S = float(os.getenv("INGEST_POLL_INTERVAL_S", "1.0"))
+KAFKA_TOPIC_HINT = os.getenv("KAFKA_TOPIC_TRANSCRIPTION", "transcription.jobs.v1")
 
 # ---------------------------------------------------------------------------
 # VAD gate — Silero VAD filters non-speech BEFORE the ingestion upload.
@@ -274,13 +291,23 @@ def _http_put_bytes(url: str, data: bytes, content_type: str, timeout: float) ->
 
 
 class IngestionUploader:
-    """Direct entry-point to ingestion-service (no local retention required)."""
+    """Direct entry-point to ingestion-service (no local retention required).
+
+    Upload is 3-step + queue-wait: create, PUT to MinIO, complete (->READY),
+    then poll GET until SUBMITTED (outbox dispatcher published to Kafka).
+    """
 
     def __init__(self, base_url: str = INGEST_BASE_URL, user_id: str = INGEST_USER_ID,
-                 timeout: float = INGEST_TIMEOUT_S):
+                 timeout: float = INGEST_TIMEOUT_S,
+                 poll_enabled: bool = INGEST_POLL_ENABLED_DEFAULT,
+                 poll_timeout: float = INGEST_POLL_TIMEOUT_S,
+                 poll_interval: float = INGEST_POLL_INTERVAL_S):
         self.base_url = (base_url or INGEST_BASE_URL).rstrip("/")
         self.user_id = user_id or INGEST_USER_ID
         self.timeout = timeout
+        self.poll_enabled = poll_enabled
+        self.poll_timeout = poll_timeout
+        self.poll_interval = poll_interval if poll_interval > 0 else 1.0
 
     def _auth(self, extra: dict | None = None) -> dict:
         h = {"Authorization": f"Bearer {self.user_id}"}
@@ -288,10 +315,37 @@ class IngestionUploader:
             h.update(extra)
         return h
 
+    def get_status_sync(self, upload_id: str) -> str:
+        """Blocking GET upload status. Returns status string. Raises on failure."""
+        status, body = _http_json(
+            "GET", f"{self.base_url}/v1/uploads/{upload_id}",
+            None, self._auth(), self.timeout,
+        )
+        if status != 200 or not isinstance(body, dict) or "status" not in body:
+            raise RuntimeError(f"get status HTTP {status}: {str(body)[:300]}")
+        return str(body.get("status", ""))
+
+    def _wait_submitted(self, upload_id: str) -> tuple[str, float]:
+        """Poll GET until SUBMITTED or timeout. Returns (final_status, waited_s)."""
+        start = time.monotonic()
+        last = "READY"
+        deadline = start + max(0.0, self.poll_timeout)
+        while time.monotonic() < deadline:
+            time.sleep(self.poll_interval)
+            try:
+                last = self.get_status_sync(upload_id) or last
+            except Exception:
+                continue
+            if last == "SUBMITTED":
+                break
+            if last not in ("READY", "SUBMITTED", "UPLOADING"):
+                break
+        return last, time.monotonic() - start
+
     def upload_sync(self, data: bytes, filename: str,
                     content_type: str = "audio/ogg",
                     idempotency_key: str | None = None) -> tuple[str, str]:
-        """Blocking 3-step flow. Returns (upload_id, status). Raises on failure."""
+        """Blocking 3-step flow + queue-wait. Returns (upload_id, status). Raises on failure."""
         size = len(data)
         if size > INGEST_MAX_BYTES:
             raise RuntimeError(f"too-large: {size} > {INGEST_MAX_BYTES}")
@@ -322,7 +376,11 @@ class IngestionUploader:
         c_status_str = c_body.get("status", "") if isinstance(c_body, dict) else ""
         if c_status != 200 or c_status_str not in ("READY", "SUBMITTED"):
             raise RuntimeError(f"complete HTTP {c_status}: {str(c_body)[:300]}")
-        return upload_id, c_status_str
+        if c_status_str == "SUBMITTED" or not self.poll_enabled:
+            return upload_id, c_status_str
+        # 4. Queue-wait: complete returned READY, dispatcher publishes async.
+        final, _waited = self._wait_submitted(upload_id)
+        return upload_id, final
 
     async def upload_async(self, data: bytes, filename: str,
                            content_type: str = "audio/ogg",
@@ -598,6 +656,9 @@ class CheckpointClient:
                  ingest_base_url: str = INGEST_BASE_URL,
                  ingest_user_id: str = INGEST_USER_ID,
                  ingest_delete_after: bool = INGEST_DELETE_AFTER_DEFAULT,
+                 ingest_poll_enabled: bool = INGEST_POLL_ENABLED_DEFAULT,
+                 ingest_poll_timeout: float = INGEST_POLL_TIMEOUT_S,
+                 ingest_poll_interval: float = INGEST_POLL_INTERVAL_S,
                  vad_enabled: bool = VAD_ENABLED_DEFAULT,
                  vad_model=None,
                  vad_threshold: float = VAD_THRESHOLD,
@@ -626,9 +687,15 @@ class CheckpointClient:
         # Ingestion direct-upload (decoupled from BLE ACK — see _handle_file_done)
         self.ingest_enabled = ingest_enabled
         self.ingest_delete_after = ingest_delete_after
-        self.uploader = IngestionUploader(base_url=ingest_base_url, user_id=ingest_user_id)
+        self.uploader = IngestionUploader(
+            base_url=ingest_base_url, user_id=ingest_user_id,
+            poll_enabled=ingest_poll_enabled,
+            poll_timeout=ingest_poll_timeout,
+            poll_interval=ingest_poll_interval,
+        )
         if self.ingest_enabled:
-            print(f"[ingest] enabled -> {self.uploader.base_url} user={self.uploader.user_id[:8]}... delete_after={self.ingest_delete_after}")
+            qw = f"queue-wait={self.uploader.poll_enabled} timeout={self.uploader.poll_timeout}s"
+            print(f"[ingest] enabled -> {self.uploader.base_url} user={self.uploader.user_id[:8]}... delete_after={self.ingest_delete_after} {qw} topic={KAFKA_TOPIC_HINT}")
         else:
             print("[ingest] disabled — files stay in ./received/")
         # VAD gate (Silero, loaded once at startup; fail-open if missing)
@@ -871,15 +938,28 @@ class CheckpointClient:
             upload_id, status = await self.uploader.upload_async(
                 data, filename, "audio/ogg", idem_key
             )
-            print(f"  [ingest] OK {filename} -> upload_id={upload_id} status={status}")
-            print(f"INGEST,{file_hex},{upload_id},{status},,")
-            self._bench_update_ingest(file_hex, upload_id, status, "",
-                                      vad_status, f"{vad_speech:.2f}")
+            if status == "SUBMITTED":
+                print(f"  [ingest] OK {filename} -> upload_id={upload_id} status=SUBMITTED (queued to Kafka {KAFKA_TOPIC_HINT})")
+                print(f"INGEST,{file_hex},{upload_id},SUBMITTED,,")
+                self._bench_update_ingest(file_hex, upload_id, status, "",
+                                          vad_status, f"{vad_speech:.2f}")
+            else:
+                # READY on queue-wait timeout: server durable (MinIO+Postgres),
+                # dispatcher will still publish. Temp files deleted per policy.
+                # Check outbox_events.last_error if stuck; verify with:
+                # docker compose exec kafka .../kafka-console-consumer.sh
+                #   --topic <topic> --bootstrap-server kafka:9092
+                msg = f"queued-timeout after {self.uploader.poll_timeout:.0f}s, Kafka publish pending (upload durable, check outbox)"
+                print(f"  [ingest] OK {filename} -> upload_id={upload_id} status=READY ({msg})")
+                print(f"INGEST,{file_hex},{upload_id},READY,{msg},")
+                self._bench_update_ingest(file_hex, upload_id, "READY", msg,
+                                          vad_status, f"{vad_speech:.2f}")
             try:
                 meta = {}
                 if meta_path.exists():
                     meta = json.loads(meta_path.read_text())
                 meta.update({"ingest_upload_id": upload_id, "ingest_status": status,
+                             "kafka_topic": KAFKA_TOPIC_HINT,
                              "vad_status": vad_status, "vad_speech_s": round(vad_speech, 2)})
                 meta_path.write_text(json.dumps(meta, indent=2))
             except Exception:
@@ -937,6 +1017,8 @@ class CheckpointClient:
         is kept, so the next Connect normally reuses it without re-pairing.
         (If the device drops its side of the bond, do_handshake() rebonds
         automatically — see _rebond.)
+        Queue-wait polling runs inside upload_async, so pending covers it;
+        the wait extends to poll_timeout+10s when queue-wait is enabled.
         """
         try:
             if self.client and self.client.is_connected:
@@ -949,10 +1031,16 @@ class CheckpointClient:
             pass
         try:
             if self.ingest_enabled:
+                budget = wait_pending_s
+                try:
+                    if self.uploader.poll_enabled:
+                        budget = max(budget, self.uploader.poll_timeout + 10.0)
+                except Exception:
+                    pass
                 pending = [r for r in self._bench_rows if r.get("ingest_status") == "pending"]
                 if pending:
                     import asyncio as _aio
-                    for _ in range(int(wait_pending_s * 10)):
+                    for _ in range(int(budget * 10)):
                         await _aio.sleep(0.1)
                         if not any(r.get("ingest_status") == "pending" for r in self._bench_rows):
                             break
@@ -1376,6 +1464,7 @@ async def main():
     bench_flag = "--bench" in flags or "--csv" in flags
     # Ingestion flags (env defaults, CLI overrides): --ingest / --no-ingest,
     # --ingest-url <url> / --ingest-url=<url>, --user-id <uuid> / --user-id=<uuid>, --keep
+    # --no-queue-wait (return on READY), --queue-wait-timeout <s>
     ingest_enabled = INGEST_ENABLED_DEFAULT
     if "--no-ingest" in flags:
         ingest_enabled = False
@@ -1383,6 +1472,9 @@ async def main():
         ingest_enabled = True
     ingest_url = INGEST_BASE_URL
     ingest_user = INGEST_USER_ID
+    ingest_poll_enabled = INGEST_POLL_ENABLED_DEFAULT and ("--no-queue-wait" not in flags)
+    ingest_poll_timeout = INGEST_POLL_TIMEOUT_S
+    ingest_poll_interval = INGEST_POLL_INTERVAL_S
     # VAD flags: --vad / --no-vad, --vad-threshold <f>, --min-speech <seconds>
     vad_enabled = VAD_ENABLED_DEFAULT
     if "--no-vad" in flags:
@@ -1420,6 +1512,16 @@ async def main():
                 vad_min_speech = float(tok.split("=", 1)[1])
             except ValueError:
                 pass
+        elif tok == "--queue-wait-timeout" and i + 1 < len(raw):
+            try:
+                ingest_poll_timeout = float(raw[i + 1])
+            except ValueError:
+                pass
+        elif tok.startswith("--queue-wait-timeout="):
+            try:
+                ingest_poll_timeout = float(tok.split("=", 1)[1])
+            except ValueError:
+                pass
     ingest_delete = INGEST_DELETE_AFTER_DEFAULT and ("--keep" not in flags)
     auto_rebond = BLE_AUTO_REBOND_DEFAULT and ("--no-rebond" not in flags)
     # also support: python client.py --bench [device]
@@ -1450,6 +1552,9 @@ async def main():
                               ingest_base_url=ingest_url,
                               ingest_user_id=ingest_user,
                               ingest_delete_after=ingest_delete,
+                              ingest_poll_enabled=ingest_poll_enabled,
+                              ingest_poll_timeout=ingest_poll_timeout,
+                              ingest_poll_interval=ingest_poll_interval,
                               vad_enabled=vad_enabled,
                               vad_model=vad_model,
                               vad_threshold=vad_threshold,
@@ -1466,11 +1571,18 @@ async def main():
         print("\nShutting down...")
     finally:
         # Give decoupled uploads a grace window, then persist final ingest status.
+        # Queue-wait polling runs inside upload_async, so extend the grace when enabled.
         try:
             pending = [r for r in client.bench_rows() if r.get("ingest_status") == "pending"]
             if pending and client.ingest_enabled:
-                print(f"[ingest] waiting up to 10s for {len(pending)} pending upload(s)...")
-                for _ in range(100):
+                budget = 10.0
+                try:
+                    if client.uploader.poll_enabled:
+                        budget = max(budget, client.uploader.poll_timeout + 10.0)
+                except Exception:
+                    pass
+                print(f"[ingest] waiting up to {budget:.0f}s for {len(pending)} pending upload(s)...")
+                for _ in range(int(budget * 10)):
                     await asyncio.sleep(0.1)
                     if not any(r.get("ingest_status") == "pending" for r in client._bench_rows):
                         break
