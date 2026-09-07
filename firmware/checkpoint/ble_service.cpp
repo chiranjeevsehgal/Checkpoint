@@ -39,11 +39,13 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     crypto_load_or_gen_key();
   }
   void onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason) override {
-    if (reason == 534) {
-      // Stale bond on either side causes MIC failure on next connect
-      // Delete bond for this peer so Windows will re-pair cleanly
-      NimBLEDevice::deleteBond(connInfo.getAddress());
-    }
+    // Do NOT delete the bond here. Reason 534 accompanies routine
+    // host-initiated disconnects — it is not proof of a stale/corrupt key.
+    // Deleting our copy orphans the Windows-side bond and forces a full
+    // re-pair on every reconnect. Genuine staleness is recovered host-side
+    // by CheckpointClient._rebond(), so the bond must be left intact.
+    (void)connInfo;
+    (void)reason;
     s_connected = false;
     s_handshaked = false;
     s_encrypted = false;
