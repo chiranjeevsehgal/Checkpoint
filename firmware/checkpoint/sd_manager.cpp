@@ -354,6 +354,119 @@ bool sd_write_atomic(const String &path, const uint8_t *data, size_t len) {
   return ok;
 }
 
+bool sd_file_exists(const String &path) {
+  if (!s_mounted) return false;
+  if (!sd_lock()) return false;
+  bool ok = FS_SD.exists(path);
+  sd_unlock();
+  return ok;
+}
+
+static bool entry_is_recording_data(const String &full) {
+  if (full == String(REC_MANIFEST) || full == String(REC_MANIFEST) + ".tmp") return false;
+  return entry_is_audio_file(full) || full.endsWith(REC_TMP_EXT) || full.endsWith(REC_DEL_EXT);
+}
+
+bool sd_card_usage(uint64_t *total_out, uint64_t *used_out) {
+  if (!total_out || !used_out) return false;
+  *total_out = 0;
+  *used_out = 0;
+  if (!s_mounted) return false;
+  if (!sd_lock()) return false;
+  uint64_t used = 0;
+  File root = FS_SD.open(REC_DIR);
+  if (!root) { sd_unlock(); return false; }
+  File e = root.openNextFile();
+  while (e) {
+    if (!e.isDirectory()) {
+      String fname = e.name();
+      String full = String(REC_DIR) + "/" + fname.substring(fname.lastIndexOf('/') + 1);
+      if (entry_is_recording_data(full)) used += e.size();
+    }
+    e.close();
+    e = root.openNextFile();
+  }
+  root.close();
+  uint64_t total = FS_SD.totalBytes(); // SD_MMC CSD capacity, verified in core 3.3.11
+  sd_unlock();
+  *total_out = total;
+  *used_out = used;
+  return true;
+}
+
+static bool sd_path_is_deletable(const String &path) {
+  if (!path.startsWith(String(REC_DIR) + "/")) return false; // jail to /rec
+  if (path == String(REC_MANIFEST) || path == String(REC_MANIFEST) + ".tmp") return false;
+  return entry_is_audio_file(path) || path.endsWith(REC_TMP_EXT);
+}
+
+bool sd_delete_file(const String &path) {
+  if (!s_mounted) return false;
+  if (!sd_path_is_deletable(path)) return false;
+  if (!sd_lock()) return false;
+  bool ok = false;
+  if (!FS_SD.exists(path)) {
+    ok = true; // idempotent: already gone counts as deleted
+  } else {
+    // Same crash-safe idiom as sd_safe_delete_after_ack: rename aside first.
+    String del = path + REC_DEL_EXT;
+    if (FS_SD.exists(del)) FS_SD.remove(del);
+    ok = FS_SD.rename(path, del);
+    if (ok) ok = FS_SD.remove(del);
+  }
+  sd_unlock();
+  return ok;
+}
+
+bool sd_erase_recordings(size_t *removed_out) {
+  if (removed_out) *removed_out = 0;
+  if (!s_mounted) return false;
+  // Pass 1: enumerate with the directory open (no mutation while open).
+  // Name list lives on the heap (like manifest scan): 256 Strings would
+  // overflow the loop task stack.
+  const size_t MAX_ERASE = 256;
+  String *names = (String *)heap_caps_malloc(sizeof(String) * MAX_ERASE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!names) names = (String *)heap_caps_malloc(sizeof(String) * MAX_ERASE, MALLOC_CAP_8BIT);
+  if (!names) return false;
+  for (size_t i = 0; i < MAX_ERASE; i++) new (&names[i]) String();
+  size_t name_count = 0;
+  bool enum_ok = false;
+  if (sd_lock(2000)) {
+    File root = FS_SD.open(REC_DIR);
+    if (root) {
+      enum_ok = true;
+      File e = root.openNextFile();
+      while (e && name_count < MAX_ERASE) {
+        if (!e.isDirectory()) {
+          String fname = e.name();
+          String full = String(REC_DIR) + "/" + fname.substring(fname.lastIndexOf('/') + 1);
+          if (entry_is_recording_data(full)) names[name_count++] = full;
+        }
+        e.close();
+        e = root.openNextFile();
+      }
+      if (e) e.close();
+      root.close();
+    }
+    sd_unlock();
+  }
+  if (!enum_ok) {
+    for (size_t i = 0; i < MAX_ERASE; i++) names[i].~String();
+    heap_caps_free(names);
+    return false;
+  }
+  // Pass 2: delete one by one with short locks so recorder/transfer keep flowing.
+  size_t removed = 0;
+  for (size_t i = 0; i < name_count; i++) {
+    if (sd_delete_file(names[i])) removed++;
+    names[i].~String();
+  }
+  for (size_t i = name_count; i < MAX_ERASE; i++) names[i].~String();
+  heap_caps_free(names);
+  if (removed_out) *removed_out = removed;
+  return true;
+}
+
 bool sd_safe_delete_after_ack(const String &path) {
   if (!s_mounted) return false;
   if (!sd_lock()) return false;

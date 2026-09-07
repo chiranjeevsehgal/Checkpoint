@@ -68,7 +68,8 @@ void transfer_on_packet(const uint8_t *data, size_t len) {
     uint16_t seq = pkt.payload[0] | (pkt.payload[1] << 8);
     s_resume_seq = pkt.payload[2] | (pkt.payload[3] << 8);
     signal_ack(seq, true);
-  } else if (pkt.type == PKT_CMD || pkt.type == PKT_STATUS_REQ) {
+  } else if (pkt.type == PKT_CMD || pkt.type == PKT_STATUS_REQ ||
+             pkt.type == PKT_STORAGE_REQ || pkt.type == PKT_LIST_REQ) {
     // Remote transport + LED control. Single ble_on_packet callback is shared,
     // so control packets are forwarded here instead of a second registration.
     // control_on_packet only stores flags; work happens in control_poll().
@@ -121,6 +122,9 @@ bool transfer_init() {
 
 bool transfer_is_busy() { return s_busy; }
 String transfer_current_file() { return s_current; }
+bool transfer_is_transferring(const String &path) {
+  return s_busy && s_current == path;
+}
 
 void transfer_task(void *arg) {
   (void)arg;

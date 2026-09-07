@@ -18,7 +18,11 @@ enum PacketType : uint8_t {
   PKT_CMD = 0x20,
   PKT_CMD_RESP = 0x21,
   PKT_STATUS_REQ = 0x22,
-  PKT_STATUS_RESP = 0x23
+  PKT_STATUS_RESP = 0x23,
+  PKT_STORAGE_REQ = 0x24,
+  PKT_STORAGE_RESP = 0x25,
+  PKT_LIST_REQ = 0x26,
+  PKT_LIST_RESP = 0x27
 };
 
 struct Packet {

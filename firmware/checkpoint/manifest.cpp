@@ -218,6 +218,26 @@ bool manifest_get_pending(ManifestEntry *out, size_t max_count, size_t *found) {
   return true;
 }
 
+bool manifest_get_all(ManifestEntry *out, size_t max_count, size_t *found) {
+  if (!out || !found) return false;
+  if (xSemaphoreTake(s_manifest_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) return false;
+  size_t n = 0;
+  for (size_t i = 0; i < s_count && n < max_count; i++) {
+    out[n++] = s_entries[i];
+  }
+  *found = n;
+  xSemaphoreGive(s_manifest_mutex);
+  return true;
+}
+
+size_t manifest_entry_count() {
+  size_t c = 0;
+  if (xSemaphoreTake(s_manifest_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return 0;
+  c = s_count;
+  xSemaphoreGive(s_manifest_mutex);
+  return c;
+}
+
 bool manifest_update_seq(const String &path, uint16_t next_seq) {
   if (xSemaphoreTake(s_manifest_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) return false;
   for (size_t i = 0; i < s_count; i++)

@@ -158,12 +158,18 @@ PKT_CMD = 0x20
 PKT_CMD_RESP = 0x21
 PKT_STATUS_REQ = 0x22
 PKT_STATUS_RESP = 0x23
+PKT_STORAGE_REQ = 0x24
+PKT_STORAGE_RESP = 0x25
+PKT_LIST_REQ = 0x26
+PKT_LIST_RESP = 0x27
 
 # Command IDs in PKT_CMD payload[0] — must match control.h CtrlCmd.
 CTRL_CMD_REC_START = 0x01
 CTRL_CMD_REC_STOP = 0x02
 CTRL_CMD_LED_SET = 0x10
 CTRL_CMD_LED_GET = 0x11
+CTRL_CMD_FILE_DELETE = 0x20
+CTRL_CMD_STORAGE_ERASE = 0x21
 
 # Status codes in PKT_CMD_RESP payload[1] — must match control.h CtrlStatus.
 CTRL_OK = 0x00
@@ -171,9 +177,19 @@ CTRL_ERR_NOT_READY = 0x01
 CTRL_ERR_NO_SD = 0x02
 CTRL_ERR_BAD_ARG = 0x03
 CTRL_ERR_DENIED = 0x04
+CTRL_ERR_BUSY = 0x05
+CTRL_ERR_NOT_FOUND = 0x06
 
 CTRL_STATUS_LEN = 16
+CTRL_STORAGE_LEN = 20
 CTRL_BRIGHT_MIN = 5
+
+# STORAGE_ERASE steps + list flags — must match control.h.
+CTRL_ERASE_ARM = 0x01
+CTRL_ERASE_CONFIRM = 0x02
+CTRL_LIST_FLAG_PENDING = 0x01
+CTRL_LIST_FLAG_CRC = 0x02
+CTRL_LIST_FLAG_ACTIVE = 0x04
 
 PKT_NAMES = {
     PKT_HELLO: "HELLO", PKT_HELLO_ACK: "HELLO_ACK",
@@ -184,6 +200,8 @@ PKT_NAMES = {
     PKT_KEEPALIVE: "KEEPALIVE",
     PKT_CMD: "CMD", PKT_CMD_RESP: "CMD_RESP",
     PKT_STATUS_REQ: "STATUS_REQ", PKT_STATUS_RESP: "STATUS_RESP",
+    PKT_STORAGE_REQ: "STORAGE_REQ", PKT_STORAGE_RESP: "STORAGE_RESP",
+    PKT_LIST_REQ: "LIST_REQ", PKT_LIST_RESP: "LIST_RESP",
 }
 
 
@@ -1140,6 +1158,29 @@ class CheckpointClient:
         res = await self._ctrl_roundtrip(PKT_STATUS_REQ, b"", timeout)
         return res
 
+    async def req_storage(self, timeout: float = 5.0) -> dict:
+        """Returns {total, used, files, pending} in bytes/counts."""
+        res = await self._ctrl_roundtrip(PKT_STORAGE_REQ, b"", timeout)
+        return res
+
+    async def req_list(self, start: int = 0, timeout: float = 5.0) -> dict:
+        """Returns one file-list page {start, total, entries: [{name, size, flags}]}."""
+        res = await self._ctrl_roundtrip(
+            PKT_LIST_REQ, struct.pack("<H", max(0, start) & 0xFFFF), timeout)
+        return res
+
+    async def cmd_file_delete(self, path: str, timeout: float = 5.0) -> int:
+        """Delete one /rec/... file on device. Returns CTRL_* status code."""
+        res = await self._ctrl_roundtrip(
+            PKT_CMD, bytes([CTRL_CMD_FILE_DELETE]) + path.encode("utf-8"), timeout)
+        return int(res.get("status", CTRL_ERR_NOT_READY))
+
+    async def cmd_storage_erase(self, step: int, timeout: float = 10.0) -> dict:
+        """Erase step: CTRL_ERASE_ARM then CTRL_ERASE_CONFIRM. Returns {status, removed}."""
+        res = await self._ctrl_roundtrip(
+            PKT_CMD, bytes([CTRL_CMD_STORAGE_ERASE, step & 0xFF]), timeout)
+        return res
+
     @staticmethod
     def parse_status(payload: bytes) -> dict:
         """Parse 16-byte STATUS_RESP payload into a dict (see control.h layout)."""
@@ -1160,6 +1201,42 @@ class CheckpointClient:
             "chunks": chunks,
             "utterances": utt,
         }
+
+    @staticmethod
+    def parse_storage(payload: bytes) -> dict:
+        """Parse 20-byte STORAGE_RESP payload (see control.h layout)."""
+        if len(payload) < CTRL_STORAGE_LEN:
+            return {}
+        total, used = struct.unpack("<QQ", payload[0:16])
+        files, pending = struct.unpack("<HH", payload[16:20])
+        return {"total": total, "used": used, "files": files, "pending": pending}
+
+    @staticmethod
+    def parse_file_list(payload: bytes) -> dict:
+        """Parse LIST_RESP payload into {start, total, entries} (see control.h)."""
+        if len(payload) < 5:
+            return {}
+        start, total = struct.unpack("<HH", payload[0:4])
+        count = payload[4]
+        entries = []
+        off = 5
+        for _ in range(count):
+            if off + 1 > len(payload):
+                break
+            namelen = payload[off]
+            off += 1
+            if off + namelen + 4 + 1 > len(payload):
+                break
+            try:
+                name = payload[off:off + namelen].decode("utf-8")
+            except UnicodeDecodeError:
+                break
+            off += namelen
+            size = struct.unpack("<I", payload[off:off + 4])[0]
+            flags = payload[off + 4]
+            off += 5
+            entries.append({"name": name, "size": size, "flags": flags})
+        return {"start": start, "total": total, "entries": entries}
 
     # -- Handshake -------------------------------------------------------
 
@@ -1301,11 +1378,15 @@ class CheckpointClient:
                 result: dict = {"cmd": cmd, "status": status}
                 if cmd == CTRL_CMD_LED_GET and len(p) >= 4:
                     result.update({"muted": bool(p[2]), "brightness": p[3]})
+                if cmd == CTRL_CMD_STORAGE_ERASE and len(p) >= 4:
+                    result.update({"removed": struct.unpack("<H", p[2:4])[0]})
                 print(f"  CMD_RESP cmd=0x{cmd:02x} status={status}")
                 self._ctrl_complete(pkt.seq, result)
                 self._emit({"type": "cmd_resp", "cmd": cmd, "status": status,
                             **({} if "muted" not in result else
-                               {"muted": result["muted"], "brightness": result["brightness"]})})
+                               {"muted": result["muted"], "brightness": result["brightness"]}),
+                            **({} if "removed" not in result else
+                               {"removed": result["removed"]})})
 
         elif pkt.type == PKT_STATUS_RESP:
             info = self.parse_status(pkt.payload)
@@ -1314,6 +1395,22 @@ class CheckpointClient:
                       f"muted={info['muted']} bright={info['brightness']} pend={info['pending']}")
                 self._ctrl_complete(pkt.seq, info)
                 self._emit({"type": "rec_status", **info})
+
+        elif pkt.type == PKT_STORAGE_RESP:
+            info = self.parse_storage(pkt.payload)
+            if info:
+                print(f"  STORAGE_RESP total={info['total']} used={info['used']} "
+                      f"files={info['files']} pend={info['pending']}")
+                self._ctrl_complete(pkt.seq, info)
+                self._emit({"type": "storage", **info})
+
+        elif pkt.type == PKT_LIST_RESP:
+            info = self.parse_file_list(pkt.payload)
+            if info:
+                print(f"  LIST_RESP start={info['start']} total={info['total']} "
+                      f"entries={len(info['entries'])}")
+                self._ctrl_complete(pkt.seq, info)
+                self._emit({"type": "file_list", **info})
 
         elif pkt.type == PKT_ERROR:
             code = pkt.payload[0] if pkt.payload else None

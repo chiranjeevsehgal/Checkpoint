@@ -13,6 +13,9 @@ struct ManifestEntry {
 bool manifest_init();
 bool manifest_scan_and_recover();
 bool manifest_get_pending(ManifestEntry *out, size_t max_count, size_t *found);
+// Copies all entries regardless of pending flag (for remote file listing).
+bool manifest_get_all(ManifestEntry *out, size_t max_count, size_t *found);
+size_t manifest_entry_count();
 bool manifest_mark_uploading(const String &path, uint16_t next_seq);
 bool manifest_mark_done(const String &path);
 bool manifest_update_seq(const String &path, uint16_t next_seq);

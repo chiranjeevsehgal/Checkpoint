@@ -26,7 +26,7 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 HERE = Path(__file__).resolve().parent
 CLIENT_PATH = HERE / "client - ingestion.py"
@@ -162,6 +162,44 @@ class App:
         self.btn_led_apply = ttk.Button(dev, text="Apply LED", command=self.on_led_apply,
                                         state=tk.DISABLED)
         self.btn_led_apply.pack(side=tk.LEFT, padx=2)
+
+        stor = ttk.LabelFrame(self.root, text="Storage (BLE remote)", padding=6)
+        stor.pack(fill=tk.X, padx=8, pady=(4, 0))
+        self.btn_storage = ttk.Button(stor, text="Refresh", command=self.on_storage_refresh,
+                                      state=tk.DISABLED)
+        self.btn_storage.pack(side=tk.LEFT, padx=2)
+        self.storage_var = tk.StringVar(value="SD: —")
+        ttk.Label(stor, textvariable=self.storage_var).pack(side=tk.LEFT, padx=8)
+        self.storage_bar = ttk.Progressbar(stor, mode="determinate", maximum=100, length=140)
+        self.storage_bar.pack(side=tk.LEFT, padx=2)
+        self.storage_bar["value"] = 0
+        self.btn_file_delete = ttk.Button(stor, text="Delete", command=self.on_file_delete,
+                                          state=tk.DISABLED)
+        self.btn_file_delete.pack(side=tk.RIGHT, padx=2)
+        self.btn_storage_erase = ttk.Button(stor, text="Erase all…",
+                                            command=self.on_storage_erase,
+                                            state=tk.DISABLED)
+        self.btn_storage_erase.pack(side=tk.RIGHT, padx=2)
+        self.btn_list_next = ttk.Button(stor, text="Next >", command=self.on_list_next,
+                                        state=tk.DISABLED)
+        self.btn_list_next.pack(side=tk.RIGHT, padx=2)
+        self.btn_list_prev = ttk.Button(stor, text="< Prev", command=self.on_list_prev,
+                                        state=tk.DISABLED)
+        self.btn_list_prev.pack(side=tk.RIGHT, padx=2)
+        self.list_page_var = tk.StringVar(value="")
+        ttk.Label(stor, textvariable=self.list_page_var).pack(side=tk.RIGHT, padx=4)
+        devcols = ("size", "state")
+        self.dev_tree = ttk.Treeview(stor, columns=devcols, height=4, show="tree headings")
+        self.dev_tree.heading("#0", text="Device file")
+        self.dev_tree.heading("size", text="Size")
+        self.dev_tree.heading("state", text="State")
+        self.dev_tree.column("#0", width=260)
+        self.dev_tree.column("size", width=90)
+        self.dev_tree.column("state", width=140)
+        self.dev_tree.pack(fill=tk.X, pady=(4, 0))
+        self._list_start = 0
+        self._list_total = 0
+        self._list_count = 0
 
         files = ttk.LabelFrame(self.root, text="Audio items", padding=6)
         files.pack(fill=tk.BOTH, expand=False, padx=8, pady=(4, 0))
@@ -300,6 +338,44 @@ class App:
                     self.bright_var.set(int(e.get("brightness", 30)))
                 except (TypeError, ValueError):
                     pass
+            if cmd in (cli.CTRL_CMD_FILE_DELETE, cli.CTRL_CMD_STORAGE_ERASE):
+                if "removed" in e:
+                    self.q.put(("log", f"[gui] erase removed={e.get('removed')} files"))
+                self._storage_refresh_soon()
+        elif kind == "storage":
+            total = e.get("total", 0)
+            used = e.get("used", 0)
+            if total:
+                pct = int(100 * used / total)
+                self.storage_var.set(
+                    f"SD: {self._fmt_bytes(used)} / {self._fmt_bytes(total)} "
+                    f"({pct}%) · {e.get('files', '?')} files · {e.get('pending', '?')} pending")
+                self.storage_bar["value"] = min(100, pct)
+            else:
+                self.storage_var.set(
+                    f"SD total unknown · {self._fmt_bytes(used)} recordings · "
+                    f"{e.get('files', '?')} files · {e.get('pending', '?')} pending")
+                self.storage_bar["value"] = 0
+        elif kind == "file_list":
+            entries = e.get("entries", [])
+            self._list_start = int(e.get("start", 0))
+            self._list_total = int(e.get("total", 0))
+            self._list_count = len(entries)
+            for iid in self.dev_tree.get_children():
+                self.dev_tree.delete(iid)
+            for en in entries:
+                flags = int(en.get("flags", 0))
+                if flags & cli.CTRL_LIST_FLAG_ACTIVE:
+                    state = "recording"
+                elif flags & cli.CTRL_LIST_FLAG_PENDING:
+                    state = "pending"
+                else:
+                    state = "synced"
+                self.dev_tree.insert("", tk.END, iid=en["name"], text=en["name"],
+                                     values=(self._fmt_bytes(en.get("size", 0)), state))
+            self.list_page_var.set(
+                f"{self._list_start + 1 if self._list_total else 0}"
+                f"–{self._list_start + self._list_count} of {self._list_total}")
 
     # -- worker plumbing ----------------------------------------------
     def _ensure_loop(self):
@@ -330,7 +406,9 @@ class App:
         self.btn_disc.configure(state=tk.NORMAL if connected else tk.DISABLED)
         dev_state = tk.NORMAL if connected else tk.DISABLED
         for w in (self.btn_rec_start, self.btn_rec_stop, self.btn_status,
-                  self.led_muted_chk, self.bright_scale, self.btn_led_apply):
+                  self.led_muted_chk, self.bright_scale, self.btn_led_apply,
+                  self.btn_storage, self.btn_file_delete, self.btn_storage_erase,
+                  self.btn_list_prev, self.btn_list_next):
             try:
                 w.configure(state=dev_state)
             except tk.TclError:
@@ -405,6 +483,123 @@ class App:
         status = await self.client.cmd_led_set(muted, bright)
         self.q.put(("log", f"[gui] led-apply muted={muted} bright={bright} status={status}"))
         self._device_refresh_soon()
+
+    # -- storage remote control (BLE control.h) --------------------------
+    @staticmethod
+    def _fmt_bytes(n) -> str:
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            return "?"
+        if n >= 1 << 30:
+            return f"{n / (1 << 30):.2f}GB"
+        if n >= 1 << 20:
+            return f"{n / (1 << 20):.1f}MB"
+        if n >= 1 << 10:
+            return f"{n / (1 << 10):.0f}KB"
+        return f"{n}B"
+
+    @staticmethod
+    def _ctrl_status_text(status: int) -> str:
+        return {
+            cli.CTRL_OK: "ok",
+            cli.CTRL_ERR_NOT_READY: "not-ready",
+            cli.CTRL_ERR_NO_SD: "no-sd",
+            cli.CTRL_ERR_BAD_ARG: "bad-arg",
+            cli.CTRL_ERR_DENIED: "denied",
+            cli.CTRL_ERR_BUSY: "busy",
+            cli.CTRL_ERR_NOT_FOUND: "not-found",
+        }.get(int(status), f"0x{int(status):02x}")
+
+    def _storage_refresh_soon(self):
+        if self._device_ready():
+            try:
+                fut = self._submit(self._storage_flow())
+                fut.add_done_callback(lambda f: self._device_done("storage", f))
+                fut2 = self._submit(self._list_flow(max(0, self._list_start)))
+                fut2.add_done_callback(lambda f: self._device_done("file-list", f))
+            except RuntimeError:
+                pass
+
+    def on_storage_refresh(self):
+        if not self._device_ready():
+            return
+        self._list_start = 0
+        fut = self._submit(self._storage_flow())
+        fut.add_done_callback(lambda f: self._device_done("storage", f))
+        fut2 = self._submit(self._list_flow(0))
+        fut2.add_done_callback(lambda f: self._device_done("file-list", f))
+
+    def on_list_prev(self):
+        if not self._device_ready():
+            return
+        start = max(0, self._list_start - max(1, self._list_count))
+        fut = self._submit(self._list_flow(start))
+        fut.add_done_callback(lambda f: self._device_done("file-list", f))
+
+    def on_list_next(self):
+        if not self._device_ready():
+            return
+        start = self._list_start + max(1, self._list_count)
+        if self._list_total and start >= self._list_total:
+            return
+        fut = self._submit(self._list_flow(start))
+        fut.add_done_callback(lambda f: self._device_done("file-list", f))
+
+    def on_file_delete(self):
+        if not self._device_ready():
+            return
+        sel = self.dev_tree.selection()
+        if not sel:
+            self.q.put(("log", "[gui] delete: no device file selected"))
+            return
+        path = sel[0]
+        if not messagebox.askyesno("Delete file",
+                                    f"Delete {path} from the pendant?\nThis cannot be undone."):
+            return
+        fut = self._submit(self._delete_flow(path))
+        fut.add_done_callback(lambda f: self._device_done("file-delete", f))
+
+    def on_storage_erase(self):
+        if not self._device_ready():
+            return
+        if not messagebox.askyesno("Erase all recordings",
+                                    "Erase ALL recordings from the pendant SD card?\n"
+                                    "This cannot be undone."):
+            return
+        fut = self._submit(self._erase_flow())
+        fut.add_done_callback(lambda f: self._device_done("storage-erase", f))
+
+    async def _storage_flow(self):
+        assert self.client is not None
+        await self.client.req_storage()
+
+    async def _list_flow(self, start: int):
+        assert self.client is not None
+        await self.client.req_list(start)
+
+    async def _delete_flow(self, path: str):
+        assert self.client is not None
+        status = await self.client.cmd_file_delete(path)
+        self.q.put(("log",
+                     f"[gui] file-delete {path} status={self._ctrl_status_text(status)}"))
+        self._storage_refresh_soon()
+
+    async def _erase_flow(self):
+        assert self.client is not None
+        arm = await self.client.cmd_storage_erase(cli.CTRL_ERASE_ARM)
+        arm_status = int(arm.get("status", cli.CTRL_ERR_NOT_READY))
+        if arm_status != cli.CTRL_OK:
+            self.q.put(("log",
+                         f"[gui] erase arm refused status={self._ctrl_status_text(arm_status)}"))
+            return
+        res = await self.client.cmd_storage_erase(cli.CTRL_ERASE_CONFIRM)
+        status = int(res.get("status", cli.CTRL_ERR_NOT_READY))
+        self.q.put(("log",
+                     f"[gui] erase confirm status={self._ctrl_status_text(status)} "
+                     f"removed={res.get('removed', '?')}"))
+        self._list_start = 0
+        self._storage_refresh_soon()
 
     # -- connect / disconnect ------------------------------------------
     def on_connect(self):
@@ -485,6 +680,13 @@ class App:
             self._on_event({"type": "rec_status", **info})
         except Exception as e:
             self.q.put(("log", f"[gui] initial status failed: {e}"))
+        try:
+            sinfo = await self.client.req_storage()
+            self._on_event({"type": "storage", **sinfo})
+            linfo = await self.client.req_list(0)
+            self._on_event({"type": "file_list", **linfo})
+        except Exception as e:
+            self.q.put(("log", f"[gui] initial storage load failed: {e}"))
         self.q.put(("log", f"[gui] queue-wait until SUBMITTED (Kafka {cli.KAFKA_TOPIC_HINT}); verify: docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --topic {cli.KAFKA_TOPIC_HINT} --bootstrap-server kafka:9092"))
         self.listener_task = asyncio.current_task()
         try:
