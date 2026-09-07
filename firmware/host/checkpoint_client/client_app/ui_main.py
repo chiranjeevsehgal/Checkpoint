@@ -64,6 +64,8 @@ class CheckpointWindow:
         self._echo_guard = False
         self._bright_after_id: str | None = None
         self.BRIGHT_DEBOUNCE_MS = 500
+        self.recording: bool | None = None
+        self._rec_busy = False
 
         self._build_widgets()
         self.refs = UiRefs(
@@ -92,7 +94,7 @@ class CheckpointWindow:
                                           self.on_connect, self.on_disconnect)
         self.ingest_var = tk.BooleanVar(value=True)
         self.vad_var = tk.BooleanVar(value=True)
-        self.bench_var = tk.BooleanVar(value=True)
+        self.bench_var = tk.BooleanVar(value=False)
         self.keep_var = tk.BooleanVar(value=False)
         self.thr_var = tk.StringVar(value=str(cfg.VAD_THRESHOLD))
         self.min_var = tk.StringVar(value=str(cfg.VAD_MIN_SPEECH_S))
@@ -105,8 +107,7 @@ class CheckpointWindow:
         self.sync_var = tk.BooleanVar(value=True)
         self.dev_btns = ui_cards.build_device_card(
             self.root,
-            {"rec_start": self.on_rec_start, "rec_stop": self.on_rec_stop,
-             "status": self.on_status_refresh, "led_toggle": self.on_led_toggle,
+            {"rec_toggle": self.on_rec_toggle, "status": self.on_status_refresh, "led_toggle": self.on_led_toggle,
              "sync_toggle": self.on_sync_toggle,
              "bright_slide": self.on_bright_slide,
              "bright_release": self.on_bright_release},
@@ -169,9 +170,12 @@ class CheckpointWindow:
                     self._echo_guard = False
             else:
                 apply_event(self.refs, payload)
+            if payload.get("type") == "rec_status" and "recording" in payload:
+                self._set_recording(bool(payload["recording"]))
         elif tag == "status":
             self._set_status(*payload)
         elif tag == "connected":
+            self._set_recording(None)
             self._set_buttons(True, False)
 
     def _set_buttons(self, connected: bool, busy: bool):
@@ -180,7 +184,7 @@ class CheckpointWindow:
         self.btn_connect.configure(state="disabled" if (connected or busy) else "normal")
         self.btn_disc.configure(state="normal" if connected else "disabled")
         dev_state = "normal" if connected else "disabled"
-        for w in (self.dev_btns["rec_start"], self.dev_btns["rec_stop"],
+        for w in (self.dev_btns["rec"],
                   self.dev_btns["status"], self.dev_btns["led_chk"],
                   self.dev_btns["bright"], self.dev_btns["sync_chk"],
                   self.stor_btns["refresh"], self.stor_btns["delete"],
@@ -208,17 +212,30 @@ class CheckpointWindow:
             except RuntimeError:
                 pass
 
-    def on_rec_start(self):
-        if not self._device_ready():
+    def on_rec_toggle(self):
+        if not self._device_ready() or self._rec_busy:
             return
-        fut = self.worker.submit(self._rec_start_flow())
-        fut.add_done_callback(lambda f: self._device_done("rec-start", f))
+        stopping = bool(self.recording)
+        action = "rec-stop" if stopping else "rec-start"
+        self._rec_busy = True
+        fut = self.worker.submit(self._rec_stop_flow() if stopping else self._rec_start_flow())
+        fut.add_done_callback(lambda f: self._rec_toggle_done(action, f))
 
-    def on_rec_stop(self):
-        if not self._device_ready():
-            return
-        fut = self.worker.submit(self._rec_stop_flow())
-        fut.add_done_callback(lambda f: self._device_done("rec-stop", f))
+    def _rec_toggle_done(self, action: str, fut):
+        try:
+            self._device_done(action, fut)
+        finally:
+            self._rec_busy = False
+
+    def _set_recording(self, recording: bool | None):
+        self.recording = recording
+        btn = self.dev_btns["rec"]
+        if recording is None:
+            btn.configure(text="Rec …", bootstyle="secondary")
+        elif recording:
+            btn.configure(text="● Stop Rec", bootstyle="danger")
+        else:
+            btn.configure(text="○ Start Rec", bootstyle="success")
 
     def on_status_refresh(self):
         if not self._device_ready():

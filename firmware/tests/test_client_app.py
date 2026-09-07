@@ -224,6 +224,169 @@ def test_device_and_storage_events():
 
 
 @needs_deps
+def test_settle_for_encryption_recovers():
+    import asyncio
+
+    from client_app.ble_client import CheckpointClient
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    calls = []
+    printed = []
+
+    async def fake_exchange(label):
+        calls.append(label)
+        if len(calls) < 3:
+            client.last_error = 0x01
+            return "error"
+        return "acked"
+
+    client._hello_exchange = fake_exchange
+    client._print_handshake_complete = lambda: printed.append(True)
+    assert asyncio.run(client._settle_for_encryption(tries=3, wait_s=0)) is True
+    assert len(calls) == 3 and printed == [True]
+
+
+@needs_deps
+def test_settle_for_encryption_gives_up():
+    import asyncio
+
+    from client_app.ble_client import CheckpointClient
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    calls = []
+
+    async def fake_exchange(label):
+        calls.append(label)
+        client.last_error = 0x01
+        return "error"
+
+    client._hello_exchange = fake_exchange
+    assert asyncio.run(client._settle_for_encryption(tries=3, wait_s=0)) is False
+    assert len(calls) == 3
+
+
+@needs_deps
+def test_is_link_drop_mapping():
+    from client_app.ble_client import CheckpointClient
+    assert CheckpointClient._is_link_drop("Not connected") is True
+    assert CheckpointClient._is_link_drop("Characteristic X was not found!") is True
+    assert CheckpointClient._is_link_drop("Device disconnected") is True
+    assert CheckpointClient._is_link_drop("access denied") is False
+
+
+@needs_deps
+def test_connect_with_retry_recovers():
+    import asyncio
+
+    from client_app.ble_client import CheckpointClient
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    attempts = []
+
+    async def flaky_connect():
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise RuntimeError("no adapter")
+
+    client.connect = flaky_connect
+    asyncio.run(client._connect_with_retry(tries=3, wait_s=0))
+    assert len(attempts) == 3
+
+
+@needs_deps
+def test_hello_exchange_timeout_reconnects(monkeypatch):
+    import asyncio
+
+    from client_app import config as cfg
+    from client_app.ble_client import CheckpointClient
+    monkeypatch.setattr(cfg, "ACK_TIMEOUT_S", 0.05)
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    reconnected = []
+
+    async def fake_write(ptype, seq, payload=b""):
+        return None
+
+    async def fake_wait():
+        await asyncio.sleep(10)
+
+    async def fake_reconnect(tries=3, wait_s=2.0):
+        reconnected.append(True)
+
+    client.write_ctrl = fake_write
+    client._wait_for_handshake_result = fake_wait
+    client._connect_with_retry = fake_reconnect
+    assert asyncio.run(client._hello_exchange("attempt 1/7")) == "reconnected"
+    assert reconnected == [True]
+
+
+@needs_deps
+def _make_fake_bleak():
+    class FakeBleak:
+        def __init__(self, address):
+            self.is_connected = False
+
+        async def connect(self):
+            self.is_connected = True
+
+        async def pair(self):
+            return None
+
+        async def start_notify(self, *args):
+            return None
+
+    return FakeBleak
+
+
+@needs_deps
+def test_connect_logs_windows_bond_state(monkeypatch, capsys):
+    import asyncio
+    import sys as _sys
+
+    from client_app import ble_client as mod
+    from client_app.ble_client import CheckpointClient
+
+    class FakePairing:
+        is_paired = True
+
+    class FakeDI:
+        pairing = FakePairing()
+
+    class FakeDev:
+        device_information = FakeDI()
+
+    class FakeBtMod:
+        class BluetoothLEDevice:
+            @staticmethod
+            async def from_bluetooth_address_async(addr):
+                assert addr == 0xE8F60A89384D
+                return FakeDev()
+
+    monkeypatch.setattr(mod, "BleakClient", _make_fake_bleak())
+    monkeypatch.setitem(_sys.modules, "winrt.windows.devices.bluetooth", FakeBtMod)
+    client = CheckpointClient("E8:F6:0A:89:38:4D", ingest_enabled=False, vad_enabled=False)
+    asyncio.run(client.connect())
+    assert "Windows bond present: True" in capsys.readouterr().out
+
+
+@needs_deps
+def test_connect_bond_probe_reports_missing_record(monkeypatch, capsys):
+    import asyncio
+    import sys as _sys
+
+    from client_app import ble_client as mod
+    from client_app.ble_client import CheckpointClient
+
+    class FakeBtMod:
+        class BluetoothLEDevice:
+            @staticmethod
+            async def from_bluetooth_address_async(addr):
+                return None
+
+    monkeypatch.setattr(mod, "BleakClient", _make_fake_bleak())
+    monkeypatch.setitem(_sys.modules, "winrt.windows.devices.bluetooth", FakeBtMod)
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    asyncio.run(client.connect())
+    assert "no WinRT record" in capsys.readouterr().out
+
+
+@needs_deps
 def test_worker_serializes_device_writes():
     import asyncio
 

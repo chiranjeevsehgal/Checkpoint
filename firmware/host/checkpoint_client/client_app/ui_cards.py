@@ -46,12 +46,9 @@ def build_device_card(parent, actions, dev_status_var, led_muted_var,
                        bright_var, sync_var):
     dev = ttk.Labelframe(parent, text="Device (BLE remote)", padding=6, bootstyle="primary")
     dev.pack(fill=X, padx=8, pady=(4, 0))
-    btn_rec_start = ttk.Button(dev, text="Rec Start", command=actions["rec_start"],
-                               bootstyle="danger", state="disabled")
-    btn_rec_start.pack(side=LEFT, padx=2)
-    btn_rec_stop = ttk.Button(dev, text="Rec Stop", command=actions["rec_stop"],
-                              bootstyle="secondary", state="disabled")
-    btn_rec_stop.pack(side=LEFT, padx=2)
+    btn_rec = ttk.Button(dev, text="Rec …", command=actions["rec_toggle"],
+                         bootstyle="secondary", state="disabled")
+    btn_rec.pack(side=LEFT, padx=2)
     btn_status = ttk.Button(dev, text="Refresh", command=actions["status"],
                             bootstyle="info", state="disabled")
     btn_status.pack(side=LEFT, padx=2)
@@ -70,7 +67,7 @@ def build_device_card(parent, actions, dev_status_var, led_muted_var,
                                command=actions["sync_toggle"],
                                bootstyle="primary-round-toggle", state="disabled")
     sync_chk.pack(side=LEFT, padx=4)
-    return {"rec_start": btn_rec_start, "rec_stop": btn_rec_stop, "status": btn_status,
+    return {"rec": btn_rec, "status": btn_status,
             "led_chk": led_chk, "bright": bright_scale, "sync_chk": sync_chk}
 
 

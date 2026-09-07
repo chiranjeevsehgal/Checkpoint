@@ -20,7 +20,7 @@ class ConnectionSettings:
     threshold: float = cfg.VAD_THRESHOLD
     min_speech_s: float = cfg.VAD_MIN_SPEECH_S
     keep: bool = False
-    bench: bool = True
+    bench: bool = False
 
 
 class BleWorker:

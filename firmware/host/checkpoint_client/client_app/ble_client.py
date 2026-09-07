@@ -249,6 +249,7 @@ class CheckpointClient:
         except Exception as e:
             print(f"  (pair() call skipped/handled by OS: {e}) "
                   f"is_connected={self.client.is_connected if self.client else 'no-client'}")
+        await self._log_windows_bond_state_async()
         await self.client.start_notify(cfg.CTRL_UUID, self._on_ctrl_indicate)
         await self.client.start_notify(cfg.DATA_UUID, self._on_data_notify)
         print("Subscribed to ctrl + data characteristics.")
@@ -258,6 +259,26 @@ class CheckpointClient:
                 print(f"  Bleak MTU hint: {mtu}")
         except Exception:
             pass
+
+    async def _log_windows_bond_state_async(self) -> None:
+        """Report whether Windows holds a bond record for this peer.
+
+        Diagnostic for the every-reconnect 0x01: Bleak's pair() is a no-op
+        when Windows already reports paired, so this answers which side
+        lost its key. Uses the WinRT API directly from our MAC address
+        (Bleak's internals move between versions, so they are not touched).
+        Best-effort and Windows-only — never raises.
+        """
+        try:
+            from winrt.windows.devices.bluetooth import BluetoothLEDevice
+            addr = int(self.address.replace(":", ""), 16)
+            dev = await BluetoothLEDevice.from_bluetooth_address_async(addr)
+            if dev is None:
+                print("  (bond probe: no WinRT record for peer)")
+                return
+            print(f"  Windows bond present: {bool(dev.device_information.pairing.is_paired)}")
+        except Exception as e:
+            print(f"  (windows bond check failed: {e})")
 
     async def disconnect(self):
         if self.client and self.client.is_connected:
@@ -447,7 +468,7 @@ class CheckpointClient:
             pass
         await asyncio.sleep(1.0)
         try:
-            await self.connect()
+            await self._connect_with_retry()
         except Exception as e:
             print(f"  [bond] reconnect after unpair failed: {e}")
             return False
@@ -455,36 +476,96 @@ class CheckpointClient:
         await asyncio.sleep(2.0)
         return True
 
+    async def _connect_with_retry(self, tries: int = 3, wait_s: float = 2.0) -> None:
+        """Reconnect, tolerating the device mid-reboot or mid-advertise flap."""
+        last: Exception | None = None
+        for n in range(1, tries + 1):
+            try:
+                await self.connect()
+                return
+            except Exception as e:
+                last = e
+                print(f"  connect try {n}/{tries} failed ({e}) — retrying in {wait_s:.0f}s ...")
+                await asyncio.sleep(wait_s)
+        raise RuntimeError(f"Reconnect failed: {last}")
+
+    @staticmethod
+    def _is_link_drop(message: str) -> bool:
+        msg = message.lower()
+        return "not connected" in msg or "disconnected" in msg or "was not found" in msg
+
+    async def _hello_exchange(self, label: str) -> str:
+        """Send one HELLO and wait for the result.
+
+        Returns 'acked', 'error', or 'reconnected' (link dropped; already
+        reconnected with retries). Raises on timeout or unexpected failure.
+        """
+        self.hello_acked.clear()
+        self.error_event.clear()
+        self.last_error = None
+        seq = self.next_seq()
+        print(f"Sending HELLO (seq={seq}) {label} ...")
+        try:
+            await self.write_ctrl(cfg.PKT_HELLO, seq)
+        except Exception as e:
+            if self._is_link_drop(str(e)):
+                print(f"  link dropped ({e}) — reconnecting ...")
+                await self._connect_with_retry()
+                return "reconnected"
+            raise
+        try:
+            await asyncio.wait_for(self._wait_for_handshake_result(),
+                                   timeout=cfg.ACK_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            # Device drops un-handshaked links after BLE_HANDSHAKE_TIMEOUT_MS:
+            # a timeout usually means the link is already gone, not a slow peer.
+            print("  HELLO timed out — link may have dropped, reconnecting ...")
+            await self._connect_with_retry()
+            return "reconnected"
+        return "acked" if self.hello_acked.is_set() else "error"
+
+    def _print_handshake_complete(self):
+        print(f"Handshake complete. session_id={self.session_id:#010x}, "
+              f"mtu={self.mtu} chunk_sec={self.chunk_sec} frag_size={self.frag_size}, "
+              f"key={'present' if self.master_key else 'ABSENT (unencrypted transfer!)'}")
+
+    async def _settle_for_encryption(self, tries: int = 2, wait_s: float = 1.0) -> bool:
+        """Give Windows a brief chance to restore encryption on its own.
+
+        Pure observation: sends HELLOs only — no pairing requests, no unpair.
+        Kept short on purpose: the device drops un-handshaked links after
+        BLE_HANDSHAKE_TIMEOUT_MS (5 s), so a long settle would kill the link
+        it is trying to save. Returns True if ACKed (completion printed).
+        """
+        print("  0x01 with link up: waiting for Windows to restore encryption "
+              f"on its own ({tries}x{wait_s:.0f}s) before forcing a re-pair ...")
+        for n in range(1, tries + 1):
+            await asyncio.sleep(wait_s)
+            outcome = await self._hello_exchange(f"settle retry {n}/{tries}")
+            if outcome == "acked":
+                print(f"  encryption self-restored on settle retry {n} (no re-pair needed)")
+                self._print_handshake_complete()
+                return True
+            if outcome == "error" and self.last_error != 0x01:
+                break
+        print("  encryption did not self-restore — proceeding to pair/rebond ...")
+        return False
+
     async def do_handshake(self):
         rebonded = False
+        settled = False
         for attempt in range(7):
-            self.hello_acked.clear()
-            self.error_event.clear()
-            self.last_error = None
-            seq = self.next_seq()
-            print(f"Sending HELLO (seq={seq}) attempt {attempt + 1}/7 ...")
-            try:
-                await self.write_ctrl(cfg.PKT_HELLO, seq)
-            except Exception as e:
-                if "not connected" in str(e).lower() or "disconnected" in str(e).lower():
-                    print(f"  link dropped ({e}) — reconnecting ...")
-                    try:
-                        await self.connect()
-                        continue
-                    except Exception as e2:
-                        raise RuntimeError(f"Reconnect failed: {e2}")
-                raise
-            try:
-                await asyncio.wait_for(self._wait_for_handshake_result(),
-                                       timeout=cfg.ACK_TIMEOUT_S)
-            except asyncio.TimeoutError:
-                raise RuntimeError("Timed out waiting for HELLO_ACK")
-            if self.hello_acked.is_set():
-                print(f"Handshake complete. session_id={self.session_id:#010x}, "
-                      f"mtu={self.mtu} chunk_sec={self.chunk_sec} frag_size={self.frag_size}, "
-                      f"key={'present' if self.master_key else 'ABSENT (unencrypted transfer!)'}")
+            outcome = await self._hello_exchange(f"attempt {attempt + 1}/7")
+            if outcome == "reconnected":
+                continue
+            if outcome == "acked":
+                self._print_handshake_complete()
                 return
             if self.last_error == 0x01 and attempt < 6:
+                if not settled:
+                    settled = True
+                    if await self._settle_for_encryption():
+                        return
                 if self.auto_rebond and not rebonded and attempt >= 1:
                     print("  HELLO rejected (0x01) persists after pair() — "
                           "stale bond suspected, rebonding ...")
@@ -500,8 +581,6 @@ class CheckpointClient:
                 except Exception as e:
                     print(f"  pair() retry failed: {e} "
                           f"is_connected={self.client.is_connected if self.client else 'no-client'}")
-                print("  Waiting 1.5s for encryption to settle before HELLO retry...")
-                await asyncio.sleep(1.5)
                 continue
             if self.last_error == 0x02:
                 raise RuntimeError("HELLO rejected: version mismatch (error 0x02) — "
