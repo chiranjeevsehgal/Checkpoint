@@ -99,6 +99,10 @@ const char *proto_type_name(uint8_t type) {
     case PKT_RESUME_REQ: return "RESUME_REQ";
     case PKT_RESUME_RESP: return "RESUME_RESP";
     case PKT_KEEPALIVE: return "KEEPALIVE";
+    case PKT_CMD: return "CMD";
+    case PKT_CMD_RESP: return "CMD_RESP";
+    case PKT_STATUS_REQ: return "STATUS_REQ";
+    case PKT_STATUS_RESP: return "STATUS_RESP";
     default: return "UNKNOWN";
   }
 }

@@ -14,7 +14,11 @@ enum PacketType : uint8_t {
   PKT_ERROR = 0x16,
   PKT_RESUME_REQ = 0x17,
   PKT_RESUME_RESP = 0x18,
-  PKT_KEEPALIVE = 0x19
+  PKT_KEEPALIVE = 0x19,
+  PKT_CMD = 0x20,
+  PKT_CMD_RESP = 0x21,
+  PKT_STATUS_REQ = 0x22,
+  PKT_STATUS_RESP = 0x23
 };
 
 struct Packet {

@@ -8,6 +8,7 @@
 #include "log.h"
 #include "recorder.h"
 #include "ui.h"
+#include "control.h"
 #if !SD_USE_SDMMC
 #include <SD.h>
 #endif
@@ -67,6 +68,11 @@ void transfer_on_packet(const uint8_t *data, size_t len) {
     uint16_t seq = pkt.payload[0] | (pkt.payload[1] << 8);
     s_resume_seq = pkt.payload[2] | (pkt.payload[3] << 8);
     signal_ack(seq, true);
+  } else if (pkt.type == PKT_CMD || pkt.type == PKT_STATUS_REQ) {
+    // Remote transport + LED control. Single ble_on_packet callback is shared,
+    // so control packets are forwarded here instead of a second registration.
+    // control_on_packet only stores flags; work happens in control_poll().
+    control_on_packet(&pkt);
   }
 }
 

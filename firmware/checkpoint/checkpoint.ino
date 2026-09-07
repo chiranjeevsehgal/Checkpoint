@@ -9,6 +9,7 @@
 #include "ui.h"
 #include "crypto.h"
 #include "log.h"
+#include "control.h"
 
 static TaskHandle_t uiTaskHandle = nullptr;
 static TaskHandle_t transferTaskHandle = nullptr;
@@ -29,6 +30,7 @@ void setup() {
   else if (rr == ESP_RST_SDIO) rr_str = "SDIO";
 
   ui_init();
+  control_init();
   xTaskCreatePinnedToCore(ui_task, "ui", TASK_STACK_UI, nullptr, TASK_PRIO_UI, &uiTaskHandle, 0);
 
   if (!sd_begin()) {
@@ -145,6 +147,7 @@ void loop() {
   // Recovery now only on boot (setup) and SD remount (sd_begin success paths above).
   ble_check_handshake_timeout();
   ble_check_final_diag();
+  control_poll();
 
   if (ble_is_connected() && ble_is_handshaked()) {
     // keepalive handled in ble_service (BLE_KEEPALIVE_MS reserved)

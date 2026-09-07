@@ -7,6 +7,10 @@
 
 static TaskHandle_t s_task = nullptr;
 static volatile uint8_t s_state = 0;
+static volatile bool s_muted = false;
+static volatile uint8_t s_brightness = HW_RGB_BRIGHTNESS;
+static volatile bool s_brightness_dirty = false;
+static volatile uint32_t s_remote_action_ms = 0;
 
 enum LedState : uint8_t { LED_OFF, LED_ON, LED_BOOKMARK, LED_ERROR, LED_FATAL, LED_VAD_IDLE };
 
@@ -47,6 +51,34 @@ void ui_signal_fatal() {
   s_state = LED_FATAL;
 }
 
+void ui_set_muted(bool muted) {
+  s_muted = muted;
+}
+
+bool ui_is_muted() {
+  return s_muted;
+}
+
+void ui_set_brightness(uint8_t brightness) {
+  if (brightness == s_brightness) {
+    return;
+  }
+  s_brightness = brightness;
+  s_brightness_dirty = true;
+}
+
+uint8_t ui_get_brightness() {
+  return s_brightness;
+}
+
+void ui_note_remote_action() {
+  s_remote_action_ms = millis();
+}
+
+static inline bool ui_stealth_active() {
+  return s_muted;
+}
+
 void ui_task(void *arg) {
   (void)arg;
   uint32_t last_change = 0;
@@ -63,8 +95,9 @@ void ui_task(void *arg) {
     }
     if (armed && level == LOW && (now - last_change) > UI_DEBOUNCE_MS) {
       armed = false;
-      // Toggle lockout 800ms to cover close_chunk settle (400+300) and avoid double-toggle
-      if (now - last_toggle_ms < 800) {
+      // Toggle lockout 800ms to cover close_chunk settle (400+300) and avoid double-toggle.
+      // Also covers a recent remote (BLE) action so the button cannot instantly reverse it.
+      if ((now - last_toggle_ms < 800) || (now - s_remote_action_ms < 800)) {
       } else {
         last_toggle_ms = now;
         if (recorder_is_recording()) {
@@ -92,9 +125,23 @@ void ui_task(void *arg) {
       prev_state = s_state;
       state_enter_ms = now;
     }
+    if (s_brightness_dirty) {
+      s_brightness_dirty = false;
+      s_rgb.setBrightness(s_brightness);
+      s_last_rgb = 0xFFFFFFFFu; // force re-show at new brightness
+      if (s_state == LED_OFF || (s_muted && s_state != LED_ERROR && s_state != LED_FATAL)) {
+        s_rgb.clear();
+        s_rgb.show();
+        s_last_rgb = s_rgb.Color(0, 0, 0);
+      }
+    }
+    const bool stealth = ui_stealth_active();
     switch (s_state) {
       case LED_OFF: ui_set_rgb(0, 0, 0); break;
-      case LED_ON: ui_set_rgb(0, 180, 0); break;
+      case LED_ON:
+        if (stealth) ui_set_rgb(0, 0, 0);
+        else ui_set_rgb(0, 180, 0);
+        break;
       case LED_BOOKMARK: {
         ui_set_rgb(0, 0, 0);
         break;
@@ -121,6 +168,11 @@ void ui_task(void *arg) {
       case LED_VAD_IDLE: {
         // Slow 1Hz pulse, 10% duty: proves "mic ON, listening, silence"
         // vs LED_OFF (muted) and LED_ON solid (utterance capturing).
+        // Suppressed when stealth-muted so listening stays dark.
+        if (stealth) {
+          ui_set_rgb(0, 0, 0);
+          break;
+        }
         uint32_t t = (now - state_enter_ms) % 1000;
         ui_set_rgb(0, 0, (t < 100) ? 90 : 0);
         break;

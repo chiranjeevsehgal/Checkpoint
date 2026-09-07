@@ -154,6 +154,26 @@ PKT_ERROR = 0x16
 PKT_RESUME_REQ = 0x17
 PKT_RESUME_RESP = 0x18
 PKT_KEEPALIVE = 0x19
+PKT_CMD = 0x20
+PKT_CMD_RESP = 0x21
+PKT_STATUS_REQ = 0x22
+PKT_STATUS_RESP = 0x23
+
+# Command IDs in PKT_CMD payload[0] — must match control.h CtrlCmd.
+CTRL_CMD_REC_START = 0x01
+CTRL_CMD_REC_STOP = 0x02
+CTRL_CMD_LED_SET = 0x10
+CTRL_CMD_LED_GET = 0x11
+
+# Status codes in PKT_CMD_RESP payload[1] — must match control.h CtrlStatus.
+CTRL_OK = 0x00
+CTRL_ERR_NOT_READY = 0x01
+CTRL_ERR_NO_SD = 0x02
+CTRL_ERR_BAD_ARG = 0x03
+CTRL_ERR_DENIED = 0x04
+
+CTRL_STATUS_LEN = 16
+CTRL_BRIGHT_MIN = 5
 
 PKT_NAMES = {
     PKT_HELLO: "HELLO", PKT_HELLO_ACK: "HELLO_ACK",
@@ -162,6 +182,8 @@ PKT_NAMES = {
     PKT_FILE_DONE: "FILE_DONE", PKT_FILE_DONE_ACK: "FILE_DONE_ACK",
     PKT_ERROR: "ERROR", PKT_RESUME_REQ: "RESUME_REQ", PKT_RESUME_RESP: "RESUME_RESP",
     PKT_KEEPALIVE: "KEEPALIVE",
+    PKT_CMD: "CMD", PKT_CMD_RESP: "CMD_RESP",
+    PKT_STATUS_REQ: "STATUS_REQ", PKT_STATUS_RESP: "STATUS_RESP",
 }
 
 
@@ -680,6 +702,8 @@ class CheckpointClient:
         self.file_done_event = asyncio.Event()
         self.announce_event = asyncio.Event()
         self._seq_gen = 1
+        # Pending control responses keyed by request seq (CMD_RESP / STATUS_RESP).
+        self._ctrl_pending: dict[int, asyncio.Future] = {}
         # Serialize DATA handling and ACK writes to avoid concurrent buffer corruption
         # and ATT WNR overflow (previously create_task per DATA caused out-of-order ACKs)
         self._data_lock = asyncio.Lock()
@@ -1069,6 +1093,74 @@ class CheckpointClient:
                 except Exception as e2:
                     print(f"  [!] ACK write failed seq={seq}: {e} / {e2}")
 
+    # -- Remote transport + LED control (control.h) ---------------------
+
+    def _ctrl_complete(self, seq: int, result):
+        fut = self._ctrl_pending.pop(seq, None)
+        if fut is not None and not fut.done():
+            fut.set_result(result)
+
+    async def _ctrl_roundtrip(self, ptype: int, payload: bytes, timeout: float = 5.0):
+        seq = self.next_seq()
+        loop = asyncio.get_event_loop()
+        fut = loop.create_future()
+        self._ctrl_pending[seq] = fut
+        try:
+            await self.write_ctrl(ptype, seq, payload)
+            return await asyncio.wait_for(fut, timeout=timeout)
+        finally:
+            self._ctrl_pending.pop(seq, None)
+
+    async def cmd_rec_start(self, timeout: float = 5.0) -> int:
+        """Ask device to start recording. Returns CTRL_* status code."""
+        res = await self._ctrl_roundtrip(PKT_CMD, bytes([CTRL_CMD_REC_START]), timeout)
+        return int(res.get("status", CTRL_ERR_NOT_READY))
+
+    async def cmd_rec_stop(self, timeout: float = 5.0) -> int:
+        """Ask device to stop recording. Returns CTRL_* status code."""
+        res = await self._ctrl_roundtrip(PKT_CMD, bytes([CTRL_CMD_REC_STOP]), timeout)
+        return int(res.get("status", CTRL_ERR_NOT_READY))
+
+    async def cmd_led_set(self, muted: bool, brightness: int, timeout: float = 5.0) -> int:
+        """Set LED muted + brightness (0-255). Returns CTRL_* status code."""
+        bright = max(0, min(255, int(brightness)))
+        if not muted and bright < CTRL_BRIGHT_MIN:
+            bright = CTRL_BRIGHT_MIN
+        res = await self._ctrl_roundtrip(
+            PKT_CMD, bytes([CTRL_CMD_LED_SET, 0x01 if muted else 0x00, bright]), timeout)
+        return int(res.get("status", CTRL_ERR_NOT_READY))
+
+    async def cmd_led_get(self, timeout: float = 5.0) -> dict:
+        """Returns {status, muted, brightness}."""
+        res = await self._ctrl_roundtrip(PKT_CMD, bytes([CTRL_CMD_LED_GET]), timeout)
+        return res
+
+    async def req_status(self, timeout: float = 5.0) -> dict:
+        """Returns device status dict (recording, vad_*, muted, brightness, ...)."""
+        res = await self._ctrl_roundtrip(PKT_STATUS_REQ, b"", timeout)
+        return res
+
+    @staticmethod
+    def parse_status(payload: bytes) -> dict:
+        """Parse 16-byte STATUS_RESP payload into a dict (see control.h layout)."""
+        if len(payload) < CTRL_STATUS_LEN:
+            return {}
+        chunks = struct.unpack("<I", payload[8:12])[0]
+        utt = struct.unpack("<I", payload[12:16])[0]
+        pend = struct.unpack("<H", payload[6:8])[0]
+        level = struct.unpack("b", payload[5:6])[0]
+        return {
+            "recording": bool(payload[0]),
+            "vad_active": bool(payload[1]),
+            "vad_speech": bool(payload[2]),
+            "muted": bool(payload[3]),
+            "brightness": payload[4],
+            "level_dbfs": level,
+            "pending": pend,
+            "chunks": chunks,
+            "utterances": utt,
+        }
+
     # -- Handshake -------------------------------------------------------
 
     async def _rebond(self) -> bool:
@@ -1201,6 +1293,27 @@ class CheckpointClient:
 
         elif pkt.type == PKT_KEEPALIVE:
             pass  # nothing to do
+
+        elif pkt.type == PKT_CMD_RESP:
+            p = pkt.payload
+            if len(p) >= 2:
+                cmd, status = p[0], p[1]
+                result: dict = {"cmd": cmd, "status": status}
+                if cmd == CTRL_CMD_LED_GET and len(p) >= 4:
+                    result.update({"muted": bool(p[2]), "brightness": p[3]})
+                print(f"  CMD_RESP cmd=0x{cmd:02x} status={status}")
+                self._ctrl_complete(pkt.seq, result)
+                self._emit({"type": "cmd_resp", "cmd": cmd, "status": status,
+                            **({} if "muted" not in result else
+                               {"muted": result["muted"], "brightness": result["brightness"]})})
+
+        elif pkt.type == PKT_STATUS_RESP:
+            info = self.parse_status(pkt.payload)
+            if info:
+                print(f"  STATUS_RESP rec={info['recording']} vad={info['vad_active']}/{info['vad_speech']} "
+                      f"muted={info['muted']} bright={info['brightness']} pend={info['pending']}")
+                self._ctrl_complete(pkt.seq, info)
+                self._emit({"type": "rec_status", **info})
 
         elif pkt.type == PKT_ERROR:
             code = pkt.payload[0] if pkt.payload else None

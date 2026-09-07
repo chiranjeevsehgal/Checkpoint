@@ -135,6 +135,34 @@ class App:
         self.min_var = tk.StringVar(value=str(cli.VAD_MIN_SPEECH_S))
         ttk.Entry(opts, textvariable=self.min_var, width=6).pack(side=tk.LEFT)
 
+        dev = ttk.LabelFrame(self.root, text="Device (BLE remote)", padding=6)
+        dev.pack(fill=tk.X, padx=8, pady=(4, 0))
+        self.btn_rec_start = ttk.Button(dev, text="Rec Start", command=self.on_rec_start,
+                                        state=tk.DISABLED)
+        self.btn_rec_start.pack(side=tk.LEFT, padx=2)
+        self.btn_rec_stop = ttk.Button(dev, text="Rec Stop", command=self.on_rec_stop,
+                                       state=tk.DISABLED)
+        self.btn_rec_stop.pack(side=tk.LEFT, padx=2)
+        self.btn_status = ttk.Button(dev, text="Refresh", command=self.on_status_refresh,
+                                     state=tk.DISABLED)
+        self.btn_status.pack(side=tk.LEFT, padx=2)
+        self.dev_status_var = tk.StringVar(value="rec: —")
+        ttk.Label(dev, textvariable=self.dev_status_var).pack(side=tk.LEFT, padx=8)
+        self.led_muted_var = tk.BooleanVar(value=False)
+        self.led_muted_chk = ttk.Checkbutton(dev, text="LED muted",
+                                             variable=self.led_muted_var,
+                                             state=tk.DISABLED)
+        self.led_muted_chk.pack(side=tk.LEFT, padx=4)
+        ttk.Label(dev, text="Bright:").pack(side=tk.LEFT, padx=(8, 0))
+        self.bright_var = tk.IntVar(value=30)
+        self.bright_scale = ttk.Scale(dev, from_=5, to=255, variable=self.bright_var,
+                                      orient=tk.HORIZONTAL, length=110,
+                                      state=tk.DISABLED)
+        self.bright_scale.pack(side=tk.LEFT, padx=2)
+        self.btn_led_apply = ttk.Button(dev, text="Apply LED", command=self.on_led_apply,
+                                        state=tk.DISABLED)
+        self.btn_led_apply.pack(side=tk.LEFT, padx=2)
+
         files = ttk.LabelFrame(self.root, text="Audio items", padding=6)
         files.pack(fill=tk.BOTH, expand=False, padx=8, pady=(4, 0))
         cols = ("size", "ble", "vad", "ingest")
@@ -250,6 +278,28 @@ class App:
                 if e.get("vad_status"):
                     vals[2] = f"{e['vad_status']} {e.get('vad_speech_s', '')}s".strip()
                 self.tree.item(fid, values=tuple(vals))
+        elif kind == "rec_status":
+            rec = "ON" if e.get("recording") else "OFF"
+            vad = "speech" if e.get("vad_speech") else ("active" if e.get("vad_active") else "idle")
+            led = f"muted" if e.get("muted") else f"bright={e.get('brightness')}"
+            self.dev_status_var.set(
+                f"rec: {rec} vad: {vad} pend: {e.get('pending', '?')} "
+                f"chunks: {e.get('chunks', '?')} {led} lvl: {e.get('level_dbfs', '?')}dB")
+            try:
+                self.led_muted_var.set(bool(e.get("muted", False)))
+                self.bright_var.set(int(e.get("brightness", 30)))
+            except (TypeError, ValueError):
+                pass
+        elif kind == "cmd_resp":
+            cmd = e.get("cmd")
+            status = e.get("status")
+            self.q.put(("log", f"[gui] device cmd=0x{cmd:02x} status={status}"))
+            if "muted" in e:
+                try:
+                    self.led_muted_var.set(bool(e.get("muted")))
+                    self.bright_var.set(int(e.get("brightness", 30)))
+                except (TypeError, ValueError):
+                    pass
 
     # -- worker plumbing ----------------------------------------------
     def _ensure_loop(self):
@@ -278,6 +328,83 @@ class App:
         self.busy = busy
         self.btn_connect.configure(state=tk.DISABLED if (connected or busy) else tk.NORMAL)
         self.btn_disc.configure(state=tk.NORMAL if connected else tk.DISABLED)
+        dev_state = tk.NORMAL if connected else tk.DISABLED
+        for w in (self.btn_rec_start, self.btn_rec_stop, self.btn_status,
+                  self.led_muted_chk, self.bright_scale, self.btn_led_apply):
+            try:
+                w.configure(state=dev_state)
+            except tk.TclError:
+                pass
+
+    # -- device remote control (BLE control.h) ---------------------------
+    def _device_ready(self) -> bool:
+        return self.connected and self.client is not None and self.loop is not None
+
+    def _device_done(self, action: str, fut):
+        try:
+            fut.result()
+        except Exception as e:
+            self.q.put(("log", f"[gui] {action} failed: {e}"))
+
+    def _device_refresh_soon(self):
+        if self._device_ready():
+            try:
+                fut = self._submit(self._status_flow())
+                fut.add_done_callback(lambda f: self._device_done("status", f))
+            except RuntimeError:
+                pass
+
+    def on_rec_start(self):
+        if not self._device_ready():
+            return
+        fut = self._submit(self._rec_start_flow())
+        fut.add_done_callback(lambda f: self._device_done("rec-start", f))
+
+    def on_rec_stop(self):
+        if not self._device_ready():
+            return
+        fut = self._submit(self._rec_stop_flow())
+        fut.add_done_callback(lambda f: self._device_done("rec-stop", f))
+
+    def on_status_refresh(self):
+        if not self._device_ready():
+            return
+        fut = self._submit(self._status_flow())
+        fut.add_done_callback(lambda f: self._device_done("status", f))
+
+    def on_led_apply(self):
+        if not self._device_ready():
+            return
+        try:
+            muted = bool(self.led_muted_var.get())
+            bright = int(self.bright_var.get())
+        except (TypeError, ValueError):
+            self.q.put(("log", "[gui] LED apply: bad brightness value"))
+            return
+        fut = self._submit(self._led_flow(muted, bright))
+        fut.add_done_callback(lambda f: self._device_done("led-apply", f))
+
+    async def _rec_start_flow(self):
+        assert self.client is not None
+        status = await self.client.cmd_rec_start()
+        self.q.put(("log", f"[gui] rec-start status={status}"))
+        self._device_refresh_soon()
+
+    async def _rec_stop_flow(self):
+        assert self.client is not None
+        status = await self.client.cmd_rec_stop()
+        self.q.put(("log", f"[gui] rec-stop status={status}"))
+        self._device_refresh_soon()
+
+    async def _status_flow(self):
+        assert self.client is not None
+        await self.client.req_status()
+
+    async def _led_flow(self, muted: bool, bright: int):
+        assert self.client is not None
+        status = await self.client.cmd_led_set(muted, bright)
+        self.q.put(("log", f"[gui] led-apply muted={muted} bright={bright} status={status}"))
+        self._device_refresh_soon()
 
     # -- connect / disconnect ------------------------------------------
     def on_connect(self):
@@ -353,6 +480,11 @@ class App:
         self.q.put(("status", ("listening", "green")))
         self.root.after(0, lambda: self._set_buttons(True, False))
         self.q.put(("log", "[gui] listening for file transfers …"))
+        try:
+            info = await self.client.req_status()
+            self._on_event({"type": "rec_status", **info})
+        except Exception as e:
+            self.q.put(("log", f"[gui] initial status failed: {e}"))
         self.q.put(("log", f"[gui] queue-wait until SUBMITTED (Kafka {cli.KAFKA_TOPIC_HINT}); verify: docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --topic {cli.KAFKA_TOPIC_HINT} --bootstrap-server kafka:9092"))
         self.listener_task = asyncio.current_task()
         try:

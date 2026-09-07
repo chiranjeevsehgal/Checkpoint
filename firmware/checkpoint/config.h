@@ -58,7 +58,7 @@
 // VAD — voice-triggered recording (spectral VAD in vad.{h,cpp}, 16k 20ms frames)
 // IDLE: mic ON, VAD running, no SD file. ONSET (~50% voiced density over a
 // 200ms window + 40ms consecutive run + syllabic energy wobble with >=1 IAC
-// flip and >=3.5dB range, mode 2, IDLE-only impulse veto) opens a chunk and
+// flip and >=3.5dB range, mode 1, IDLE-only impulse veto) opens a chunk and
 // flushes pre-roll. Philosophy is recall-first: onset is moderately easy,
 // then MIN_SPEECH (true voiced frames) discards blips afterward — a missed
 // word cannot be recovered, but a false clip can be deleted. NOTE: pre-roll
@@ -69,13 +69,13 @@
 // A 2s spectrally-flat session is discarded as hum. VAD_ENABLE 0 = legacy
 // continuous 50s chunks.
 #define VAD_ENABLE 1
-#define VAD_MODE 2
+#define VAD_MODE 1
 #define VAD_ONSET_MS 200
 #define VAD_HANGOVER_MS 1500
 #define VAD_SESSION_EXTEND_MS 2000
-#define VAD_MIN_SPEECH_MS 120
+#define VAD_MIN_SPEECH_MS 150
 #define VAD_PREROLL_MS 750
-#define VAD_ABS_FLOOR_DBFS -50.0f
+#define VAD_ABS_FLOOR_DBFS -54.0f
 
 // SD / filesystem
 // NOTE: SD_MOUNT_POINT is the VFS mountpoint passed to SD.begin (default "/sd").
