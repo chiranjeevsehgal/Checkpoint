@@ -37,8 +37,16 @@ volatile uint16_t s_del_seq = 0;
 volatile bool s_erase_req = false;
 volatile uint8_t s_erase_step = 0;
 volatile uint16_t s_erase_seq = 0;
+volatile bool s_sync_req = false;
+volatile uint8_t s_sync_enabled_arg = 1;
+volatile uint16_t s_sync_seq = 0;
+volatile uint8_t s_sync_get_seq_valid = 0;
+volatile uint16_t s_sync_get_seq = 0;
 // Erase arm timestamp, loop-task only (set/consumed in poll).
 static uint32_t s_erase_armed_ms = 0;
+// BLE auto-upload gate. Written only in control_poll (loop task), read in
+// transfer_task; single-byte volatile matches the s_busy cross-task style.
+static volatile bool s_sync_enabled = true;
 
 // Guards the req-flag handoff: NimBLE callback task writes, loop task
 // (control_poll) reads+clears. Critical section, never held across
@@ -77,6 +85,25 @@ void control_save_led(bool muted, uint8_t bright) {
   }
   pref.putUChar("led_muted", muted ? 1 : 0);
   pref.putUChar("led_bright", bright);
+  pref.end();
+}
+
+bool control_load_sync_flag() {
+  Preferences pref;
+  if (!pref.begin("checkpoint", true)) {
+    return true;
+  }
+  uint8_t v = pref.getUChar("sync_enabled", 1);
+  pref.end();
+  return v != 0;
+}
+
+void control_save_sync(bool enabled) {
+  Preferences pref;
+  if (!pref.begin("checkpoint", false)) {
+    return;
+  }
+  pref.putUChar("sync_enabled", enabled ? 1 : 0);
   pref.end();
 }
 
@@ -134,6 +161,7 @@ void control_build_status(uint8_t out[CTRL_STATUS_LEN]) {
   out[13] = (uint8_t)((utt >> 8) & 0xFF);
   out[14] = (uint8_t)((utt >> 16) & 0xFF);
   out[15] = (uint8_t)((utt >> 24) & 0xFF);
+  out[16] = s_sync_enabled ? 1 : 0;
 }
 
 uint8_t control_do_rec_start() {
@@ -326,7 +354,23 @@ uint8_t control_do_erase(uint8_t step, uint16_t *removed_out) {
   return CTRL_OK;
 }
 
+uint8_t control_do_sync_set(uint8_t enabled_arg) {
+  if (enabled_arg > 1) {
+    return CTRL_ERR_BAD_ARG;
+  }
+  bool enabled = enabled_arg != 0;
+  if (enabled != s_sync_enabled) {
+    s_sync_enabled = enabled;
+    control_save_sync(enabled);
+  }
+  return CTRL_OK;
+}
+
 } // namespace
+
+bool control_sync_enabled() {
+  return s_sync_enabled;
+}
 
 void control_init() {
   s_rec_req = 0;
@@ -342,6 +386,9 @@ void control_init() {
   s_del_len = 0;
   s_erase_req = false;
   s_erase_armed_ms = 0;
+  s_sync_req = false;
+  s_sync_get_seq_valid = 0;
+  s_sync_enabled = control_load_sync_flag();
   control_load_led();
 }
 
@@ -419,6 +466,15 @@ bool control_on_packet(const Packet *pkt) {
   } else if (cmd == CTRL_CMD_LED_GET) {
     s_led_get_seq = pkt->seq;
     s_led_get_seq_valid = 1;
+  } else if (cmd == CTRL_CMD_SYNC_SET) {
+    if (pkt->len >= 2) {
+      s_sync_enabled_arg = pkt->payload[1];
+      s_sync_seq = pkt->seq;
+      s_sync_req = true;
+    }
+  } else if (cmd == CTRL_CMD_SYNC_GET) {
+    s_sync_get_seq = pkt->seq;
+    s_sync_get_seq_valid = 1;
   } else if (cmd == CTRL_CMD_FILE_DELETE) {
     uint16_t n = (pkt->len > 1) ? (uint16_t)(pkt->len - 1) : 0;
     if (n == 0 || n > sizeof(s_del_path)) {
@@ -466,6 +522,11 @@ void control_poll() {
   bool erase_req = false;
   uint8_t erase_step = 0;
   uint16_t erase_seq = 0;
+  bool sync_req = false;
+  uint8_t sync_enabled_arg = 1;
+  uint16_t sync_seq = 0;
+  bool sync_get = false;
+  uint16_t sync_get_seq = 0;
 
   portENTER_CRITICAL(&s_ctrl_mux);
   denied = s_denied_pending;
@@ -502,6 +563,13 @@ void control_poll() {
   erase_step = s_erase_step;
   erase_seq = s_erase_seq;
   s_erase_req = false;
+  sync_req = s_sync_req;
+  sync_enabled_arg = s_sync_enabled_arg;
+  sync_seq = s_sync_seq;
+  s_sync_req = false;
+  sync_get = s_sync_get_seq_valid != 0;
+  sync_get_seq = s_sync_get_seq;
+  s_sync_get_seq_valid = 0;
   portEXIT_CRITICAL(&s_ctrl_mux);
 
   if (denied) {
@@ -578,6 +646,20 @@ void control_poll() {
       uint8_t status = control_do_erase(erase_step, &removed);
       uint8_t extra[2] = {(uint8_t)(removed & 0xFF), (uint8_t)((removed >> 8) & 0xFF)};
       control_send_cmd_resp(erase_seq, CTRL_CMD_STORAGE_ERASE, status, extra, 2);
+    }
+  }
+
+  if (sync_req) {
+    if (ble_is_connected() && ble_is_handshaked()) {
+      uint8_t status = control_do_sync_set(sync_enabled_arg);
+      control_send_cmd_resp(sync_seq, CTRL_CMD_SYNC_SET, status, nullptr, 0);
+    }
+  }
+
+  if (sync_get) {
+    if (ble_is_connected() && ble_is_handshaked()) {
+      uint8_t extra[1] = {s_sync_enabled ? (uint8_t)1 : (uint8_t)0};
+      control_send_cmd_resp(sync_get_seq, CTRL_CMD_SYNC_GET, CTRL_OK, extra, 1);
     }
   }
 }

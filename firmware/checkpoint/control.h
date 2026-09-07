@@ -13,6 +13,8 @@ enum CtrlCmd : uint8_t {
   CTRL_CMD_REC_STOP = 0x02,
   CTRL_CMD_LED_SET = 0x10,
   CTRL_CMD_LED_GET = 0x11,
+  CTRL_CMD_SYNC_SET = 0x12,   // payload[1] = 0/1 (off/on)
+  CTRL_CMD_SYNC_GET = 0x13,   // reply extra [enabled]
   CTRL_CMD_FILE_DELETE = 0x20,  // payload[1..] = full "/rec/..." path bytes
   CTRL_CMD_STORAGE_ERASE = 0x21, // payload[1] = CTRL_ERASE_ARM / CTRL_ERASE_CONFIRM
 };
@@ -28,10 +30,11 @@ enum CtrlStatus : uint8_t {
   CTRL_ERR_NOT_FOUND = 0x06,
 };
 
-// STATUS_RESP payload layout (16 bytes, little-endian where noted):
+// STATUS_RESP payload layout (17 bytes, little-endian where noted):
 // [0]=recording [1]=vad_active [2]=vad_speech [3]=muted [4]=brightness
 // [5]=level_dbfs int8 [6..7]=pending u16 [8..11]=chunks u32 [12..15]=utterances u32
-#define CTRL_STATUS_LEN 16
+// [16]=sync_enabled (BLE auto-upload on/off)
+#define CTRL_STATUS_LEN 17
 
 // LED brightness bounds. 0 is only honored while muted; unmuted values
 // below MIN are clamped up so "dim" never accidentally means "dark".
@@ -58,5 +61,8 @@ enum CtrlStatus : uint8_t {
 
 void control_init();
 void control_poll();
+// BLE auto-upload gate, persisted in NVS (default on). transfer_task reads
+// this; recording to SD is independent and unaffected.
+bool control_sync_enabled();
 // Returns true when pkt was a control packet (caller must not treat as error).
 bool control_on_packet(const Packet *pkt);

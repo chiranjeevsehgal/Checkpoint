@@ -162,6 +162,14 @@ class App:
         self.btn_led_apply = ttk.Button(dev, text="Apply LED", command=self.on_led_apply,
                                         state=tk.DISABLED)
         self.btn_led_apply.pack(side=tk.LEFT, padx=2)
+        self.sync_var = tk.BooleanVar(value=True)
+        self.sync_chk = ttk.Checkbutton(dev, text="Auto-sync",
+                                        variable=self.sync_var,
+                                        state=tk.DISABLED)
+        self.sync_chk.pack(side=tk.LEFT, padx=4)
+        self.btn_sync_apply = ttk.Button(dev, text="Apply Sync", command=self.on_sync_apply,
+                                         state=tk.DISABLED)
+        self.btn_sync_apply.pack(side=tk.LEFT, padx=2)
 
         stor = ttk.LabelFrame(self.root, text="Storage (BLE remote)", padding=6)
         stor.pack(fill=tk.X, padx=8, pady=(4, 0))
@@ -320,12 +328,14 @@ class App:
             rec = "ON" if e.get("recording") else "OFF"
             vad = "speech" if e.get("vad_speech") else ("active" if e.get("vad_active") else "idle")
             led = f"muted" if e.get("muted") else f"bright={e.get('brightness')}"
+            sync = f"sync:{'on' if e.get('sync', True) else 'off'}"
             self.dev_status_var.set(
                 f"rec: {rec} vad: {vad} pend: {e.get('pending', '?')} "
-                f"chunks: {e.get('chunks', '?')} {led} lvl: {e.get('level_dbfs', '?')}dB")
+                f"chunks: {e.get('chunks', '?')} {led} {sync} lvl: {e.get('level_dbfs', '?')}dB")
             try:
                 self.led_muted_var.set(bool(e.get("muted", False)))
                 self.bright_var.set(int(e.get("brightness", 30)))
+                self.sync_var.set(bool(e.get("sync", True)))
             except (TypeError, ValueError):
                 pass
         elif kind == "cmd_resp":
@@ -336,6 +346,11 @@ class App:
                 try:
                     self.led_muted_var.set(bool(e.get("muted")))
                     self.bright_var.set(int(e.get("brightness", 30)))
+                except (TypeError, ValueError):
+                    pass
+            if "sync" in e:
+                try:
+                    self.sync_var.set(bool(e.get("sync")))
                 except (TypeError, ValueError):
                     pass
             if cmd in (cli.CTRL_CMD_FILE_DELETE, cli.CTRL_CMD_STORAGE_ERASE):
@@ -407,6 +422,7 @@ class App:
         dev_state = tk.NORMAL if connected else tk.DISABLED
         for w in (self.btn_rec_start, self.btn_rec_stop, self.btn_status,
                   self.led_muted_chk, self.bright_scale, self.btn_led_apply,
+                  self.sync_chk, self.btn_sync_apply,
                   self.btn_storage, self.btn_file_delete, self.btn_storage_erase,
                   self.btn_list_prev, self.btn_list_next):
             try:
@@ -482,6 +498,23 @@ class App:
         assert self.client is not None
         status = await self.client.cmd_led_set(muted, bright)
         self.q.put(("log", f"[gui] led-apply muted={muted} bright={bright} status={status}"))
+        self._device_refresh_soon()
+
+    def on_sync_apply(self):
+        if not self._device_ready():
+            return
+        try:
+            enabled = bool(self.sync_var.get())
+        except (TypeError, ValueError):
+            self.q.put(("log", "[gui] sync apply: bad checkbox value"))
+            return
+        fut = self._submit(self._sync_flow(enabled))
+        fut.add_done_callback(lambda f: self._device_done("sync-apply", f))
+
+    async def _sync_flow(self, enabled: bool):
+        assert self.client is not None
+        status = await self.client.cmd_sync_set(enabled)
+        self.q.put(("log", f"[gui] sync-apply enabled={enabled} status={status}"))
         self._device_refresh_soon()
 
     # -- storage remote control (BLE control.h) --------------------------

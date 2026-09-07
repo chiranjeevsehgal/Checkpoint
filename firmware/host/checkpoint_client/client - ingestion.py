@@ -168,6 +168,8 @@ CTRL_CMD_REC_START = 0x01
 CTRL_CMD_REC_STOP = 0x02
 CTRL_CMD_LED_SET = 0x10
 CTRL_CMD_LED_GET = 0x11
+CTRL_CMD_SYNC_SET = 0x12
+CTRL_CMD_SYNC_GET = 0x13
 CTRL_CMD_FILE_DELETE = 0x20
 CTRL_CMD_STORAGE_ERASE = 0x21
 
@@ -180,7 +182,7 @@ CTRL_ERR_DENIED = 0x04
 CTRL_ERR_BUSY = 0x05
 CTRL_ERR_NOT_FOUND = 0x06
 
-CTRL_STATUS_LEN = 16
+CTRL_STATUS_LEN = 17
 CTRL_STORAGE_LEN = 20
 CTRL_BRIGHT_MIN = 5
 
@@ -1153,6 +1155,17 @@ class CheckpointClient:
         res = await self._ctrl_roundtrip(PKT_CMD, bytes([CTRL_CMD_LED_GET]), timeout)
         return res
 
+    async def cmd_sync_set(self, enabled: bool, timeout: float = 5.0) -> int:
+        """Enable/disable BLE auto-upload. Returns CTRL_* status code."""
+        res = await self._ctrl_roundtrip(
+            PKT_CMD, bytes([CTRL_CMD_SYNC_SET, 0x01 if enabled else 0x00]), timeout)
+        return int(res.get("status", CTRL_ERR_NOT_READY))
+
+    async def cmd_sync_get(self, timeout: float = 5.0) -> dict:
+        """Returns {status, sync}."""
+        res = await self._ctrl_roundtrip(PKT_CMD, bytes([CTRL_CMD_SYNC_GET]), timeout)
+        return res
+
     async def req_status(self, timeout: float = 5.0) -> dict:
         """Returns device status dict (recording, vad_*, muted, brightness, ...)."""
         res = await self._ctrl_roundtrip(PKT_STATUS_REQ, b"", timeout)
@@ -1183,8 +1196,12 @@ class CheckpointClient:
 
     @staticmethod
     def parse_status(payload: bytes) -> dict:
-        """Parse 16-byte STATUS_RESP payload into a dict (see control.h layout)."""
-        if len(payload) < CTRL_STATUS_LEN:
+        """Parse STATUS_RESP payload into a dict (see control.h layout).
+
+        Tolerant: accepts the legacy 16-byte form (sync defaults True)
+        and the current 17-byte form with the sync flag at [16].
+        """
+        if len(payload) < 16:
             return {}
         chunks = struct.unpack("<I", payload[8:12])[0]
         utt = struct.unpack("<I", payload[12:16])[0]
@@ -1200,6 +1217,7 @@ class CheckpointClient:
             "pending": pend,
             "chunks": chunks,
             "utterances": utt,
+            "sync": bool(payload[16]) if len(payload) >= 17 else True,
         }
 
     @staticmethod
@@ -1378,6 +1396,8 @@ class CheckpointClient:
                 result: dict = {"cmd": cmd, "status": status}
                 if cmd == CTRL_CMD_LED_GET and len(p) >= 4:
                     result.update({"muted": bool(p[2]), "brightness": p[3]})
+                if cmd == CTRL_CMD_SYNC_GET and len(p) >= 3:
+                    result.update({"sync": bool(p[2])})
                 if cmd == CTRL_CMD_STORAGE_ERASE and len(p) >= 4:
                     result.update({"removed": struct.unpack("<H", p[2:4])[0]})
                 print(f"  CMD_RESP cmd=0x{cmd:02x} status={status}")
@@ -1385,6 +1405,8 @@ class CheckpointClient:
                 self._emit({"type": "cmd_resp", "cmd": cmd, "status": status,
                             **({} if "muted" not in result else
                                {"muted": result["muted"], "brightness": result["brightness"]}),
+                            **({} if "sync" not in result else
+                               {"sync": result["sync"]}),
                             **({} if "removed" not in result else
                                {"removed": result["removed"]})})
 
@@ -1392,7 +1414,8 @@ class CheckpointClient:
             info = self.parse_status(pkt.payload)
             if info:
                 print(f"  STATUS_RESP rec={info['recording']} vad={info['vad_active']}/{info['vad_speech']} "
-                      f"muted={info['muted']} bright={info['brightness']} pend={info['pending']}")
+                      f"muted={info['muted']} bright={info['brightness']} pend={info['pending']} "
+                      f"sync={info['sync']}")
                 self._ctrl_complete(pkt.seq, info)
                 self._emit({"type": "rec_status", **info})
 

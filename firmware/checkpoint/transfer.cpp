@@ -130,7 +130,10 @@ void transfer_task(void *arg) {
   (void)arg;
   uint16_t seq_gen = 1;
   while (true) {
-    if (!ble_is_connected() || !ble_is_handshaked()) {
+    if (!ble_is_connected() || !ble_is_handshaked() || !control_sync_enabled()) {
+      // Sync off behaves like link-down for picking new files: the in-flight
+      // file (if any) finishes first, then the task idles here. No retry
+      // accounting, no deletes — resume state is already persisted.
       s_busy = false;
       vTaskDelay(pdMS_TO_TICKS(500));
       continue;
