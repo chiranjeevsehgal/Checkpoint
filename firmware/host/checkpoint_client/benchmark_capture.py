@@ -29,11 +29,12 @@ except Exception:
 
 
 async def serial_tail(port: str, out_csv: Path, stop_evt: asyncio.Event):
+    # Firmware BENCH removed (error-only Serial). Keep --serial as error-log tail.
+    print(f"[serial] firmware BENCH removed; tailing {port} for E/W error lines only")
     if not HAS_SERIAL:
         print(f"[serial] pyserial not installed — pip install pyserial to tail {port}")
         return
     fw_csv = out_csv.with_name(out_csv.stem + "_fw.csv")
-    print(f"[serial] tailing {port} -> {fw_csv} (5s BENCH dumps)")
     try:
         ser = serial.Serial(port, 115200, timeout=1)
     except Exception as e:
@@ -57,30 +58,30 @@ async def serial_tail(port: str, out_csv: Path, stop_evt: asyncio.Event):
                 if not line:
                     continue
                 if line.startswith("BENCH"):
+                    # Legacy firmware BENCH line (pre-removal); keep for old captures.
                     if not header_written and line.startswith("BENCH,src"):
                         writer = csv.writer(f)
                         f.write(line + "\n")
                         header_written = True
                     elif line.startswith("BENCH,fw") or line.startswith("BENCH,client"):
-                        # bench.h prints BENCH,src,... — forward as-is
                         if not header_written:
-                            # fabricate header from bench.h
                             f.write("BENCH,src,file_id,total_bytes,total_frags,mtu,frag_size,window,t_start_ms,t_end_ms,bytes_tx,frags_acked,retries,stalls,max_inflight,rtt_sum_ms,rtt_count,goodput_kBps\n")
                             header_written = True
                         f.write(line + "\n")
                         f.flush()
                     else:
-                        # HELLO_ACK session line
                         f.write(f"# {line}\n")
                         f.flush()
-                elif line.startswith("HELLO") or line.startswith("BLE ") or line.startswith("Checkpoint") or line.startswith("SD ") or line.startswith("REC ") or line.startswith("Transfer") or line.startswith("I2S") or "rst:" in line or "Reset reason" in line:
+                elif line.startswith("E ") or line.startswith("W ") or line.startswith("CK boot") or line.startswith("HELLO") or line.startswith("BLE ") or line.startswith("Checkpoint") or line.startswith("SD ") or line.startswith("REC ") or line.startswith("Transfer") or line.startswith("I2S") or "rst:" in line or "Reset reason" in line:
                     # Enhanced debug: capture HELLO/BLE/SD/REC logs for pairing/MIC debug
                     f.write(f"# {line}\n")
                     f.flush()
                     print(f"[fw] {line}")
                     continue
                 # also echo fw lines of interest to stdout
-                if line.startswith("HELLO_ACK") or line.startswith("BENCH"):
+                if line.startswith("E ") or line.startswith("W ") or line.startswith("CK boot"):
+                    print(f"[fw] {line}")
+                elif line.startswith("HELLO_ACK") or line.startswith("BENCH"):
                     print(f"[fw] {line}")
                 elif line.startswith("HELLO") and "recv" in line:
                     print(f"[fw] {line}")

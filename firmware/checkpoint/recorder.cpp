@@ -3,6 +3,7 @@
 #include "sd_manager.h"
 #include "manifest.h"
 #include "ui.h"
+#include "log.h"
 #include "opus_codec.h"
 #include "ogg_mux.h"
 #include "vad.h"
@@ -11,6 +12,14 @@
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include <Preferences.h>
+
+// Aggregated counters for 60s W REC summary (replaces per-event prints).
+static volatile uint32_t s_enc_slow_cnt = 0;
+static volatile uint32_t s_vad_on_cnt = 0;
+static volatile uint32_t s_vad_pause_cnt = 0;
+static volatile uint32_t s_vad_off_cnt = 0;
+static volatile uint32_t s_vad_hum_cnt = 0;
+static volatile uint32_t s_i2s_err_cnt = 0;
 
 static TaskHandle_t s_task = nullptr;
 static TaskHandle_t s_encode_task = nullptr;
@@ -98,7 +107,7 @@ static void vad_encode_push(short *pcm_s16, uint8_t *frame_bytes, uint8_t *packe
     } else {
       s_vad_utt_frames++;
     }
-    if (dt > 8000) Serial.printf("REC encode slow %lldus n=%d frames %lu\n", dt, n, (unsigned long)s_encode_frames);
+    if (dt > 8000) s_enc_slow_cnt++;
   }
 }
 #endif
@@ -165,53 +174,16 @@ static bool open_chunk() {
   if (!sd_mounted()) return false;
 #endif
   bool rec_dir_ok = sd_ensure_rec_dir();
+  (void)rec_dir_ok;
   s_final_path = chunk_name();
   s_tmp_path = s_final_path + REC_TMP_EXT;
   if (!sd_lock(2000)) {
-    Serial.printf("REC open lock fail %s mounted=%d rec_dir_ok=%d\n", s_tmp_path.c_str(), sd_mounted(), rec_dir_ok);
     return false;
-  }
-  {
-    bool exists_rec = SD.exists(REC_DIR);
-    bool exists_tmp = SD.exists(s_tmp_path);
-    bool exists_final = SD.exists(s_final_path);
-    Serial.printf("REC open try %s rec_dir=%d tmp_exists=%d final_exists=%d mounted=%d\n", s_tmp_path.c_str(), exists_rec, exists_tmp, exists_final, sd_mounted());
   }
   s_file = SD.open(s_tmp_path, FILE_WRITE);
   if (!s_file) {
-    Serial.printf("REC open SD.open fail %s mounted=%d\n", s_tmp_path.c_str(), sd_mounted());
-    bool exists_rec2 = SD.exists(REC_DIR);
-    Serial.printf("REC diag rec_dir exists=%d\n", exists_rec2);
-    File root = SD.open(REC_DIR);
-    if (!root) {
-      Serial.println("REC diag SD.open(REC_DIR) fail - FS not accessible");
-    } else {
-      Serial.println("REC diag listing /rec:");
-      File e = root.openNextFile();
-      int cnt = 0;
-      while (e && cnt < 10) {
-        Serial.printf("  entry %s size %u dir %d\n", e.name(), (unsigned)e.size(), e.isDirectory());
-        e.close();
-        e = root.openNextFile();
-        cnt++;
-      }
-      if (cnt == 0) Serial.println("  (empty)");
-      root.close();
-    }
-    {
-      String test = String(REC_DIR) + "/_test.tmp";
-      File tf = SD.open(test, FILE_WRITE);
-      if (tf) {
-        tf.write((uint8_t*)"test", 4);
-        tf.close();
-        bool ok = SD.exists(test);
-        Serial.printf("REC diag test write %s -> %d exists %d\n", test.c_str(), 1, ok);
-        if (ok) SD.remove(test);
-      } else {
-        Serial.printf("REC diag test write fail %s\n", test.c_str());
-      }
-    }
     sd_unlock();
+    LOG_E("REC open fail");
     return false;
   }
 #if REC_CODEC_OPUS
@@ -231,7 +203,6 @@ static bool open_chunk() {
   s_current = s_tmp_path;
   s_encode_time_us_sum = 0;
   s_encode_frames = 0;
-  Serial.printf("REC open OGG %s seq %lu boot %lu bos %u bitrate %d\n", s_tmp_path.c_str(), (unsigned long)(s_file_seq-1), (unsigned long)s_boot_id, (unsigned)bos, REC_OPUS_BITRATE);
   return true;
 #else
   uint8_t hdr[44] = {0};
@@ -242,19 +213,15 @@ static bool open_chunk() {
   s_bytes_in_chunk = 0;
   s_chunk_start_ms = millis();
   s_current = s_tmp_path;
-  Serial.printf("REC open %s seq %lu boot %lu\n", s_tmp_path.c_str(), (unsigned long)(s_file_seq-1), (unsigned long)s_boot_id);
   return true;
 #endif
 }
 
 static void close_chunk(bool keep) {
   if (!s_file) {
-    Serial.println("REC close: no file");
     return;
   }
-  Serial.printf("REC close keep=%d tmp=%s final=%s bytes=%lu frames=%lu\n", keep, s_tmp_path.c_str(), s_final_path.c_str(), (unsigned long)s_bytes_in_chunk, (unsigned long)s_opus_frames);
   if (!sd_lock(3000)) {
-    Serial.println("REC close: sd_lock 3000 failed, force close");
     s_file.close();
     s_current = "";
     s_bytes_in_chunk = 0;
@@ -281,7 +248,6 @@ static void close_chunk(bool keep) {
           }
           if (fs_lost) {
             vRingbufferReturnItem(s_opus_ring, item);
-            Serial.println("REC close: FS lost during opus drain");
             break;
           }
         }
@@ -321,7 +287,7 @@ static void close_chunk(bool keep) {
             size_t wr = ogg_write_audio_frame(s_file, drain_out, n, s_opus_granule, s_opus_seq++, s_opus_serial);
             s_bytes_in_chunk += wr;
             s_opus_frames++;
-            if (dt > 8000) Serial.printf("REC encode slow %lldus frame %lu\n", dt, (unsigned long)s_opus_frames);
+            if (dt > 8000) s_enc_slow_cnt++;
           }
         }
         offset += REC_OPUS_SAMPLES_PER_FRAME*2;
@@ -351,10 +317,6 @@ static void close_chunk(bool keep) {
   // EOS page
   ogg_write_eos(s_file, s_opus_granule, s_opus_seq++, s_opus_serial);
   s_bytes_in_chunk += 27; // EOS size
-  if (s_encode_frames>0) {
-    uint32_t avg = s_encode_time_us_sum / s_encode_frames;
-    Serial.printf("REC opus avg encode %luus frames %lu bitrate %d granule %llu\n", (unsigned long)avg, (unsigned long)s_encode_frames, REC_OPUS_BITRATE, s_opus_granule);
-  }
   s_file.flush();
   s_file.close();
   sd_unlock();
@@ -367,17 +329,14 @@ static void close_chunk(bool keep) {
   vTaskDelay(pdMS_TO_TICKS(400));
 #endif
   if (!keep) {
-    Serial.printf("REC discard keep=0 remove %s\n", s_tmp_path.c_str());
     if (sd_lock(1000)) { SD.remove(s_tmp_path); sd_unlock(); }
   } else {
 #if REC_CODEC_OPUS
     if (s_bytes_in_chunk < 512) {
-      Serial.printf("REC discard small %lu <512 %s\n", (unsigned long)s_bytes_in_chunk, s_tmp_path.c_str());
       if (sd_lock(1000)) { SD.remove(s_tmp_path); sd_unlock(); }
     } else {
 #else
     if (s_bytes_in_chunk < 1024) {
-      Serial.printf("REC discard small %lu <1024 %s\n", (unsigned long)s_bytes_in_chunk, s_tmp_path.c_str());
       if (sd_lock(1000)) { SD.remove(s_tmp_path); sd_unlock(); }
     } else {
 #endif
@@ -385,39 +344,31 @@ static void close_chunk(bool keep) {
       bool tmp_ok = false;
       bool renamed = false;
       if (sd_lock(2000)) {
-        int card_type = SD.cardType();
         fs_ok = SD.exists(REC_DIR);
         tmp_ok = SD.exists(s_tmp_path);
-        Serial.printf("REC postclose cardType=%d rec_dir=%d tmp=%d\n", card_type, fs_ok, tmp_ok);
         if (fs_ok && tmp_ok) {
           if (SD.exists(s_final_path)) SD.remove(s_final_path);
           renamed = SD.rename(s_tmp_path, s_final_path);
         }
-        Serial.printf("REC rename result=%d rec_dir=%d tmp=%d final=%d\n", renamed, (int)SD.exists(REC_DIR), (int)SD.exists(s_tmp_path), (int)SD.exists(s_final_path));
         sd_unlock();
-      } else {
-        Serial.println("REC postclose sd_lock 2000 failed");
       }
       if (!renamed && (!fs_ok || !tmp_ok)) {
-        Serial.println("REC FS lost before rename, attempting remount + retry");
         sd_end();
         vTaskDelay(pdMS_TO_TICKS(300));
         if (sd_begin()) {
-          Serial.printf("REC remount after FS lost -> OK cardType %d rec_dir %d\n", (int)SD.cardType(), (int)SD.exists(REC_DIR));
           if (sd_lock(2000)) {
             if (SD.exists(REC_DIR) && SD.exists(s_tmp_path)) {
               if (SD.exists(s_final_path)) SD.remove(s_final_path);
               renamed = SD.rename(s_tmp_path, s_final_path);
-              Serial.printf("REC retry rename result=%d\n", renamed);
             }
             sd_unlock();
           }
         } else {
-          Serial.println("REC remount after FS lost FAILED");
+          LOG_E("REC remount fail");
         }
       }
       if (!renamed) {
-        Serial.printf("REC rename failed %s tmp=%s (preserved for recovery)\n", s_final_path.c_str(), s_tmp_path.c_str());
+        LOG_E("REC rename fail");
         s_current = "";
         s_bytes_in_chunk = 0;
         if (sd_mounted()) {
@@ -426,7 +377,6 @@ static void close_chunk(bool keep) {
         vTaskDelay(pdMS_TO_TICKS(500));
         return;
       }
-      Serial.printf("REC rename OK %s -> %s bytes %lu\n", s_tmp_path.c_str(), s_final_path.c_str(), (unsigned long)s_bytes_in_chunk);
       vTaskDelay(pdMS_TO_TICKS(300));
       s_chunks++;
       uint32_t total_size = s_bytes_in_chunk;
@@ -434,10 +384,9 @@ static void close_chunk(bool keep) {
       total_size = s_bytes_in_chunk + 44;
 #endif
       bool m_ok = manifest_add_file(s_final_path, total_size);
-      Serial.printf("REC manifest add %s %s pending %u\n",
-                    s_final_path.c_str(),
-                    m_ok ? "OK" : "FAIL",
-                    (unsigned)manifest_pending_count());
+      if (!m_ok) {
+        LOG_E("REC manifest fail");
+      }
     }
   }
   s_current = "";
@@ -469,9 +418,8 @@ bool recorder_init() {
       opus_encoder_ctl(s_encoder, OPUS_SET_BITRATE(REC_OPUS_BITRATE));
       opus_encoder_ctl(s_encoder, OPUS_SET_COMPLEXITY(0));
       opus_encoder_ctl(s_encoder, OPUS_SET_VBR(0));
-      Serial.printf("REC opus encoder OK bitrate %d err %d\n", REC_OPUS_BITRATE, err);
     } else {
-      Serial.printf("REC opus encoder FAIL err %d\n", err);
+      LOG_E("REC opus enc fail %d", err);
     }
   }
 #endif
@@ -486,9 +434,6 @@ bool recorder_init() {
     vc.preroll_ms = VAD_PREROLL_MS;
     vc.abs_floor_dbfs = VAD_ABS_FLOOR_DBFS;
     vad_configure(&vc);
-    Serial.printf("REC VAD ON mode %d onset %dms hang %dms sess +%dms min %dms preroll %dms\n",
-                  VAD_MODE, VAD_ONSET_MS, VAD_HANGOVER_MS,
-                  VAD_SESSION_EXTEND_MS, VAD_MIN_SPEECH_MS, VAD_PREROLL_MS);
   }
   if (!s_preroll) {
     s_preroll_frames = vad_preroll_frames_cfg();
@@ -497,11 +442,8 @@ bool recorder_init() {
     if (!s_preroll) s_preroll = (int16_t*)malloc(bytes);
     if (s_preroll) {
       memset(s_preroll, 0, bytes);
-      Serial.printf("REC VAD pre-roll %lu frames (%luB)\n",
-                    (unsigned long)s_preroll_frames, (unsigned long)bytes);
     } else {
       s_preroll_frames = 0;
-      Serial.println("REC VAD pre-roll alloc FAIL, continuing without");
     }
     s_preroll_head = 0;
     s_preroll_count = 0;
@@ -510,8 +452,6 @@ bool recorder_init() {
   s_vad_close_req = false;
   s_vad_utt_frames = 0;
   s_vad_speech_frames = 0;
-#else
-  Serial.println("REC VAD OFF (continuous chunks)");
 #endif
   i2s_config_t cfg = {};
   cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
@@ -546,7 +486,6 @@ bool recorder_init() {
 
 bool recorder_start() {
   if (s_task) {
-    Serial.println("REC start: already running, ignoring");
     return true;
   }
   s_recording = true;
@@ -563,37 +502,30 @@ bool recorder_start() {
   s_preroll_head = 0;
   s_preroll_count = 0;
 #endif
-  Serial.printf("REC start: creating recorder task at uptime %lu ms\n", (unsigned long)millis());
   BaseType_t r = xTaskCreatePinnedToCore(recorder_task, "recorder", TASK_STACK_RECORDER, nullptr, TASK_PRIO_RECORDER, &s_task, 1);
   if (r != pdPASS) {
-    Serial.printf("REC start: FAILED recorder r=%d\n", r);
+    LOG_E("REC start fail %d", (int)r);
     s_recording = false;
     return false;
   }
 #if REC_CODEC_OPUS
   BaseType_t r2 = xTaskCreatePinnedToCore(opus_encode_task, "opus_enc", TASK_STACK_ENCODER, nullptr, TASK_PRIO_ENCODER, &s_encode_task, 1);
   if (r2 != pdPASS) {
-    Serial.printf("REC start: FAILED opus_enc r=%d\n", r2);
+    LOG_E("REC enc start fail %d", (int)r2);
     // keep recorder running even if encode fails (fallback PCM)
-  } else {
-    Serial.println("REC start: opus encode task OK");
   }
 #endif
-  Serial.println("REC start: OK - mic ON, recording resumed");
   return r == pdPASS;
 }
 
 void recorder_stop() {
   if (!s_recording && !s_task) {
-    Serial.println("REC stop: already stopped, ignoring");
     return;
   }
-  Serial.printf("REC stop: stopping recorder at uptime %lu ms file=%s bytes=%lu\n", (unsigned long)millis(), s_current.c_str(), (unsigned long)s_bytes_in_chunk);
   s_recording = false;
   if (s_task) {
     vTaskDelay(pdMS_TO_TICKS(300));
     s_task = nullptr;
-    Serial.println("REC stop: task stopped - mic OFF, BLE sync still active");
   }
   if (s_encode_task) {
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -606,14 +538,12 @@ void recorder_stop() {
   s_vad_utt_frames = 0;
   s_vad_speech_frames = 0;
 #endif
-  if (!s_task) Serial.println("REC stop: no task handle, mic OFF");
 }
 
 bool recorder_is_recording() { return s_recording && s_task; }
 uint32_t recorder_chunks_written() { return s_chunks; }
 String recorder_current_file() { return s_current; }
 void recorder_notify_bookmark() {
-  Serial.println("REC bookmark: ignored (feature removed, mic toggle active)");
 }
 uint32_t recorder_dropped_bytes() { return s_dropped_bytes; }
 uint32_t recorder_drop_events() { return s_drop_events; }
@@ -655,7 +585,6 @@ static bool write_audio_sliced(const uint8_t *data, size_t len, size_t *written_
   while (written < len) {
     size_t to_write = (len - written > SLICE_SIZE) ? SLICE_SIZE : (len - written);
     if (!sd_lock(500)) {
-      Serial.println("REC write slice lock timeout");
       if (written_out) *written_out = written;
       return false;
     }
@@ -668,13 +597,12 @@ static bool write_audio_sliced(const uint8_t *data, size_t len, size_t *written_
     } else {
       int ct = SD.cardType();
       bool rec_ok = SD.exists(REC_DIR);
-      Serial.printf("REC WRITE FAIL requested=%u wrote=%u bytes=%lu cardType=%d rec=%d\n",
-                    (unsigned)to_write, (unsigned)w, (unsigned long)s_bytes_in_chunk,
-                    ct, (int)rec_ok);
-      if (!rec_ok || ct == CARD_NONE) {
-        if (fs_lost_out) *fs_lost_out = true;
-      }
+      bool lost = (!rec_ok || ct == CARD_NONE);
+      unsigned req = (unsigned)to_write;
+      unsigned got = (unsigned)w;
+      if (fs_lost_out && lost) *fs_lost_out = true;
       sd_unlock();
+      LOG_E("REC write fail req:%u got:%u", req, got);
       if (written_out) *written_out = written;
       return false;
     }
@@ -713,7 +641,6 @@ void recorder_task(void *arg) {
   // opens the chunk. Legacy mode opens immediately as before.
 #if VAD_ENABLE
   ui_signal_vad_listening();
-  Serial.println("REC VAD listening (fileless until onset)");
 #else
   if (!open_chunk()) {
     vTaskDelay(pdMS_TO_TICKS(1000));
@@ -729,7 +656,6 @@ void recorder_task(void *arg) {
     if (!sd_mounted()) {
 #endif
       if (s_file) {
-        Serial.printf("REC SD lost, preserving tmp %s bytes %lu\n", s_tmp_path.c_str(), (unsigned long)s_bytes_in_chunk);
         s_file.close();
         s_current = "";
         s_bytes_in_chunk = 0;
@@ -754,7 +680,6 @@ void recorder_task(void *arg) {
           // (zeroed at ONSET before flush) and s_vad_speech_frames holds
           // the onset window's voiced count — do not reset either here.
           ui_signal_recording(true);
-          Serial.printf("REC VAD onset open %s\n", s_tmp_path.c_str());
         }
       }
 #else
@@ -787,21 +712,12 @@ void recorder_task(void *arg) {
       if (sent != pdTRUE) {
         s_dropped_bytes += pcm_bytes;
         s_drop_events++;
-        if ((s_drop_events % 10) == 1) {
-          Serial.printf("REC drop %luB events %lu\n",
-                        (unsigned long)s_dropped_bytes,
-                        (unsigned long)s_drop_events);
-        }
         if (s_dropped_bytes >= 8192 || s_drop_events >= 3) {
           ui_signal_error();
         }
       }
     } else if (err != ESP_OK) {
-      static uint32_t last_i2s_err = 0;
-      if (millis() - last_i2s_err >= 5000) {
-        last_i2s_err = millis();
-        Serial.printf("REC i2s_read err %d bytes %u\n", err, (unsigned)bytes_read);
-      }
+      s_i2s_err_cnt++;
     }
 #if REC_CODEC_OPUS
     // drain opus_ring to SD as OGG pages (12/loop ~= 240fps capacity, need 50)
@@ -820,10 +736,10 @@ void recorder_task(void *arg) {
           bool fs_lost=false;
           bool ok = write_opus_sliced(item+2, olen, &fs_lost);
           if (fs_lost) {
-            Serial.println("REC FS lost detected, preserving tmp and unmounting");
             if (s_file) { s_file.close(); s_current=""; }
             sd_end();
             ui_signal_error();
+            LOG_E("REC FS lost");
           }
           if (!ok) {
             size_t unwritten = item_sz;
@@ -845,10 +761,10 @@ void recorder_task(void *arg) {
         bool fs_lost = false;
         bool ok = write_audio_sliced(item, item_sz, &written, &fs_lost);
         if (fs_lost) {
-          Serial.println("REC FS lost detected, preserving tmp and unmounting");
           if (s_file) { s_file.close(); s_current=""; }
           sd_end();
           ui_signal_error();
+          LOG_E("REC FS lost");
         }
         if (!ok) {
           size_t unwritten = item_sz - written;
@@ -882,32 +798,13 @@ void recorder_task(void *arg) {
     }
     {
       static uint32_t last_dbg = 0;
-      if (millis() - last_dbg >= 5000) {
-        last_dbg = millis();
-        uint32_t avg = s_encode_frames? (uint32_t)(s_encode_time_us_sum / s_encode_frames):0;
-        UBaseType_t rec_hw = uxTaskGetStackHighWaterMark(nullptr);
-        UBaseType_t enc_hw = s_encode_task ? uxTaskGetStackHighWaterMark(s_encode_task) : 0;
-        uint32_t elapsed = millis() - s_chunk_start_ms;
-        uint32_t exp_frames = elapsed / REC_OPUS_FRAME_MS;
-        uint32_t i2s_hz = elapsed ? (uint32_t)((uint64_t)s_i2s_frames * 1000 / elapsed) : 0;
-        Serial.printf("REC dbg file=%s bytes=%lu elapsed=%lu ms i2s=%luHz exp_frames=%lu opus_frames=%lu drop=%lu events=%lu pending=%u avg_enc=%luus stack_rec=%u stack_enc=%u"
-#if VAD_ENABLE
-                      " vad_st=%d vad_lvl=%.1f vad_mod=%.1f utt=%lu utt_fr=%lu speech_fr=%lu"
-#endif
-                      "\n",
-                      s_tmp_path.c_str(), (unsigned long)s_bytes_in_chunk,
-                      (unsigned long)elapsed,
-                      (unsigned long)i2s_hz, (unsigned long)exp_frames,
-                      (unsigned long)s_opus_frames,
-                      (unsigned long)s_dropped_bytes, (unsigned long)s_drop_events,
-                      (unsigned)manifest_pending_count(), (unsigned long)avg,
-                      (unsigned)rec_hw, (unsigned)enc_hw
-#if VAD_ENABLE
-                      , (int)vad_state(), vad_level_dbfs(), vad_mod_db(),
-                      (unsigned long)vad_utterances(), (unsigned long)s_vad_utt_frames,
-                      (unsigned long)s_vad_speech_frames
-#endif
-                      );
+      if (log_throttle(last_dbg, LOG_SUMMARY_MS)) {
+        LOG_W("REC drop:%lu ev:%lu slow:%lu i2s_err:%lu on:%lu pa:%lu off:%lu hum:%lu pend:%u",
+              (unsigned long)s_dropped_bytes, (unsigned long)s_drop_events,
+              (unsigned long)s_enc_slow_cnt, (unsigned long)s_i2s_err_cnt,
+              (unsigned long)s_vad_on_cnt, (unsigned long)s_vad_pause_cnt,
+              (unsigned long)s_vad_off_cnt, (unsigned long)s_vad_hum_cnt,
+              (unsigned)manifest_pending_count());
       }
     }
 #if VAD_ENABLE
@@ -919,10 +816,7 @@ void recorder_task(void *arg) {
       s_vad_close_req = false;
       uint32_t min_fr = vad_min_speech_frames_cfg();
       bool too_short = (min_fr > 0 && s_vad_speech_frames < min_fr);
-      Serial.printf("REC VAD offset close utt_frames=%lu speech_fr=%lu min=%lu bytes=%lu\n",
-                    (unsigned long)s_vad_utt_frames, (unsigned long)s_vad_speech_frames,
-                    (unsigned long)min_fr,
-                    (unsigned long)s_bytes_in_chunk);
+      s_vad_off_cnt++;
       // flush remaining opus_ring before closing (same as rotation path)
       size_t item_sz0 = 0;
       uint8_t *item0 = nullptr;
@@ -949,13 +843,10 @@ void recorder_task(void *arg) {
       s_vad_discard_req = false;
       size_t dit_sz = 0;
       uint8_t *dit = nullptr;
-      uint32_t purged = 0;
       while ((dit = (uint8_t *)xRingbufferReceive(s_opus_ring, &dit_sz, 0)) != nullptr) {
-        purged++;
         vRingbufferReturnItem(s_opus_ring, dit);
       }
-      Serial.printf("REC VAD discard purged=%lu tmp=%s\n",
-                    (unsigned long)purged, s_tmp_path.c_str());
+      s_vad_hum_cnt++;
       if (s_file) close_chunk(false);
       s_vad_utt_frames = 0;
       s_vad_speech_frames = 0;
@@ -967,8 +858,6 @@ void recorder_task(void *arg) {
     // For Opus, size threshold never hit (100KB <<1.6M), time_done drives rotation
     // Keep size_done for PCM fallback compat
     if (time_done || size_done) {
-      Serial.printf("REC chunk done trigger time_done=%d size_done=%d bytes=%lu elapsed=%lu opus_frames=%lu\n",
-                    time_done, size_done, (unsigned long)s_bytes_in_chunk, (unsigned long)(millis() - s_chunk_start_ms), (unsigned long)s_opus_frames);
 #if REC_CODEC_OPUS
       // flush remaining opus_ring before closing
       size_t item_sz = 0;
@@ -1063,7 +952,7 @@ static void opus_encode_task(void *arg) {
   uint8_t *packet = (uint8_t*)heap_caps_malloc(REC_OPUS_MAX_FRAME_BYTES+2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!packet) packet = (uint8_t*)malloc(REC_OPUS_MAX_FRAME_BYTES+2);
   if (!pcm_buf || !pcm_s16 || !frame_bytes || !packet) {
-    Serial.println("REC opus_enc: heap alloc fail, task exit");
+    LOG_E("REC enc alloc fail");
     if (pcm_buf) heap_caps_free(pcm_buf);
     if (pcm_s16) heap_caps_free(pcm_s16);
     if (frame_bytes) heap_caps_free(frame_bytes);
@@ -1150,9 +1039,7 @@ static void opus_encode_task(void *arg) {
           }
         }
         vad_encode_push(pcm_s16, frame_bytes, packet);
-        Serial.printf("REC VAD ONSET lvl=%.1fdB pre=%lu speech_fr=%lu\n",
-                      vad_level_dbfs(), (unsigned long)s_preroll_count,
-                      (unsigned long)s_vad_speech_frames);
+        s_vad_on_cnt++;
       } else if (ev == VAD_EV_SPEECH) {
         // MIN_SPEECH counts true voiced frames only — hangover silence
         // inside SPEECH stretches the file but is not speech evidence.
@@ -1183,19 +1070,13 @@ static void opus_encode_task(void *arg) {
         }
         vad_encode_push(pcm_s16, frame_bytes, packet);
       } else if (ev == VAD_EV_PAUSE) {
-        Serial.printf("REC VAD PAUSE lvl=%.1fdB utt_fr=%lu speech_fr=%lu (writes suspended, file kept)\n",
-                      vad_level_dbfs(), (unsigned long)s_vad_utt_frames,
-                      (unsigned long)s_vad_speech_frames);
+        s_vad_pause_cnt++;
       } else if (ev == VAD_EV_OFFSET) {
         s_vad_close_req = true;
-        Serial.printf("REC VAD OFFSET utt_fr=%lu speech_fr=%lu\n",
-                      (unsigned long)s_vad_utt_frames, (unsigned long)s_vad_speech_frames);
       } else if (ev == VAD_EV_DISCARD) {
         // 2s spectrally-flat session (hum/tune): drop everything, keep nothing.
         s_vad_discard_req = true;
-        Serial.printf("REC VAD HUMDISCARD utt_fr=%lu speech_fr=%lu mod=%.1fdB\n",
-                      (unsigned long)s_vad_utt_frames, (unsigned long)s_vad_speech_frames,
-                      vad_mod_db());
+        s_vad_hum_cnt++;
       } else {
         // VAD_EV_SILENCE: fileless idle or in-session pause — discard frame.
         // (s_ring already drained above, so no overflow. opus_encode skipped
@@ -1221,7 +1102,7 @@ static void opus_encode_task(void *arg) {
         s_dropped_bytes += n;
         s_drop_events++;
       }
-      if (dt > 8000) Serial.printf("REC encode slow %lldus n=%d frames %lu\n", dt, n, (unsigned long)s_encode_frames);
+      if (dt > 8000) s_enc_slow_cnt++;
     }
 #endif
     pcm_filled = 0;

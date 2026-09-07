@@ -22,8 +22,12 @@ You have a `firmware/checkpoint` folder. It works with Arduino IDE. No extra too
 1. Open Sketch, Include Library, Manage Libraries.
 2. Search and install `NimBLE-Arduino` by `h2zero`.
 3. Search and install `ArduinoJson` by `Benoit Blanchon` (6.x).
+4. Search and install `Adafruit NeoPixel` by `Adafruit` (onboard WS2812 status LED on GPIO48).
 
 `SD`, `SPI`, `mbedtls` come with the ESP32 package. You do not install them.
+
+> RGB note: status LED is the onboard WS2812 on `GPIO48` (`HW_RGB_PIN`, v1.1 clones use 38).
+> If it stays dark, bridge the RGB solder pads on the back near the LED (many N16R8 clones ship open).
 
 ## Open the project
 

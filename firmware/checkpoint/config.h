@@ -20,7 +20,9 @@
 #define HW_SD_CLK_GPIO 12
 #define HW_SD_MISO_GPIO 13
 #define HW_BUTTON_GPIO 1
-#define HW_RECORD_LED_GPIO 2
+#define HW_RECORD_LED_GPIO 2 // deprecated — RGB-only build, kept for compat
+#define HW_RGB_PIN 48        // onboard WS2812 (v1.1 clones: 38)
+#define HW_RGB_BRIGHTNESS 30 // dim: visible, ~10mA
 
 // Audio — 50s trial (was 30s->20s keeps BLE <30s at 15ms W4, 60s >60s backlog)
 // Codec: OGG-Opus 16k mono VOIP C0 16kbps default (~100KB/50s 455 frags vs 1.6MB/7273 PCM)

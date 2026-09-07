@@ -8,7 +8,7 @@
 #include "transfer.h"
 #include "ui.h"
 #include "crypto.h"
-#include "bench.h"
+#include "log.h"
 
 static TaskHandle_t uiTaskHandle = nullptr;
 static TaskHandle_t transferTaskHandle = nullptr;
@@ -17,7 +17,6 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   esp_reset_reason_t rr = esp_reset_reason();
-  Serial.printf("\nCheckpoint Rev B rst:0x%x (%d) uptime %lu\n", rr, rr, (unsigned long)millis());
   // Decode common reasons for quick triage (POWERON vs SW vs WDT vs PANIC)
   const char *rr_str = "UNKNOWN";
   if (rr == ESP_RST_POWERON) rr_str = "POWERON";
@@ -28,79 +27,51 @@ void setup() {
   else if (rr == ESP_RST_WDT) rr_str = "WDT";
   else if (rr == ESP_RST_BROWNOUT) rr_str = "BROWNOUT";
   else if (rr == ESP_RST_SDIO) rr_str = "SDIO";
-  Serial.printf("Reset reason: %s\n", rr_str);
 
   ui_init();
   xTaskCreatePinnedToCore(ui_task, "ui", TASK_STACK_UI, nullptr, TASK_PRIO_UI, &uiTaskHandle, 0);
 
   if (!sd_begin()) {
-    Serial.println("SD mount failed");
+    LOG_E("SD init fail rst:%s", rr_str);
     ui_signal_error();
-  } else {
-    Serial.println("SD mounted");
-    // Card diagnostics (helps distinguish wiring vs FS vs path bugs)
-    if (sd_lock(500)) {
-      Serial.printf("SD type %d size %llu total %llu used %llu rec_dir_exists %d\n",
-                    (int)SD.cardType(), (unsigned long long)SD.cardSize(),
-                    (unsigned long long)SD.totalBytes(), (unsigned long long)SD.usedBytes(),
-                    (int)SD.exists(REC_DIR));
-      sd_unlock();
-    }
   }
 
   manifest_init();
   manifest_scan_and_recover();
 
-  // Post-manifest SD health (detects FS corruption from previous run)
-  if (sd_lock(200)) {
-    Serial.printf("SD post-manifest rec_dir %d root %d cardType %d\n", (int)SD.exists(REC_DIR), (int)SD.exists("/"), (int)SD.cardType());
-    sd_unlock();
-  }
-
   crypto_init();
 
   if (!recorder_init()) {
-    Serial.println("I2S init failed");
+    LOG_E("I2S init fail");
     ui_signal_fatal();
     return;
   }
-  Serial.println("I2S OK");
-  if (sd_lock(200)) {
-    Serial.printf("SD post-I2S rec_dir %d cardType %d\n", (int)SD.exists(REC_DIR), (int)SD.cardType());
-    sd_unlock();
-  }
 
   bool b = ble_init();
-  Serial.printf("BLE init %s\n", b?"OK":"FAIL");
-  if (sd_lock(200)) {
-    Serial.printf("SD post-BLE rec_dir %d cardType %d\n", (int)SD.exists(REC_DIR), (int)SD.cardType());
-    sd_unlock();
+  if (!b) {
+    LOG_E("BLE init fail");
   }
   bool t = transfer_init();
-  Serial.printf("Transfer init %s\n", t?"OK":"FAIL");
-  if (sd_lock(200)) {
-    Serial.printf("SD post-transfer rec_dir %d cardType %d\n", (int)SD.exists(REC_DIR), (int)SD.cardType());
-    sd_unlock();
+  if (!t) {
+    LOG_E("XFER init fail");
   }
 
   xTaskCreatePinnedToCore(transfer_task, "transfer", TASK_STACK_TRANSFER, nullptr, TASK_PRIO_TRANSFER, &transferTaskHandle, 0);
-  Serial.println("Transfer task started");
 
   recorder_start();
 #if VAD_ENABLE
   ui_signal_vad_listening();
-  Serial.println("Recorder started, VAD voice-triggered chunks");
 #else
   ui_signal_recording(true);
-  Serial.println("Recorder started, 1-min chunks");
 #endif
-  Serial.printf("Checkpoint ready — BLE %s\n", BLE_DEVICE_NAME);
+  {
+    unsigned pend = manifest_pending_count();
+    Serial.printf("CK boot rst:%s pend:%u\n", rr_str, pend);
+  }
 }
 
 void loop() {
   static uint32_t last_sd_check = 0;
-  static uint32_t last_bench = 0;
-  static bool bench_header_done = false;
 
   if (millis() - last_sd_check > 2000) {
     last_sd_check = millis();
@@ -151,16 +122,12 @@ void loop() {
             // Fallback check root
             healthy = SD.exists("/") && ct != CARD_NONE;
           }
-          // Log only on failure to avoid spam
-          if (!healthy) {
-            Serial.printf("SD health probe rec=%d ct=%d root=%d fail %d/3\n", (int)rec_ok, ct, (int)SD.exists("/"), fs_fail_cnt+1);
-          }
           sd_unlock();
         }
         if (!healthy) {
           fs_fail_cnt++;
           if (fs_fail_cnt >= 3) {
-            Serial.println("SD FS lost (3×), unmounting for remount");
+            LOG_E("SD FS lost");
             sd_end();
             ui_signal_error();
             fs_fail_cnt = 0;
@@ -181,19 +148,6 @@ void loop() {
 
   if (ble_is_connected() && ble_is_handshaked()) {
     // keepalive handled in ble_service (BLE_KEEPALIVE_MS reserved)
-  }
-
-  // BENCH: periodic dump of last file sample every 5s while transfer active or after file
-  if (millis() - last_bench > 5000) {
-    last_bench = millis();
-    if (!bench_header_done) {
-      bench_print_header();
-      bench_header_done = true;
-    }
-    BenchSample s = transfer_bench_snapshot();
-    if (s.total_frags != 0) {
-      bench_print_sample("fw", s);
-    }
   }
 
   vTaskDelay(pdMS_TO_TICKS(200));

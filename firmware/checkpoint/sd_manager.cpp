@@ -1,4 +1,5 @@
 #include "sd_manager.h"
+#include "log.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
 #if SD_USE_SDMMC
@@ -75,13 +76,11 @@ bool sd_mounted() { return s_mounted; }
 bool sd_begin() {
   if (!s_sd_mutex) s_sd_mutex = xSemaphoreCreateRecursiveMutex();
   if (!sd_lock(3000)) {
-    Serial.println("SD begin: mutex lock timeout, aborting");
     return false;
   }
 #if HW_HAS_SD_DETECT
   pinMode(HW_SD_DETECT_GPIO, INPUT);
   if (!sd_present()) {
-    Serial.println("SD begin: no card (DET low)");
     sd_unlock();
     return false;
   }
@@ -113,14 +112,11 @@ bool sd_begin() {
   // Breadboard 10cm jumpers are marginal at 10MHz — default 4MHz (config), fallback 1MHz/400kHz.
   // exFAT cards fail mount (ESP-IDF FatFs exFAT disabled) — must be FAT32 MBR 32KB clusters.
 #if SD_USE_SDMMC
-  Serial.println("SD begin SDMMC 1-bit mode");
   bool ok = false;
   const int mmc_freqs[] = {20000, 10000, 4000};
   for (size_t i = 0; i < sizeof(mmc_freqs)/sizeof(mmc_freqs[0]); i++) {
-    Serial.printf("SD_MMC begin try %d kHz (attempt %d/3)...\n", mmc_freqs[i], (int)(i+1));
     ok = FS_SD.begin(SD_MOUNT_POINT, true, false, mmc_freqs[i]);
     bool type_ok = (FS_SD.cardType() != CARD_NONE);
-    Serial.printf("SD_MMC begin -> %s cardType %d\n", ok?"OK":"FAIL", (int)FS_SD.cardType());
     if (ok && type_ok) break;
     FS_SD.end();
     vTaskDelay(pdMS_TO_TICKS(300));
@@ -136,10 +132,8 @@ bool sd_begin() {
     digitalWrite(HW_SD_CS_GPIO, HIGH);
     for (int j = 0; j < 10; j++) sd_spi.transfer(0xFF);
     vTaskDelay(pdMS_TO_TICKS(50));
-    Serial.printf("SD begin try %lu Hz (attempt %u/3)...\n", (unsigned long)tries[i], (unsigned)(i+1));
     ok = FS_SD.begin(HW_SD_CS_GPIO, sd_spi, tries[i]);
     bool type_ok = (FS_SD.cardType() != CARD_NONE);
-    Serial.printf("SD begin @%lu Hz -> %s cardType %d%s\n", (unsigned long)tries[i], ok?"OK":"FAIL", (int)FS_SD.cardType(), (ok && !type_ok)?" (CARD_NONE -> retry)":"");
     if (ok && type_ok) break;
     // Ensure clean retry: end previous attempt before next frequency — 500 ms lets card recover
     FS_SD.end();
@@ -150,36 +144,32 @@ bool sd_begin() {
   static uint8_t s_fail_cnt = 0;
   if (!ok || FS_SD.cardType() == CARD_NONE) {
     if (ok && FS_SD.cardType() == CARD_NONE) {
-      Serial.println("SD begin OK but cardType 0 (CARD_NONE) — treating as mount failure");
       FS_SD.end();
-    } else {
-      Serial.println("SD mount failed — check: FAT32 MBR 32KB (not exFAT/NTFS/GPT), <=32GB SDHC, 100uF cap, <10cm wires, 3.3V stable");
     }
     s_fail_cnt++;
-    Serial.printf("SD mount fail count %d/5\n", s_fail_cnt);
-    if (s_fail_cnt >= 5) {
-      Serial.println("SD 5× consecutive mount fail — NOTE: soft reboot does NOT power-cycle the card; a wedged card needs VCC removed");
+    uint8_t fails = s_fail_cnt;
+    bool need_restart = (fails >= 5);
+    sd_unlock();
+    LOG_E("SD mount fail %d/5", fails);
+    if (need_restart) {
       vTaskDelay(pdMS_TO_TICKS(500));
-      sd_unlock();
       esp_restart();
     }
-    sd_unlock();
     return false;
   }
   s_fail_cnt = 0;
   s_mounted = true;
   bool rec_ok = sd_ensure_rec_dir();
   if (!rec_ok) {
-    Serial.println("SD /rec validation failed — unmounting");
     s_mounted = false;
     FS_SD.end();
 #if !SD_USE_SDMMC
     sd_spi.end();
 #endif
     sd_unlock();
+    LOG_E("SD rec fail");
     return false;
   }
-  Serial.println("SD mounted rec_dir OK");
   sd_unlock();
   return true;
 }
@@ -187,7 +177,6 @@ bool sd_begin() {
 void sd_end() {
   if (!s_mounted) return;
   if (!sd_lock(2000)) {
-    Serial.println("SD end: lock failed, NOT tearing down");
     return;
   }
   s_mounted = false;

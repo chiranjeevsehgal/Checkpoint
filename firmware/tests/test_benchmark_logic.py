@@ -45,54 +45,39 @@ SRC_TRANSFER_H = TRANSFER_H.read_text(encoding="utf-8")
 
 
 def test_bench_h_exists_and_format():
-    assert BENCH_H.exists(), "bench.h missing (T1)"
-    assert "struct BenchSample" in SRC_BENCH_H, "BenchSample missing"
-    assert "bench_print_header" in SRC_BENCH_H, "bench_print_header missing"
-    assert "bench_print_sample" in SRC_BENCH_H, "bench_print_sample missing"
-    assert "BENCH,src" in SRC_BENCH_H, "csv header must contain BENCH,src"
-    assert "goodput_kBps" in SRC_BENCH_H, "goodput column missing"
-    # T3 live goodput when t_end==0
-    assert "t_end_ms == 0" in SRC_BENCH_H or "millis() - s.t_start_ms" in SRC_BENCH_H, "live goodput for in-progress missing"
-    print("PASS bench_h")
+    # Firmware BENCH removed (error-only Serial). bench.h must not exist.
+    assert not BENCH_H.exists(), "bench.h should be removed (error-only logging)"
+    assert "bench_print_header" not in SRC_INO, "firmware must not print BENCH header"
+    assert "bench_print_sample" not in SRC_INO, "firmware must not print BENCH sample"
+    print("PASS bench_h_removed")
 
 
 def test_transfer_bench_instrumentation():
-    assert "bench.h" in SRC_TRANSFER, "transfer.cpp must include bench.h"
-    assert "transfer_bench_snapshot" in SRC_TRANSFER, "bench snapshot missing"
-    assert "s_bench" in SRC_TRANSFER, "s_bench static missing"
-    assert "s_send_ms" in SRC_TRANSFER, "per-window send timestamps missing"
-    assert "max_inflight" in SRC_TRANSFER, "max_inflight track missing"
-    assert "rtt_sum_ms" in SRC_TRANSFER, "rtt_sum missing"
-    assert "stalls" in SRC_TRANSFER, "stalls counter missing"
-    assert "s_bench.t_start_ms = millis()" in SRC_TRANSFER, "t_start not set per file"
-    assert "s_bench.t_end_ms = millis()" in SRC_TRANSFER, "t_end not set on done/fail"
-    assert "transfer_bench_snapshot" in SRC_TRANSFER_H, "transfer.h missing snapshot decl"
-    assert "transfer_bench_reset" in SRC_TRANSFER_H, "reset decl missing"
-    # T1 fix: O-O ack accounting 1:1, no dangling rtt_count without sum
-    assert "if (m.ok && s_send_ms[w]" in SRC_TRANSFER, "T1 fix must count any w with s_send_ms[w]"
-    assert "if (w == 0) base_acked" in SRC_TRANSFER, "base_acked only for w==0"
-    assert "else if (m.ok)" not in SRC_TRANSFER or SRC_TRANSFER.count("s_bench.rtt_count++") == SRC_TRANSFER.count("s_bench.rtt_sum_ms") , "dangling rtt_count without sum must be removed"
-    # snapshot lock
-    assert "portMUX_TYPE s_bench_mux" in SRC_TRANSFER or "s_bench_mux" in SRC_TRANSFER, "snapshot mux missing"
-    assert "portENTER_CRITICAL" in SRC_TRANSFER, "critical section for bench missing"
-    print("PASS transfer_bench")
+    # Firmware BENCH removed: transfer must not carry bench state.
+    assert "bench.h" not in SRC_TRANSFER, "transfer.cpp must not include bench.h"
+    assert "transfer_bench_snapshot" not in SRC_TRANSFER, "bench snapshot must be removed"
+    assert "transfer_bench_snapshot" not in SRC_TRANSFER_H, "transfer.h snapshot decl must be removed"
+    assert "s_bench" not in SRC_TRANSFER, "s_bench static must be removed"
+    assert "s_send_ms" not in SRC_TRANSFER, "per-window send timestamps must be removed"
+    # Window short-circuit logic retained for blast-mode correctness
+    assert "window[0].acked" in SRC_TRANSFER, "window short-circuit missing"
+    assert "Short-circuit" in SRC_TRANSFER or "already acked" in SRC_TRANSFER, "short-circuit comment missing"
+    print("PASS transfer_bench_removed")
 
 
 def test_checkpoint_ino_bench_dump():
-    assert "bench.h" in SRC_INO, "checkpoint.ino must include bench.h"
-    assert "bench_print_header" in SRC_INO, "missing bench header print in loop"
-    assert "transfer_bench_snapshot" in SRC_INO, "must call snapshot"
-    assert "BENCH" in SRC_INO, "BENCH dump missing"
-    assert "last_bench" in SRC_INO, "periodic timer missing"
-    print("PASS ino_bench")
+    assert "bench.h" not in SRC_INO, "checkpoint.ino must not include bench.h"
+    assert "bench_print_header" not in SRC_INO, "BENCH header print must be removed"
+    assert "transfer_bench_snapshot" not in SRC_INO, "snapshot call must be removed"
+    assert "BENCH" not in SRC_INO, "BENCH dump must be removed"
+    assert "CK boot" in SRC_INO, "collapsed boot line missing"
+    print("PASS ino_bench_removed")
 
 
 def test_ble_helpers():
     assert "ble_conn_interval_ms" in SRC_BLE_H, "ble_conn_interval_ms decl missing"
     assert "ble_mtu_negotiated" in SRC_BLE_H, "ble_mtu_negotiated decl missing"
     assert "ble_phy" in SRC_BLE_H, "ble_phy decl missing"
-    assert "HELLO_ACK session=" in SRC_BLE, "HELLO_ACK bench log missing"
-    assert "ble_conn_interval_ms()" in SRC_BLE, "conn interval not logged"
     assert "getPeerInfoByHandle" in SRC_BLE, "T2 must use getPeerInfoByHandle for real interval"
     assert "getConnInterval" in SRC_BLE, "real interval via getConnInterval missing"
     assert "getMTU" in SRC_BLE, "real MTU via getMTU missing"

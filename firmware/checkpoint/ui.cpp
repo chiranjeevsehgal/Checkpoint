@@ -2,38 +2,49 @@
 #include "config.h"
 #include "recorder.h"
 #include "manifest.h"
+#include "log.h"
+#include <Adafruit_NeoPixel.h>
 
 static TaskHandle_t s_task = nullptr;
 static volatile uint8_t s_state = 0;
 
 enum LedState : uint8_t { LED_OFF, LED_ON, LED_BOOKMARK, LED_ERROR, LED_FATAL, LED_VAD_IDLE };
 
+static Adafruit_NeoPixel s_rgb(1, HW_RGB_PIN, NEO_GRB + NEO_KHZ800);
+static uint32_t s_last_rgb = 0xFFFFFFFFu; // force first show
+
+static inline void ui_set_rgb(uint8_t r, uint8_t g, uint8_t b) {
+  uint32_t c = s_rgb.Color(r, g, b);
+  if (c != s_last_rgb) {
+    s_last_rgb = c;
+    s_rgb.setPixelColor(0, c);
+    s_rgb.show();
+  }
+}
+
 void ui_init() {
-  pinMode(HW_RECORD_LED_GPIO, OUTPUT);
-  digitalWrite(HW_RECORD_LED_GPIO, LOW);
+  s_rgb.begin();
+  s_rgb.setBrightness(HW_RGB_BRIGHTNESS);
+  s_rgb.clear();
+  s_rgb.show();
+  s_last_rgb = s_rgb.Color(0, 0, 0);
   pinMode(HW_BUTTON_GPIO, INPUT_PULLUP);
 }
 
 void ui_signal_recording(bool on) {
   s_state = on ? LED_ON : LED_OFF;
-  Serial.printf("UI LED %s (recording %s)\n", on ? "ON" : "OFF", on ? "ON" : "MUTED");
 }
 void ui_signal_vad_listening() {
   s_state = LED_VAD_IDLE;
-  Serial.println("UI LED PULSE (VAD listening, silence)");
 }
 void ui_signal_bookmark() {
-  // Bookmark removed - mic toggle uses LED_ON/OFF only
-  // Kept for test compat: recorder_notify_bookmark() stub remains but unused
-  s_state = LED_BOOKMARK;
+  // Bookmark removed - no LED output (kept for compat, no state change)
 }
 void ui_signal_error() {
   s_state = LED_ERROR;
-  Serial.println("UI signal: ERROR");
 }
 void ui_signal_fatal() {
   s_state = LED_FATAL;
-  Serial.println("UI signal: FATAL");
 }
 
 void ui_task(void *arg) {
@@ -54,24 +65,17 @@ void ui_task(void *arg) {
       armed = false;
       // Toggle lockout 800ms to cover close_chunk settle (400+300) and avoid double-toggle
       if (now - last_toggle_ms < 800) {
-        Serial.printf("MIC toggle ignored: lockout %lu ms (debounce)\n", (unsigned long)(now - last_toggle_ms));
       } else {
         last_toggle_ms = now;
         if (recorder_is_recording()) {
-          Serial.println("MIC toggle: BUTTON pressed -> MUTING mic, stopping recorder");
-          Serial.printf("MIC state: stopping, current_file=%s pending=%u\n", recorder_current_file().c_str(), (unsigned)manifest_pending_count());
           recorder_stop();
           ui_signal_recording(false);
-          Serial.println("MIC state: OFF - LED OFF, recording stopped, BLE sync continues in background");
-          Serial.printf("MIC muted at uptime %lu ms, was_recording now %d\n", (unsigned long)now, recorder_is_recording());
         } else {
-          Serial.println("MIC toggle: BUTTON pressed -> UNMUTING mic, starting recorder");
           bool ok = recorder_start();
           if (ok) {
             ui_signal_recording(true);
-            Serial.printf("MIC state: ON - LED ON, recording resumed at uptime %lu ms file=%s\n", (unsigned long)now, recorder_current_file().c_str());
           } else {
-            Serial.println("MIC toggle: FAILED to start recorder - check SD/I2S");
+            LOG_E("MIC start fail");
             ui_signal_error();
           }
         }
@@ -89,17 +93,10 @@ void ui_task(void *arg) {
       state_enter_ms = now;
     }
     switch (s_state) {
-      case LED_OFF: digitalWrite(HW_RECORD_LED_GPIO, LOW); break;
-      case LED_ON: digitalWrite(HW_RECORD_LED_GPIO, HIGH); break;
+      case LED_OFF: ui_set_rgb(0, 0, 0); break;
+      case LED_ON: ui_set_rgb(0, 180, 0); break;
       case LED_BOOKMARK: {
-        if (now - state_enter_ms < UI_LED_BOOKMARK_MS) {
-          digitalWrite(HW_RECORD_LED_GPIO, HIGH);
-        } else {
-          digitalWrite(HW_RECORD_LED_GPIO, LOW);
-          s_state = LED_ON;
-          prev_state = LED_BOOKMARK;
-          state_enter_ms = now;
-        }
+        ui_set_rgb(0, 0, 0);
         break;
       }
       case LED_ERROR: {
@@ -107,23 +104,25 @@ void ui_task(void *arg) {
         uint32_t t = (now - state_enter_ms) % 1320;
         if (t < 720) {
           uint32_t phase = t % 240;
-          digitalWrite(HW_RECORD_LED_GPIO, phase < 120 ? HIGH : LOW);
+          bool on = (phase < 120);
+          ui_set_rgb(on ? 255 : 0, on ? 140 : 0, 0);
         } else if (t < 1320) {
-          digitalWrite(HW_RECORD_LED_GPIO, LOW);
+          ui_set_rgb(0, 0, 0);
         }
         break;
       }
       case LED_FATAL: {
         // Non-blocking 80ms on/off strobe
         uint32_t t = (now - state_enter_ms) % 160;
-        digitalWrite(HW_RECORD_LED_GPIO, t < 80 ? HIGH : LOW);
+        bool on = (t < 80);
+        ui_set_rgb(on ? 255 : 0, 0, 0);
         break;
       }
       case LED_VAD_IDLE: {
         // Slow 1Hz pulse, 10% duty: proves "mic ON, listening, silence"
         // vs LED_OFF (muted) and LED_ON solid (utterance capturing).
         uint32_t t = (now - state_enter_ms) % 1000;
-        digitalWrite(HW_RECORD_LED_GPIO, t < 100 ? HIGH : LOW);
+        ui_set_rgb(0, 0, (t < 100) ? 90 : 0);
         break;
       }
     }

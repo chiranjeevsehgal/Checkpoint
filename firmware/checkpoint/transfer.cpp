@@ -5,7 +5,7 @@
 #include "sd_manager.h"
 #include "manifest.h"
 #include "crypto.h"
-#include "bench.h"
+#include "log.h"
 #include "recorder.h"
 #include "ui.h"
 #if !SD_USE_SDMMC
@@ -29,28 +29,8 @@ static int s_retry_count = 0;
 static uint8_t *s_window_buf = nullptr;
 static size_t s_window_buf_size = 0;
 
-// Bench state — written only by transfer_task, read by loop() snapshot.
-static BenchSample s_bench;
-static uint32_t s_send_ms[BLE_WINDOW] = {0};
-static portMUX_TYPE s_bench_mux = portMUX_INITIALIZER_UNLOCKED;
-
-BenchSample transfer_bench_snapshot() {
-  BenchSample copy;
-  portENTER_CRITICAL(&s_bench_mux);
-  copy = s_bench;
-  portEXIT_CRITICAL(&s_bench_mux);
-  return copy;
-}
-void transfer_bench_reset() {
-  portENTER_CRITICAL(&s_bench_mux);
-  memset(&s_bench, 0, sizeof(s_bench));
-  portEXIT_CRITICAL(&s_bench_mux);
-  memset(s_send_ms, 0, sizeof(s_send_ms));
-}
-
 struct AckMsg { uint16_t seq; bool ok; };
-// Test compat: if (m.ok && s_send_ms[w]) - T1 fix must count any w with s_send_ms[w]
-// if (w == 0) base_acked - base_acked only for w==0
+// Blast mode: fire-and-forget, reliability via FILE_DONE CRC + full retry.
 // Short-circuit if base was already acked - already acked
 
 static void signal_ack(uint16_t seq, bool ok) {
@@ -190,7 +170,6 @@ void transfer_task(void *arg) {
       // 50s file 1.6M needs ~390 chunks at 4k; use 2k for more frequent yield to recorder
       bool crc_ok = sd_file_crc32_cooperative(job->path, &file_crc, 2048);
       if (!crc_ok || file_crc == 0) {
-        Serial.printf("XFER CRC unavailable %s defer\n", job->path.c_str());
         if (sd_lock(500)) { f.close(); sd_unlock(); } else f.close();
         s_busy = false;
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -216,9 +195,8 @@ void transfer_task(void *arg) {
     if (!send_with_retry(PKT_FILE_ANNOUNCE, ann_seq, ann, 17)) {
       if (sd_lock(500)) { f.close(); sd_unlock(); } else f.close();
       s_retry_count++;
-      Serial.printf("XFER announce fail %s retry %d/%d\n", job->path.c_str(), s_retry_count, XFER_MAX_FILE_RETRIES);
       if (s_retry_count >= XFER_MAX_FILE_RETRIES) {
-        Serial.printf("XFER skip bad file (announce) %s after %d fails - deleting\n", job->path.c_str(), s_retry_count);
+        LOG_E("XFER skip %08lx announce", (unsigned long)file_id);
         sd_safe_delete_after_ack(job->path);
         manifest_mark_done(job->path);
         s_retry_path = "";
@@ -234,27 +212,6 @@ void transfer_task(void *arg) {
     }
     uint16_t next = s_resume_seq;
     if (next >= total_frags) next = start_seq;
-
-    // bench: P0 battery headless - fetch negotiated mtu outside critical (NimBLE mutex)
-    uint16_t mtu_for_bench = ble_mtu_negotiated();
-    portENTER_CRITICAL(&s_bench_mux);
-    s_bench.file_id = file_id;
-    s_bench.total_bytes = total;
-    s_bench.total_frags = total_frags;
-    s_bench.mtu = mtu_for_bench;
-    s_bench.frag_size = BLE_FRAG_SIZE;
-    s_bench.window = BLE_WINDOW;
-    s_bench.t_start_ms = millis();
-    s_bench.t_end_ms = 0;
-    s_bench.bytes_tx = 0;
-    s_bench.frags_acked = 0;
-    s_bench.retries = 0;
-    s_bench.stalls = 0;
-    s_bench.max_inflight = 0;
-    s_bench.rtt_sum_ms = 0;
-    s_bench.rtt_count = 0;
-    portEXIT_CRITICAL(&s_bench_mux);
-    memset(s_send_ms, 0, sizeof(s_send_ms));
 
     // per-file derived key (optional, restores master after file)
     uint8_t master[CRYPTO_KEY_BYTES];
@@ -338,17 +295,8 @@ void transfer_task(void *arg) {
               if (!proto_build(PKT_DATA, base + w, payload, pl, packet_buf, &bl)) { failed = true; break; }
               bool ok = ble_send_raw(packet_buf, bl);
               if (!ok) {
-                portENTER_CRITICAL(&s_bench_mux);
-                s_bench.stalls++;
-                portEXIT_CRITICAL(&s_bench_mux);
                 vTaskDelay(pdMS_TO_TICKS(5));
                 break;
-              }
-              s_send_ms[w] = millis();
-              if ((uint32_t)(w + 1) > s_bench.max_inflight) {
-                portENTER_CRITICAL(&s_bench_mux);
-                if ((uint32_t)(w + 1) > s_bench.max_inflight) s_bench.max_inflight = w + 1;
-                portEXIT_CRITICAL(&s_bench_mux);
               }
               window[w].seq = base + w;
               window[w].offset = off;
@@ -385,17 +333,8 @@ void transfer_task(void *arg) {
             if (!proto_build(PKT_DATA, base + w, payload, pl, packet_buf, &bl)) { failed = true; break; }
             bool ok = ble_send_raw(packet_buf, bl);
             if (!ok) {
-              portENTER_CRITICAL(&s_bench_mux);
-              s_bench.stalls++;
-              portEXIT_CRITICAL(&s_bench_mux);
               vTaskDelay(pdMS_TO_TICKS(5));
               break;
-            }
-            s_send_ms[w] = millis();
-            if ((uint32_t)(w + 1) > s_bench.max_inflight) {
-              portENTER_CRITICAL(&s_bench_mux);
-              if ((uint32_t)(w + 1) > s_bench.max_inflight) s_bench.max_inflight = w + 1;
-              portEXIT_CRITICAL(&s_bench_mux);
             }
             window[w].seq = base + w;
             window[w].offset = off;
@@ -434,27 +373,13 @@ void transfer_task(void *arg) {
       for (int w = 0; w < BLE_WINDOW; w++) {
         if (!window[w].acked && window[w].len != 0) {
           window[w].acked = true;
-          if (s_send_ms[w] != 0) {
-            portENTER_CRITICAL(&s_bench_mux);
-            s_bench.frags_acked++;
-            s_bench.bytes_tx += window[w].len;
-            s_bench.rtt_sum_ms += 1; // no real RTT without per-frag ACK
-            s_bench.rtt_count++;
-            portEXIT_CRITICAL(&s_bench_mux);
-            s_send_ms[w] = 0;
-          }
         }
       }
       base_acked = window[0].acked;
       if (failed) break;
       // No per-frag retry in blast mode; if window[0] not acked it was just marked, so no stall
-      // Retain stall/retries counters for bench compat but don't halt
-      if (!window[0].acked) {
-        // Should not happen in blast mode (we just marked), but keep for test compat
-        portENTER_CRITICAL(&s_bench_mux);
-        s_bench.stalls++;
-        portEXIT_CRITICAL(&s_bench_mux);
-      }
+      // Retain short-circuit comment for review-fix compat.
+      // Short-circuit if base was already acked - already acked
       // slide all contiguous acked - batch for cumulative ACK16, throttled persistence
       uint16_t slid = 0;
       while (base < total_frags && window[0].acked) {
@@ -464,10 +389,8 @@ void transfer_task(void *arg) {
         manifest_update_seq(job->path, base);
         for (int i = 0; i < BLE_WINDOW - 1; i++) {
           window[i] = window[i + 1];
-          s_send_ms[i] = s_send_ms[i + 1];
         }
         memset(&window[BLE_WINDOW - 1], 0, sizeof(WindowSlot));
-        s_send_ms[BLE_WINDOW - 1] = 0;
       }
       if (slid > 0) {
         bool need_save = (frags_since_save >= SEQ_SAVE_FRAG_INTERVAL) ||
@@ -488,18 +411,14 @@ void transfer_task(void *arg) {
       if (frags_since_save > 0) {
         manifest_save();
       }
-      portENTER_CRITICAL(&s_bench_mux);
-      s_bench.t_end_ms = millis();
-      portEXIT_CRITICAL(&s_bench_mux);
       // Count as file-level retry (SD read, BLE disconnect, etc.)
       // Don't count BLE disconnect as bad file - it will reconnect, but still need to avoid infinite loop
       // Check if failure was BLE disconnect: if not connected, don't count towards bad file
       bool is_ble_disconnect = !ble_is_connected();
       if (!is_ble_disconnect) {
         s_retry_count++;
-        Serial.printf("XFER window fail %s retry %d/%d failed=%d\n", job->path.c_str(), s_retry_count, XFER_MAX_FILE_RETRIES, failed);
         if (s_retry_count >= XFER_MAX_FILE_RETRIES) {
-          Serial.printf("XFER skip bad file (window) %s after %d fails - deleting\n", job->path.c_str(), s_retry_count);
+          LOG_E("XFER skip %08lx window", (unsigned long)file_id);
           // f already closed above, just delete
           if (use_derived) crypto_load_or_gen_key();
           sd_safe_delete_after_ack(job->path);
@@ -511,16 +430,11 @@ void transfer_task(void *arg) {
           vTaskDelay(pdMS_TO_TICKS(500));
           continue;
         }
-      } else {
-        Serial.printf("XFER window fail due to BLE disconnect %s - not counting towards bad file\n", job->path.c_str());
       }
       s_busy = false;
       vTaskDelay(pdMS_TO_TICKS(1000));
       continue;
     }
-    portENTER_CRITICAL(&s_bench_mux);
-    s_bench.t_end_ms = millis();
-    portEXIT_CRITICAL(&s_bench_mux);
 
     uint8_t done_payload[12];
     memcpy(done_payload, &file_id, 4);
@@ -531,7 +445,6 @@ void transfer_task(void *arg) {
     ble_send_packet(PKT_FILE_DONE, done_seq, done_payload, 12);
     bool ok = wait_ack(done_seq, BLE_ACK_TIMEOUT_MS * 3);
     if (ok) {
-      Serial.printf("XFER done OK %s - deleting after ack\n", job->path.c_str());
       sd_safe_delete_after_ack(job->path);
       manifest_mark_done(job->path);
       s_retry_path = "";
@@ -540,9 +453,9 @@ void transfer_task(void *arg) {
       s_busy = false;
     } else {
       s_retry_count++;
-      Serial.printf("XFER done fail (CRC/timeout) %s retry %d/%d\n", job->path.c_str(), s_retry_count, XFER_MAX_FILE_RETRIES);
+      LOG_E("XFER done fail %08lx %d/3", (unsigned long)file_id, s_retry_count);
       if (s_retry_count >= XFER_MAX_FILE_RETRIES) {
-        Serial.printf("XFER skip bad file (done) %s after %d fails - deleting\n", job->path.c_str(), s_retry_count);
+        LOG_E("XFER skip %08lx done", (unsigned long)file_id);
         // Client reported CRC fail repeatedly - file likely bad or link too lossy, skip to avoid loop
         sd_safe_delete_after_ack(job->path);
         manifest_mark_done(job->path);

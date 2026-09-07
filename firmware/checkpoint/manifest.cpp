@@ -203,7 +203,6 @@ bool manifest_scan_and_recover() {
   // Merge seq/crc from on-disk manifest.json if present, then persist
   manifest_load();
   manifest_save();
-  Serial.printf("Manifest recovery done: %u files pending\n", (unsigned)manifest_pending_count());
   return true;
 }
 

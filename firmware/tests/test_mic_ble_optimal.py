@@ -146,11 +146,13 @@ def test_efficiency_vs_single():
     print(f"PASS efficiency ratio {ratio:.1f}x window6 + 3.3x stall")
 
 def test_parity_with_checkpoint():
-    # ensure mic_ble_test now mirrors checkpoint's key window idioms
-    for snippet in ['s_send_ms[w] = millis()', 'xQueueReceive(s_ack_q', 's_bench.max_inflight']:
-        assert snippet in INO, f"parity snippet missing {snippet}"
-        assert snippet in CHK_TRANSFER, f"checkpoint parity missing {snippet} (should mirror)"
-    print("PASS parity with checkpoint")
+    # Examples retain BENCH; checkpoint prod removed it (error-only Serial).
+    # Parity holds only for queue idiom, not bench state.
+    assert 'xQueueReceive(s_ack_q' in INO, "parity snippet missing xQueueReceive"
+    assert 'xQueueReceive(s_ack_q' in CHK_TRANSFER, "checkpoint parity missing xQueueReceive (should mirror)"
+    assert 's_bench.max_inflight' not in CHK_TRANSFER, "checkpoint bench must stay removed"
+    assert 's_send_ms[w] = millis()' not in CHK_TRANSFER, "checkpoint bench timestamps must stay removed"
+    print("PASS parity with checkpoint (bench diverged by design)")
 
 if __name__ == "__main__":
     test_config_tuned()
