@@ -118,10 +118,10 @@ def test_handshake_invalid_input():
     assert 'len(payload) < 11' in SRC, "HELLO_ACK short check missing"
     # proto_ver mismatch warning
     assert "proto_ver != PROTO_VER" in SRC, "version mismatch check missing in _parse_hello_ack"
-    # FILE_ANNOUNCE <17
-    assert "len(p) < 17" in SRC, "FILE_ANNOUNCE short guard missing"
-    # FILE_DONE <12
-    assert "len(p) < 12" in SRC, "FILE_DONE guard missing"
+    # FILE_ANNOUNCE <21 (v2: 8-byte uid)
+    assert "len(p) < 21" in SRC, "FILE_ANNOUNCE short guard missing"
+    # FILE_DONE <16 (v2: 8-byte uid)
+    assert "len(p) < 16" in SRC, "FILE_DONE guard missing"
     # DATA short < CRYPTO_TAG_BYTES
     assert "len(raw) < CRYPTO_TAG_BYTES" in SRC, "DATA tag guard missing"
     print("PASS handshake_invalid_input")
@@ -141,12 +141,13 @@ def test_seq_wraparound():
     print("PASS seq_wraparound")
 
 def test_protocol_parity():
-    # Mirror protocol.h constants
-    assert "PROTO_VER = 1" in SRC
+    # Mirror protocol.h constants (v2: READY, session key, HKDF, W8 ACK, resume, UID)
+    assert "PROTO_VER = 2" in SRC
     assert "PROTO_HEADER = 6" in SRC
     assert "CRYPTO_TAG_BYTES = 8" in SRC
     assert "CRYPTO_KEY_BYTES = 16" in SRC
     assert "BLE_FRAG_SIZE_GUESS = 220" in SRC
+    assert "PKT_READY" in SRC
     print("PASS protocol_parity")
 
 def test_crypto_parity_with_firmware():
@@ -154,9 +155,9 @@ def test_crypto_parity_with_firmware():
     assert "hkdf_sha256" in SRC, "HKDF helper missing"
     assert "hmac.new" in SRC, "HMAC-SHA256 missing"
     assert '"checkpoint-file-v1"' in SRC or "'checkpoint-file-v1'" in SRC, "domain string missing"
-    # build_nonce LE pack + A5 5A
-    assert 'struct.pack("<IIH"' in SRC
-    assert 'b"\\xA5\\x5A"' in SRC
+    # build_nonce: SHA256("checkpoint-nonce-v1" + session + uid64 + seq)[:12]
+    assert 'b"checkpoint-nonce-v1"' in SRC
+    assert 'struct.pack("<IQH"' in SRC
     print("PASS crypto_parity")
 
 def test_decrypt_aad_matches_firmware():
@@ -198,11 +199,12 @@ def test_derive_and_nonce_known_vector():
     # Known answer: RFC 5869 HKDF-SHA256 over info "checkpoint-file-v1"+LE(sess,fid)
     import hashlib, hmac, struct
     prk = hmac.new(b"", master, hashlib.sha256).digest()
-    info = b"checkpoint-file-v1" + struct.pack("<II", sess, fid)
+    info = b"checkpoint-file-v1" + struct.pack("<IQ", sess, fid)
     expect = hmac.new(prk, info + b"\x01", hashlib.sha256).digest()[:16]
     assert k == expect, f"KDF mismatch {k.hex()} != {expect.hex()}"
     n = MOD.build_nonce(sess, fid, 42)
-    assert n == struct.pack("<IIH", sess, fid, 42) + b"\xA5\x5A"
+    assert n == hashlib.sha256(b"checkpoint-nonce-v1"
+                               + struct.pack("<IQH", sess, fid, 42)).digest()[:12]
     assert len(n) == 12
     print("PASS derive_and_nonce_vector")
 

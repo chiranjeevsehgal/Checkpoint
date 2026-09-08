@@ -88,6 +88,8 @@ Recorder started, 1-min chunks
    `ACK`s, retries with backoff, resumes real partial progress from the host's
    `.part` files, and deletes a file only after it gets `FILE_DONE_ACK`.
    Requires negotiated MTU ≥ 241; the app refuses smaller MTUs instead of corrupting.
+   This is protocol v2 (READY handshake, per-session key, HKDF, 64-bit file UID) —
+   firmware and host app must be updated together; old v1 peers cannot complete it.
 6. Pull power mid-record. Reboot. The pendant keeps old files. The open `.tmp` either promotes or drops if too small. It starts a fresh chunk.
 
 ## BLE pairing

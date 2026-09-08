@@ -6,3 +6,4 @@ __pycache__/
 *.bin
 /firmware/examples
 /firmware/host/checkpoint_client/received
+/firmware/checkpoint/build

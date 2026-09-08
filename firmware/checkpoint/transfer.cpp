@@ -28,9 +28,12 @@ static String s_retry_path = "";
 static int s_retry_count = 0;
 // Per-file cooldown so one failing file cannot starve later ones.
 // RAM-only: a reboot simply retries the file — safe, never deletes.
-static String s_cool_path = "";
-static uint32_t s_cool_until_ms = 0;
-static uint8_t s_cool_fails = 0;
+struct CoolEntry {
+  String path;
+  uint32_t until_ms;
+  uint8_t fails;
+};
+static CoolEntry s_cool[8];
 
 static uint32_t cool_delay_ms(uint8_t fails) {
   if (fails <= 1) return 2000;
@@ -39,8 +42,36 @@ static uint32_t cool_delay_ms(uint8_t fails) {
   return 300000;
 }
 
-static bool cool_active() {
-  return s_cool_path.length() > 0 && (int32_t)(millis() - s_cool_until_ms) < 0;
+static bool file_is_cooling(const String &path) {
+  for (int i = 0; i < 8; i++) {
+    if (s_cool[i].path == path && s_cool[i].path.length() > 0 &&
+        (int32_t)(millis() - s_cool[i].until_ms) < 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void file_note_failure(const String &path) {
+  int slot = -1;
+  for (int i = 0; i < 8; i++) {
+    if (s_cool[i].path == path) { slot = i; break; }
+    if (slot < 0 && s_cool[i].path.length() == 0) slot = i;
+  }
+  if (slot < 0) slot = 0; // table full: reuse oldest slot, still bounded
+  s_cool[slot].path = path;
+  if (s_cool[slot].fails < 255) s_cool[slot].fails++;
+  s_cool[slot].until_ms = millis() + cool_delay_ms(s_cool[slot].fails);
+}
+
+static void file_note_success(const String &path) {
+  for (int i = 0; i < 8; i++) {
+    if (s_cool[i].path == path) {
+      s_cool[i].path = "";
+      s_cool[i].until_ms = 0;
+      s_cool[i].fails = 0;
+    }
+  }
 }
 
 // PSRAM batch buffer for window reads — ~1.8KB for W8*220, off 8KB transfer stack
@@ -168,7 +199,7 @@ void transfer_task(void *arg) {
     }
     ManifestEntry *job = nullptr;
     for (size_t i = 0; i < found; i++) {
-      if (cool_active() && pending[i].path == s_cool_path) continue;
+      if (file_is_cooling(pending[i].path)) continue;
       job = &pending[i];
       break;
     }
@@ -232,22 +263,20 @@ void transfer_task(void *arg) {
     memcpy(ann + 5, &total_frags, 2);
     memcpy(ann + 7, &file_crc, 4);
     memcpy(ann + 11, &start_seq, 2);
-    uint32_t file_id = manifest_uid_or_generate(job->path, file_crc ^ total);
-    memcpy(ann + 13, &file_id, 4);
+    uint64_t file_uid = manifest_uid_or_generate(job->path, (uint64_t)file_crc ^ total);
+    memcpy(ann + 13, &file_uid, 8);
     uint16_t ann_seq = seq_gen++;
     s_resume_seq = start_seq;
     // clear stale acks before announce
     xQueueReset(s_ack_q);
-    if (!send_with_retry(PKT_FILE_ANNOUNCE, ann_seq, ann, 17)) {
+    if (!send_with_retry(PKT_FILE_ANNOUNCE, ann_seq, ann, 21)) {
       if (sd_lock(500)) { f.close(); sd_unlock(); } else f.close();
       s_retry_count++;
       if (s_retry_count >= XFER_MAX_FILE_RETRIES) {
         // Keep SD file + manifest pending for retry later.
         // Delete only after FILE_DONE_ACK success.
-        LOG_E("XFER keep %08lx announce (retry later)", (unsigned long)file_id);
-        s_cool_path = job->path;
-        if (s_cool_fails < 255) s_cool_fails++;
-        s_cool_until_ms = millis() + cool_delay_ms(s_cool_fails);
+        LOG_E("XFER keep %016llx announce (retry later)", (unsigned long long)file_uid);
+        file_note_failure(job->path);
         s_retry_path = "";
         s_retry_count = 0;
         s_busy = false;
@@ -262,16 +291,20 @@ void transfer_task(void *arg) {
     uint16_t next = s_resume_seq;
     if (next > total_frags) next = start_seq;
 
-    // per-file derived key (optional, restores master after file)
+    // Per-file derived key (optional, restores master after file).
+    // Mirrors the host: master -> session key -> file key (never master -> file).
     uint8_t master[CRYPTO_KEY_BYTES];
+    uint8_t session_key[CRYPTO_KEY_BYTES];
     uint8_t file_key[CRYPTO_KEY_BYTES];
     bool use_derived = false;
     if (crypto_get_key(master)) {
-      if (crypto_derive_file_key(master, ble_session_id(), file_id, file_key)) {
+      if (crypto_derive_session_key(master, ble_session_id(), session_key) &&
+          crypto_derive_file_key(session_key, ble_session_id(), file_uid, file_key)) {
         crypto_set_key(file_key);
         use_derived = true;
         memset(file_key, 0, sizeof(file_key));
       }
+      memset(session_key, 0, sizeof(session_key));
       memset(master, 0, sizeof(master));
     }
 
@@ -332,7 +365,7 @@ void transfer_task(void *arg) {
               uint8_t *plain = s_window_buf + i * BLE_FRAG_SIZE;
               // Last frag may be <220 but offset still i*220 due to contiguous read
               uint8_t nonce[CRYPTO_NONCE_BYTES];
-              crypto_build_nonce(ble_session_id(), file_id, base + w, nonce);
+              crypto_build_nonce(ble_session_id(), file_uid, base + w, nonce);
               uint8_t tag[CRYPTO_TAG_BYTES];
               uint8_t cipher[BLE_FRAG_SIZE];
               uint8_t aad[6] = {PROTO_VER, PKT_DATA, (uint8_t)(base + w), (uint8_t)((base + w) >> 8), (uint8_t)(frag_len), (uint8_t)(frag_len >> 8)};
@@ -369,7 +402,7 @@ void transfer_task(void *arg) {
             sd_unlock();
             if (r != frag_len) { failed = true; break; }
             uint8_t nonce[CRYPTO_NONCE_BYTES];
-            crypto_build_nonce(ble_session_id(), file_id, base + w, nonce);
+            crypto_build_nonce(ble_session_id(), file_uid, base + w, nonce);
             uint8_t tag[CRYPTO_TAG_BYTES];
             uint8_t cipher[BLE_FRAG_SIZE];
             uint8_t aad[6] = {PROTO_VER, PKT_DATA, (uint8_t)(base + w), (uint8_t)((base + w) >> 8), (uint8_t)(frag_len), (uint8_t)(frag_len >> 8)};
@@ -430,8 +463,13 @@ void transfer_task(void *arg) {
       if (!base_acked) {
         // ACK timeout: retransmit from base next iteration (same nonce+plaintext).
         // Bounded: a stuck host must not pin the task forever — abort this
-        // attempt, keep the file pending, and back off for a later retry.
-        if (++ack_timeouts >= XFER_MAX_ACK_TIMEOUTS) { failed = true; break; }
+        // attempt, drop the unhealthy link so both sides restart clean,
+        // and keep the file pending for a later retry.
+        if (++ack_timeouts >= XFER_MAX_ACK_TIMEOUTS) {
+          ble_disconnect();
+          failed = true;
+          break;
+        }
         for (int w = 0; w < BLE_WINDOW; w++) {
           if (!window[w].acked) {
             window[w].len = 0;
@@ -480,11 +518,9 @@ void transfer_task(void *arg) {
         if (s_retry_count >= XFER_MAX_FILE_RETRIES) {
           // Keep SD file + manifest pending for retry later.
           // Delete only after FILE_DONE_ACK success.
-          LOG_E("XFER keep %08lx window (retry later)", (unsigned long)file_id);
+          LOG_E("XFER keep %016llx window (retry later)", (unsigned long long)file_uid);
           if (use_derived) crypto_load_or_gen_key();
-          s_cool_path = job->path;
-          if (s_cool_fails < 255) s_cool_fails++;
-          s_cool_until_ms = millis() + cool_delay_ms(s_cool_fails);
+          file_note_failure(job->path);
           s_retry_path = "";
           s_retry_count = 0;
           s_busy = false;
@@ -498,32 +534,30 @@ void transfer_task(void *arg) {
       continue;
     }
 
-    uint8_t done_payload[12];
-    memcpy(done_payload, &file_id, 4);
-    memcpy(done_payload + 4, &file_crc, 4);
-    memcpy(done_payload + 8, &total, 4);
+    uint8_t done_payload[16];
+    memcpy(done_payload, &file_uid, 8);
+    memcpy(done_payload + 8, &file_crc, 4);
+    memcpy(done_payload + 12, &total, 4);
     uint16_t done_seq = seq_gen++;
     xQueueReset(s_ack_q);
-    ble_send_packet(PKT_FILE_DONE, done_seq, done_payload, 12);
+    ble_send_packet(PKT_FILE_DONE, done_seq, done_payload, 16);
     bool ok = wait_ack(done_seq, BLE_ACK_TIMEOUT_MS * 3);
     if (ok) {
       sd_safe_delete_after_ack(job->path);
       manifest_mark_done(job->path);
-      if (s_cool_path == job->path) { s_cool_path = ""; s_cool_fails = 0; }
+      file_note_success(job->path);
       s_retry_path = "";
       s_retry_count = 0;
       s_current = "";
       s_busy = false;
     } else {
       s_retry_count++;
-      LOG_E("XFER done fail %08lx %d/3", (unsigned long)file_id, s_retry_count);
+      LOG_E("XFER done fail %016llx %d/3", (unsigned long long)file_uid, s_retry_count);
       // Keep SD file + manifest pending for retry later.
       // Delete only after FILE_DONE_ACK success.
       if (s_retry_count >= XFER_MAX_FILE_RETRIES) {
-        LOG_E("XFER keep %08lx done (retry later)", (unsigned long)file_id);
-        s_cool_path = job->path;
-        if (s_cool_fails < 255) s_cool_fails++;
-        s_cool_until_ms = millis() + cool_delay_ms(s_cool_fails);
+        LOG_E("XFER keep %016llx done (retry later)", (unsigned long long)file_uid);
+        file_note_failure(job->path);
         s_retry_path = "";
         s_retry_count = 0;
         s_current = "";

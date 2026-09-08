@@ -249,7 +249,7 @@ def test_bench_json_schema():
     rows = c.bench_rows()
     j = json.dumps(rows)
     data = json.loads(j)
-    assert data[0]["file_id"] == "0000abcd"
+    assert data[0]["file_id"] == "000000000000abcd"
     try:
         c._csv_file.close()
         p.unlink()

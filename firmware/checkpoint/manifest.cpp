@@ -62,7 +62,9 @@ bool manifest_load() {
         s_entries[i].next_seq = o["seq"] | s_entries[i].next_seq;
         s_entries[i].size = o["size"] | s_entries[i].size;
         s_entries[i].uid = o["uid"] | s_entries[i].uid;
-        if (s_entries[i].uid == 0) s_entries[i].uid = esp_random();
+        if (s_entries[i].uid == 0) {
+          s_entries[i].uid = ((uint64_t)esp_random() << 32) | esp_random();
+        }
         break;
       }
     }
@@ -272,7 +274,7 @@ bool manifest_add_file(const String &path, uint32_t size, uint32_t crc) {
   s_entries[s_count].path = path;
   s_entries[s_count].size = size;
   s_entries[s_count].crc = crc;
-  s_entries[s_count].uid = esp_random();
+  s_entries[s_count].uid = ((uint64_t)esp_random() << 32) | esp_random();
   if (s_entries[s_count].uid == 0) s_entries[s_count].uid = 1;
   s_entries[s_count].created_ms = millis();
   s_entries[s_count].pending = true;
@@ -347,12 +349,14 @@ bool manifest_save() {
   return sd_write_atomic(String(REC_MANIFEST), (const uint8_t *)out.c_str(), out.length());
 }
 
-uint32_t manifest_uid_or_generate(const String &path, uint32_t fallback) {
+uint64_t manifest_uid_or_generate(const String &path, uint64_t fallback) {
   if (xSemaphoreTake(s_manifest_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) return fallback;
-  uint32_t uid = fallback;
+  uint64_t uid = fallback;
   for (size_t i = 0; i < s_count; i++) {
     if (s_entries[i].path == path) {
-      if (s_entries[i].uid == 0) s_entries[i].uid = esp_random();
+      if (s_entries[i].uid == 0) {
+        s_entries[i].uid = ((uint64_t)esp_random() << 32) | esp_random();
+      }
       if (s_entries[i].uid == 0) s_entries[i].uid = 1;
       uid = s_entries[i].uid;
       break;

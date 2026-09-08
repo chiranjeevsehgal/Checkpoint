@@ -70,7 +70,8 @@ def test_window_retry_logic():
     tr = (BASE / "transfer.cpp").read_text()
     assert "xQueueCreate" in tr
     assert "ack_timeouts" in tr and "XFER_MAX_ACK_TIMEOUTS" in tr
-    assert "s_cool_until_ms" in tr and "cool_delay_ms" in tr
+    assert "file_is_cooling" in tr and "file_note_failure" in tr
+    assert "CoolEntry s_cool[8]" in tr
     assert "SD.exists" in tr
     # must still wait with BLE_ACK_TIMEOUT_MS but now with short-circuit for already-acked base
     assert "BLE_ACK_TIMEOUT_MS" in tr

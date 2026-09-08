@@ -41,16 +41,18 @@ def test_wire_format_vectors():
     from client_app import config as cfg
     from client_app.crypto import build_nonce, derive_file_key
     from client_app.protocol import proto_build, proto_parse
-    header = struct.pack("<BBHH", 1, 0x12, 300, 5)
+    header = struct.pack("<BBHH", 2, 0x12, 300, 5)
     expected = header + b"hello" + struct.pack("<I", zlib.crc32(header + b"hello") & 0xFFFFFFFF)
     assert proto_build(0x12, 300, b"hello") == expected
     assert proto_parse(expected).payload == b"hello"
     import hmac as _hmac
     prk = _hmac.new(b"", b"0" * 16, hashlib.sha256).digest()
-    info = b"checkpoint-file-v1" + struct.pack("<II", 1, 2)
+    info = b"checkpoint-file-v1" + struct.pack("<IQ", 1, 2)
     assert derive_file_key(b"0" * 16, 1, 2) == \
         _hmac.new(prk, info + b"\x01", hashlib.sha256).digest()[:16]
-    assert build_nonce(9, 0x1234ABCD, 5) == struct.pack("<IIH", 9, 0x1234ABCD, 5) + b"\xA5\x5A"
+    assert build_nonce(9, 0x1234ABCD12345678, 5) == \
+        hashlib.sha256(b"checkpoint-nonce-v1"
+                       + struct.pack("<IQH", 9, 0x1234ABCD12345678, 5)).digest()[:12]
     assert cfg.BENCH_FIELDNAMES == [
         "ts", "file_id", "total_bytes", "total_frags", "mtu", "frag_size",
         "goodput_kBps", "median_rtt_ms", "p95_rtt_ms", "duplicates", "retries",
@@ -100,14 +102,14 @@ def test_bench_finalize_math_and_schema(tmp_path):
     assert rec.finalize(True, 100, 247, 220) is None  # no active file
     rec.reset_file(0x1234ABCD, 1000, 5, 0)
     row = rec.finalize(True, 1000, 247, 220)
-    assert row["file_id"] == "1234abcd"
+    assert row["file_id"] == "000000001234abcd"
     assert list(row.keys()) == cfg.BENCH_FIELDNAMES
     assert row["median_rtt_ms"] == row["p95_rtt_ms"]  # single sample
     csv_path = tmp_path / "bench.csv"
     rec2 = BenchRecorder(csv_path)
     rec2.reset_file(0x1, 10, 1, 0)
     rec2.finalize(False, 10, 0, 220, ingest_status="pending", vad_status="pending")
-    rec2.update_ingest("00000001", "u1", "SUBMITTED")
+    rec2.update_ingest("0000000000000001", "u1", "SUBMITTED")
     assert rec2.rows()[0]["ingest_status"] == "SUBMITTED"
     rec2.rewrite_csv()
     assert "SUBMITTED" in csv_path.read_text()
@@ -265,12 +267,76 @@ def test_settle_for_encryption_gives_up():
 
 
 @needs_deps
-def test_is_link_drop_mapping():
+def test_hello_exchange_raises_without_reconnecting(monkeypatch):
+    import asyncio
+
+    from client_app import config as cfg
     from client_app.ble_client import CheckpointClient
-    assert CheckpointClient._is_link_drop("Not connected") is True
-    assert CheckpointClient._is_link_drop("Characteristic X was not found!") is True
-    assert CheckpointClient._is_link_drop("Device disconnected") is True
-    assert CheckpointClient._is_link_drop("access denied") is False
+    monkeypatch.setattr(cfg, "ACK_TIMEOUT_S", 0.05)
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+
+    async def fake_write(ptype, seq, payload=b""):
+        return None
+
+    async def fake_wait():
+        await asyncio.sleep(10)
+
+    reconnected = []
+    client.write_ctrl = fake_write
+    client._wait_for_handshake_result = fake_wait
+    client._connect_with_retry = lambda *a, **k: reconnected.append(True)
+    try:
+        asyncio.run(client._hello_exchange("attempt 1/7"))
+        raised = None
+    except ConnectionError as e:
+        raised = e
+    assert raised is not None and "timed out" in str(raised)
+    assert reconnected == [], "hello exchange must not reconnect (supervisor owns that)"
+
+
+@needs_deps
+def test_supervisor_rehandshakes_live_unready_link():
+    import asyncio
+
+    from client_app.ble_client import CheckpointClient, supervise_link
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    connects, handshakes = [], []
+
+    class FakeConnected:
+        is_connected = True
+
+    async def fake_connect():
+        connects.append(1)
+        client.client = FakeConnected()
+
+    async def fake_handshake():
+        handshakes.append(1)
+        client.link_state = "up"
+
+    async def fake_disconnect():
+        client.client = None
+
+    client.connect = fake_connect
+    client.do_handshake = fake_handshake
+    client.disconnect = fake_disconnect
+    # Link alive at BLE level but handshake failed: must re-handshake, not trust.
+    client.client = FakeConnected()
+    client.link_state = "down"
+    stopped = [False]
+
+    async def run():
+        async def stopper():
+            await asyncio.sleep(0.3)
+            stopped[0] = True
+
+        await asyncio.gather(
+            supervise_link(client, log=lambda m: None,
+                           is_stopped=lambda: stopped[0]),
+            stopper())
+
+    asyncio.run(run())
+    assert connects == [], "no fresh connect needed on a live link"
+    assert handshakes, "live-but-unready link must re-handshake"
 
 
 @needs_deps
@@ -292,29 +358,22 @@ def test_connect_with_retry_recovers():
 
 
 @needs_deps
-def test_hello_exchange_timeout_reconnects(monkeypatch):
+def test_hello_exchange_write_failure_raises():
     import asyncio
 
-    from client_app import config as cfg
     from client_app.ble_client import CheckpointClient
-    monkeypatch.setattr(cfg, "ACK_TIMEOUT_S", 0.05)
     client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
-    reconnected = []
 
-    async def fake_write(ptype, seq, payload=b""):
-        return None
+    async def failing_write(ptype, seq, payload=b""):
+        raise RuntimeError("not connected")
 
-    async def fake_wait():
-        await asyncio.sleep(10)
-
-    async def fake_reconnect(tries=3, wait_s=2.0):
-        reconnected.append(True)
-
-    client.write_ctrl = fake_write
-    client._wait_for_handshake_result = fake_wait
-    client._connect_with_retry = fake_reconnect
-    assert asyncio.run(client._hello_exchange("attempt 1/7")) == "reconnected"
-    assert reconnected == [True]
+    client.write_ctrl = failing_write
+    try:
+        asyncio.run(client._hello_exchange("attempt 1/7"))
+        raised = None
+    except ConnectionError as e:
+        raised = e
+    assert raised is not None and "HELLO write failed" in str(raised)
 
 
 @needs_deps
@@ -430,19 +489,19 @@ def _make_phase1_client(monkeypatch=None):
     return client, sent
 
 
-def _announce_packet(file_id=0xABCD1234, total=44000, frags=200,
+def _announce_packet(file_id=0xABCD1234ABCD1234, total=44000, frags=200,
                      crc=0x12345678, start_seq=100, seq=7):
     import struct
 
     from client_app.protocol import proto_build
     payload = (b"\x10" + struct.pack("<I", total) + struct.pack("<H", frags)
                + struct.pack("<I", crc) + struct.pack("<H", start_seq)
-               + struct.pack("<I", file_id))
+               + struct.pack("<Q", file_id))
     return proto_build(0x10, seq, payload)
 
 
 @needs_deps
-def test_announce_forces_resume_zero():
+def test_announce_restarts_without_part_state():
     import asyncio
     import struct
 
@@ -481,7 +540,7 @@ def test_file_done_race_keeps_new_file():
         # Stale FILE_DONE for A arrives after B started — B must survive.
         import struct
         done_a = proto_parse(proto_build(
-            0x14, 9, struct.pack("<III", 0xAAAA, 0x12345678, 44000)))
+            0x14, 9, struct.pack("<QII", 0xAAAA, 0x12345678, 44000)))
         await client._handle_file_done(done_a)
         assert client.current_file is not None
         assert client.current_file.file_id == 0xBBBB
@@ -507,15 +566,15 @@ def test_file_done_matching_id_clears_state(tmp_path, monkeypatch):
     f.add_fragment(0, data)
     client.current_file = f
     done = proto_parse(proto_build(
-        0x14, 11, struct.pack("<III", 0xCCCC, f.expected_crc, len(data))))
+        0x14, 11, struct.pack("<QII", 0xCCCC, f.expected_crc, len(data))))
 
     async def run():
         await client._handle_file_done(done)
 
     asyncio.run(run())
     assert client.current_file is None
-    assert (tmp_path / "file_0000cccc.ogg").exists() or \
-        (tmp_path / "file_0000cccc.wav").exists()
+    assert (tmp_path / "file_000000000000cccc.ogg").exists() or \
+        (tmp_path / "file_000000000000cccc.wav").exists()
 
 
 @needs_deps
@@ -624,7 +683,7 @@ def test_hello_ack_validation():
     from client_app import config as cfg
     from client_app.ble_client import CheckpointClient
 
-    def payload(ver=1, mtu=247, key=True):
+    def payload(ver=2, mtu=247, key=True):
         p = struct.pack("<B", ver) + struct.pack("<I", 0x11111111)
         p += struct.pack("<H", mtu) + struct.pack("<I", 50)
         if key:
@@ -718,9 +777,9 @@ def test_part_resume_continues_where_left_off(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "BLE_FRAG_SIZE_GUESS", 220)
     client, sent = _make_phase1_client()
     file_id, total, frags, crc = 0xDDDD0001, 220 * 10, 10, 0x11111111
-    part = tmp_path / f"file_{file_id:08x}.part"
+    part = tmp_path / f"file_{file_id:016x}.part"
     part.write_bytes(b"A" * 220 * 4 + b"\x00" * 220 * 6)
-    (tmp_path / f"file_{file_id:08x}.part.json").write_text(json.dumps({
+    (tmp_path / f"file_{file_id:016x}.part.json").write_text(json.dumps({
         "crc": f"{crc:08x}", "total": total, "total_frags": frags,
         "frag_size": 220, "received": [0, 1, 2, 3]}))
 
@@ -748,8 +807,8 @@ def test_part_resume_rejects_tampered_sidecar(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "BLE_FRAG_SIZE_GUESS", 220)
     client, sent = _make_phase1_client()
     file_id = 0xDDDD0002
-    (tmp_path / f"file_{file_id:08x}.part").write_bytes(b"\x00" * 2200)
-    (tmp_path / f"file_{file_id:08x}.part.json").write_text(json.dumps({
+    (tmp_path / f"file_{file_id:016x}.part").write_bytes(b"\x00" * 2200)
+    (tmp_path / f"file_{file_id:016x}.part.json").write_text(json.dumps({
         "crc": "deadbeef", "total": 2200, "total_frags": 10,
         "frag_size": 220, "received": [0, 1]}))
 
@@ -786,7 +845,7 @@ def test_duplicate_file_done_reacks_from_cache(tmp_path, monkeypatch):
     f = IncomingFile(file_id=0x00EE00EE, total_bytes=total, total_frags=frags,
                      expected_crc=crc, key=b"k" * 16, session_id=1)
     client.current_file = f  # empty buffer: duplicate DONE for a verified file
-    done = proto_parse(proto_build(0x14, 21, struct.pack("<III", 0x00EE00EE, crc, total)))
+    done = proto_parse(proto_build(0x14, 21, struct.pack("<QII", 0x00EE00EE, crc, total)))
 
     async def run():
         await client._handle_file_done(done)
@@ -808,3 +867,30 @@ def test_hkdf_rfc5869_vector():
     okm = hkdf_sha256(salt, ikm, info, 32)
     assert okm.hex() == ("3cb25f25faacd57a90434f64d0362f2a"
                          "2d2d0a90cf1a5a4c5db02d56ecc4c5bf")
+
+
+@needs_deps
+def test_end_to_end_key_schedule():
+    """Master -> session key -> file key must match firmware's two-stage
+    schedule (crypto_derive_session_key then crypto_derive_file_key)."""
+    import hashlib
+    import hmac as _hmac
+    import struct
+
+    from client_app.crypto import derive_file_key, hkdf_sha256
+    master = bytes(range(16))
+    session = 0x12345678
+    uid = 0x1122334455667788
+    session_key = hkdf_sha256(b"", master,
+                              b"checkpoint-session-v1" + struct.pack("<I", session), 16)
+    file_key = derive_file_key(session_key, session, uid)
+    prk1 = _hmac.new(b"", master, hashlib.sha256).digest()
+    expect_session = _hmac.new(
+        prk1, b"checkpoint-session-v1" + struct.pack("<I", session) + b"\x01",
+        hashlib.sha256).digest()[:16]
+    assert session_key == expect_session
+    prk2 = _hmac.new(b"", expect_session, hashlib.sha256).digest()
+    expect_file = _hmac.new(
+        prk2, b"checkpoint-file-v1" + struct.pack("<IQ", session, uid) + b"\x01",
+        hashlib.sha256).digest()[:16]
+    assert file_key == expect_file

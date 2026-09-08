@@ -12,6 +12,8 @@ BleState ble_state();
 uint32_t ble_session_id();
 bool ble_handshake_timed_out();
 void ble_check_handshake_timeout();
+// Force-drop the link so both sides restart from a clean session.
+void ble_disconnect();
 void ble_check_final_diag();
 bool ble_send_packet(uint8_t type, uint16_t seq, const uint8_t *payload, uint16_t len);
 bool ble_send_raw(const uint8_t *data, size_t len);

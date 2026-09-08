@@ -201,12 +201,12 @@ def test_ble_security_and_ready():
 def test_manifest_uid():
     man = read("manifest.cpp")
     hdr = read("manifest.h")
-    assert "uid" in hdr and "manifest_uid_or_generate" in hdr
+    assert "uint64_t uid" in hdr and "manifest_uid_or_generate" in hdr
     assert 'o["uid"]' in man
-    assert "esp_random()" in man
+    assert "<< 32" in man, "uid must compose two esp_random() halves (64-bit)"
     tr = read("transfer.cpp")
     assert "manifest_uid_or_generate" in tr
-    assert "file_crc ^ total" in tr, "legacy fallback must remain"
+    assert "ann, 21" in tr, "announce must carry the 8-byte uid"
     print("PASS manifest uid")
 
 # ---- I5: SD lock gap ----

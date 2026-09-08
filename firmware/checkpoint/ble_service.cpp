@@ -43,11 +43,12 @@ static void ble_tx_unlock() {
 }
 
 // Direct CTRL indicate for the NimBLE callback task (same mutex as above).
-static void ctrl_indicate_locked(const uint8_t *buf, size_t bl) {
-  if (!s_ctrl || !ble_tx_lock()) return;
+static bool ctrl_indicate_locked(const uint8_t *buf, size_t bl) {
+  if (!s_ctrl || !ble_tx_lock()) return false;
   s_ctrl->setValue(buf, bl);
-  s_ctrl->indicate();
+  bool ok = s_ctrl->indicate();
   ble_tx_unlock();
+  return ok;
 }
 
 class ServerCallbacks : public NimBLEServerCallbacks {
@@ -156,11 +157,12 @@ class CtrlCallbacks : public NimBLECharacteristicCallbacks {
       }
       memset(master, 0, sizeof(master));
       if (proto_build(PKT_HELLO_ACK, 0, payload, plen, resp, &rl)) {
-        ctrl_indicate_locked(resp, rl);
         // Handshake completes only when the host answers PKT_READY
         // (proves session/mtu/crypto installed). Transfers stay gated.
-        s_hello_sent = true;
-        s_last_handshake_ms = millis(); // fresh 5s budget for the READY reply
+        if (ctrl_indicate_locked(resp, rl)) {
+          s_hello_sent = true;
+          s_last_handshake_ms = millis(); // fresh 5s budget for the READY reply
+        }
         // hybrid: 15ms iOS-safe, DLE 251, try 2M
         if (s_server && s_conn_handle != 0xFFFF) {
           s_server->updateConnParams(s_conn_handle, 12, 12, 0, 400);
@@ -253,6 +255,12 @@ void ble_check_handshake_timeout() {
 void ble_check_final_diag() {
   // PHY/MTU tuning settles without Serial spam; phone-side logs cover triage.
   s_final_diag_due_ms = 0;
+}
+
+void ble_disconnect() {
+  if (s_server && s_conn_handle != 0xFFFF) {
+    s_server->disconnect(s_conn_handle);
+  }
 }
 
 bool ble_send_raw(const uint8_t *data, size_t len) {

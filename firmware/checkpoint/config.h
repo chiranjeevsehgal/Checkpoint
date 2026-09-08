@@ -113,7 +113,9 @@
 #define BLE_KEEPALIVE_MS 5000
 
 // Protocol — DATA is frag(220)+CCM tag(8)=228, need header+crc
-#define PROTO_VER 1
+// Protocol v2: READY handshake, session key, HKDF, W8 cumulative ACK,
+// disk-backed resume, stable file UID.
+#define PROTO_VER 2
 #define PROTO_MAX_PAYLOAD (BLE_FRAG_SIZE + CRYPTO_TAG_BYTES)
 #define PROTO_HEADER 6
 #define PROTO_CRC 4

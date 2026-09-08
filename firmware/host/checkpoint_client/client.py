@@ -27,6 +27,7 @@ Usage:
 import asyncio
 import csv
 import json
+import os
 import struct
 import sys
 import time
@@ -50,7 +51,7 @@ CTRL_UUID    = "9a8b0002-4a2b-4e3c-8f1a-5b2c9d0e1f2a"
 DATA_UUID    = "9a8b0003-4a2b-4e3c-8f1a-5b2c9d0e1f2a"
 ACK_UUID     = "9a8b0004-4a2b-4e3c-8f1a-5b2c9d0e1f2a"
 
-PROTO_VER = 1
+PROTO_VER = 2
 PROTO_HEADER = 6   # ver, type, seq_lo, seq_hi, len_lo, len_hi
 PROTO_CRC = 4
 
@@ -183,15 +184,17 @@ def hkdf_sha256(salt: bytes, ikm: bytes, info: bytes, length: int) -> bytes:
     return hmac.new(prk, info + b"\x01", hashlib.sha256).digest()[:length]
 
 
-def derive_file_key(session_key: bytes, session_id: int, file_id: int) -> bytes:
+def derive_file_key(session_key: bytes, session_id: int, file_uid: int) -> bytes:
     """Mirrors crypto_derive_file_key exactly (RFC 5869 HKDF-SHA256)."""
-    info = b"checkpoint-file-v1" + struct.pack("<II", session_id, file_id)
+    info = b"checkpoint-file-v1" + struct.pack("<IQ", session_id, file_uid)
     return hkdf_sha256(b"", session_key, info, CRYPTO_KEY_BYTES)
 
 
-def build_nonce(session_id: int, file_id: int, seq: int) -> bytes:
+def build_nonce(session_id: int, file_uid: int, seq: int) -> bytes:
     """Mirrors crypto_build_nonce exactly."""
-    return struct.pack("<IIH", session_id, file_id, seq) + b"\xA5\x5A"
+    msg = (b"checkpoint-nonce-v1"
+           + struct.pack("<IQH", session_id, file_uid, seq))
+    return hashlib.sha256(msg).digest()[:CRYPTO_NONCE_BYTES]
 
 
 def decrypt_fragment(key: bytes, session_id: int, file_id: int, seq: int,
@@ -335,7 +338,7 @@ class CheckpointClient:
             p95 = rtts[-1]
         row = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "file_id": f"{self._bench_file_meta['file_id']:08x}",
+            "file_id": f"{self._bench_file_meta['file_id']:016x}",
             "total_bytes": total,
             "total_frags": self._bench_file_meta["total_frags"],
             "mtu": self.mtu or 0,
@@ -561,7 +564,7 @@ class CheckpointClient:
                               struct.pack("<I", self.session_id or 0))
 
     def _part_paths(self, file_id):
-        hex8 = f"{file_id:08x}"
+        hex8 = f"{file_id:016x}"
         return (OUTPUT_DIR / f"file_{hex8}.part",
                 OUTPUT_DIR / f"file_{hex8}.part.json")
 
@@ -642,6 +645,8 @@ class CheckpointClient:
             _part, side = self._part_paths(file_id)
             if self._part_fh is not None:
                 self._part_fh.flush()
+                # Survive laptop power loss, not just process exit.
+                os.fsync(self._part_fh.fileno())
             side.write_text(json.dumps({
                 "crc": f"{file_crc:08x}", "total": total,
                 "total_frags": total_frags,
@@ -672,7 +677,7 @@ class CheckpointClient:
 
     async def _handle_announce_locked(self, pkt: Packet):
         p = pkt.payload
-        if len(p) < 17:
+        if len(p) < 21:
             print("  [!] FILE_ANNOUNCE payload too short")
             return
         path_len = p[0]
@@ -680,10 +685,10 @@ class CheckpointClient:
         total_frags = struct.unpack("<H", p[5:7])[0]
         file_crc = struct.unpack("<I", p[7:11])[0]
         device_start_seq = struct.unpack("<H", p[11:13])[0]
-        file_id = struct.unpack("<I", p[13:17])[0]
+        file_id = struct.unpack("<Q", p[13:21])[0]
 
         print(f"  FILE_ANNOUNCE: total={total}B frags={total_frags} "
-              f"crc={file_crc:#010x} file_id={file_id:#010x} "
+              f"crc={file_crc:#010x} file_id={file_id:#018x} "
               f"device_offered_resume={device_start_seq}")
 
         key = None
@@ -704,7 +709,7 @@ class CheckpointClient:
                 resume_from = total_frags
                 self.current_file.received_frags = set(range(total_frags))
                 self.current_file.contig_seq = total_frags - 1
-                print(f"  [resume] {file_id:08x} already completed — confirming")
+                print(f"  [resume] {file_id:016x} already completed — confirming")
             else:
                 resume_from, part_bytes, received = self._load_resume_state(
                     file_id, file_crc, total, total_frags)
@@ -716,7 +721,7 @@ class CheckpointClient:
                     while contig + 1 in self.current_file.received_frags:
                         contig += 1
                     self.current_file.contig_seq = contig
-                    print(f"  [resume] {file_id:08x} continuing at {resume_from}/{total_frags}")
+                    print(f"  [resume] {file_id:016x} continuing at {resume_from}/{total_frags}")
                 else:
                     self.current_file.contig_seq = -1
                     self._discard_part(file_id)
@@ -797,12 +802,12 @@ class CheckpointClient:
 
     async def _handle_file_done_locked(self, pkt: Packet):
         p = pkt.payload
-        if len(p) < 12:
+        if len(p) < 16:
             print("  [!] FILE_DONE payload too short")
             return
-        file_id = struct.unpack("<I", p[0:4])[0]
-        file_crc = struct.unpack("<I", p[4:8])[0]
-        total = struct.unpack("<I", p[8:12])[0]
+        file_id = struct.unpack("<Q", p[0:8])[0]
+        file_crc = struct.unpack("<I", p[8:12])[0]
+        total = struct.unpack("<I", p[12:16])[0]
 
         f = self.current_file
         ok = False
@@ -815,7 +820,7 @@ class CheckpointClient:
             if not ok and self._completed_ok(file_id, file_crc, total):
                 # Duplicate FILE_DONE for an already-verified file (the
                 # success ACK was lost). Re-ACK without re-saving.
-                print(f"  duplicate FILE_DONE for completed {file_id:08x} — re-ACKing")
+                print(f"  duplicate FILE_DONE for completed {file_id:016x} — re-ACKing")
                 ok = True
                 from_cache = True
             if ok and not from_cache:
@@ -823,13 +828,13 @@ class CheckpointClient:
                 # Detect OGG-Opus vs WAV via magic: OggS for opus, RIFF for wav
                 ext = ".ogg" if data[:4] == b"OggS" else ".wav"
                 # Prefer .ogg for new 16k Opus (100KB/50s), .wav for legacy PCM
-                out_path = OUTPUT_DIR / f"file_{file_id:08x}{ext}"
+                out_path = OUTPUT_DIR / f"file_{file_id:016x}{ext}"
                 out_path.write_bytes(data)
                 print(f"  ✓ File complete and CRC verified -> {out_path} ({total} bytes)")
                 # also write bench meta json alongside wav
                 try:
                     meta = {
-                        "file_id": f"{file_id:08x}",
+                        "file_id": f"{file_id:016x}",
                         "total": total,
                         "total_frags": f.total_frags,
                         "expected_crc": f"{file_crc:08x}",
@@ -839,7 +844,7 @@ class CheckpointClient:
                         "duplicates": self._bench_duplicates,
                         "decrypt_fail": self._bench_decrypt_fail,
                     }
-                    (OUTPUT_DIR / f"file_{file_id:08x}.json").write_text(json.dumps(meta, indent=2))
+                    (OUTPUT_DIR / f"file_{file_id:016x}.json").write_text(json.dumps(meta, indent=2))
                 except Exception:
                     pass
             else:
@@ -911,11 +916,23 @@ async def main():
             # Single reconnect supervisor: only this loop reconnects.
             client.link_lost.clear()
             try:
+                # Physical link and application handshake are separate states:
+                # a fresh link always needs a handshake; a live link whose
+                # handshake failed must re-handshake instead of being trusted.
                 if not (client.client and client.client.is_connected):
                     await client.connect()
                     await client.do_handshake()
+                elif client.link_state != "up":
+                    await client.do_handshake()
+                if not (client.client and client.client.is_connected):
+                    raise ConnectionError("Link dropped during handshake")
                 client.link_lost.clear()
             except Exception as e:
+                client.link_state = "down"
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
                 print(f"connect failed: {e} — retry in {delay:.0f}s ...")
                 delay = min(delay * 2.0, 10.0)
                 await asyncio.sleep(delay)

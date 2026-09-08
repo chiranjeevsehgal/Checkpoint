@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import struct
 import sys
 import time
@@ -144,7 +145,7 @@ class CheckpointClient:
 
     async def _ingest_in_background(self, data: bytes, out_path: Path,
                                     meta_path: Path, file_id: int):
-        file_hex = f"{file_id:08x}"
+        file_hex = f"{file_id:016x}"
         filename = out_path.name
         idem_key = f"{self.session_id:08x}-{file_hex}" if self.session_id is not None else file_hex
         vad_status = "disabled"
@@ -532,16 +533,11 @@ class CheckpointClient:
                 await asyncio.sleep(wait_s)
         raise RuntimeError(f"Reconnect failed: {last}")
 
-    @staticmethod
-    def _is_link_drop(message: str) -> bool:
-        msg = message.lower()
-        return "not connected" in msg or "disconnected" in msg or "was not found" in msg
-
     async def _hello_exchange(self, label: str) -> str:
         """Send one HELLO and wait for the result.
 
-        Returns 'acked', 'error', or 'reconnected' (link dropped; already
-        reconnected with retries). Raises on timeout or unexpected failure.
+        Returns 'acked' or 'error'. Never reconnects: supervise_link() is the
+        only reconnect owner. Rebond/pairing decisions stay in do_handshake.
         """
         self.hello_acked.clear()
         self.error_event.clear()
@@ -551,20 +547,12 @@ class CheckpointClient:
         try:
             await self.write_ctrl(cfg.PKT_HELLO, seq)
         except Exception as e:
-            if self._is_link_drop(str(e)):
-                print(f"  link dropped ({e}) — reconnecting ...")
-                await self._connect_with_retry()
-                return "reconnected"
-            raise
+            raise ConnectionError(f"HELLO write failed: {e}") from e
         try:
             await asyncio.wait_for(self._wait_for_handshake_result(),
                                    timeout=cfg.ACK_TIMEOUT_S)
         except asyncio.TimeoutError:
-            # Device drops un-handshaked links after BLE_HANDSHAKE_TIMEOUT_MS:
-            # a timeout usually means the link is already gone, not a slow peer.
-            print("  HELLO timed out — link may have dropped, reconnecting ...")
-            await self._connect_with_retry()
-            return "reconnected"
+            raise ConnectionError("HELLO timed out") from None
         return "acked" if self.hello_acked.is_set() else "error"
 
     def _print_handshake_complete(self):
@@ -601,8 +589,6 @@ class CheckpointClient:
         settled = False
         for attempt in range(7):
             outcome = await self._hello_exchange(f"attempt {attempt + 1}/7")
-            if outcome == "reconnected":
-                continue
             if outcome == "acked":
                 await self._send_ready()
                 self._print_handshake_complete()
@@ -764,7 +750,7 @@ class CheckpointClient:
                               struct.pack("<I", self.session_id or 0))
 
     def _part_paths(self, file_id: int):
-        hex8 = f"{file_id:08x}"
+        hex8 = f"{file_id:016x}"
         return (cfg.OUTPUT_DIR / f"file_{hex8}.part",
                 cfg.OUTPUT_DIR / f"file_{hex8}.part.json")
 
@@ -847,6 +833,8 @@ class CheckpointClient:
             _part, side = self._part_paths(file_id)
             if self._part_fh is not None:
                 self._part_fh.flush()
+                # Survive laptop power loss, not just process exit.
+                os.fsync(self._part_fh.fileno())
             side.write_text(json.dumps({
                 "crc": f"{file_crc:08x}", "total": total,
                 "total_frags": total_frags,
@@ -877,16 +865,16 @@ class CheckpointClient:
 
     async def _handle_announce_locked(self, pkt: Packet):
         p = pkt.payload
-        if len(p) < 17:
+        if len(p) < 21:
             print("  [!] FILE_ANNOUNCE payload too short")
             return
         total = struct.unpack("<I", p[1:5])[0]
         total_frags = struct.unpack("<H", p[5:7])[0]
         file_crc = struct.unpack("<I", p[7:11])[0]
         device_start_seq = struct.unpack("<H", p[11:13])[0]
-        file_id = struct.unpack("<I", p[13:17])[0]
+        file_id = struct.unpack("<Q", p[13:21])[0]
         print(f"  FILE_ANNOUNCE: total={total}B frags={total_frags} "
-              f"crc={file_crc:#010x} file_id={file_id:#010x} "
+              f"crc={file_crc:#010x} file_id={file_id:#018x} "
               f"device_offered_resume={device_start_seq}")
 
         key = None
@@ -906,7 +894,7 @@ class CheckpointClient:
                 resume_from = total_frags
                 self.current_file.received_frags = set(range(total_frags))
                 self.current_file.contig_seq = total_frags - 1
-                print(f"  [resume] {file_id:08x} already completed — confirming")
+                print(f"  [resume] {file_id:016x} already completed — confirming")
             else:
                 resume_from, part_bytes, received = self._load_resume_state(
                     file_id, file_crc, total, total_frags)
@@ -918,7 +906,7 @@ class CheckpointClient:
                     while contig + 1 in self.current_file.received_frags:
                         contig += 1
                     self.current_file.contig_seq = contig
-                    print(f"  [resume] {file_id:08x} continuing at {resume_from}/{total_frags}")
+                    print(f"  [resume] {file_id:016x} continuing at {resume_from}/{total_frags}")
                 else:
                     self.current_file.contig_seq = -1
                     self._discard_part(file_id)
@@ -932,7 +920,7 @@ class CheckpointClient:
             print("  [!] ANNOUNCE_ACK write failed — keeping state for firmware retry")
             return
         print(f"  -> FILE_ANNOUNCE_ACK sent (resume_from={resume_from})")
-        self._emit({"type": "announce", "file_id": f"{file_id:08x}",
+        self._emit({"type": "announce", "file_id": f"{file_id:016x}",
                     "total_bytes": total, "total_frags": total_frags})
 
     async def _handle_data_packet(self, pkt: Packet):
@@ -971,7 +959,7 @@ class CheckpointClient:
                 n = len(f.received_frags)
                 if n % 20 == 0 or n == f.total_frags:
                     print(f"  progress: {n}/{f.total_frags} fragments")
-                    self._emit({"type": "progress", "file_id": f"{f.file_id:08x}",
+                    self._emit({"type": "progress", "file_id": f"{f.file_id:016x}",
                                 "received": n, "total_frags": f.total_frags})
                 # Cumulative ACK: highest contiguous seq, at least once per 8-frag window.
                 contig = f.contig_seq
@@ -991,12 +979,12 @@ class CheckpointClient:
 
     async def _handle_file_done_locked(self, pkt: Packet):
         p = pkt.payload
-        if len(p) < 12:
+        if len(p) < 16:
             print("  [!] FILE_DONE payload too short")
             return
-        file_id = struct.unpack("<I", p[0:4])[0]
-        file_crc = struct.unpack("<I", p[4:8])[0]
-        total = struct.unpack("<I", p[8:12])[0]
+        file_id = struct.unpack("<Q", p[0:8])[0]
+        file_crc = struct.unpack("<I", p[8:12])[0]
+        total = struct.unpack("<I", p[12:16])[0]
 
         f = self.current_file
         ok = False
@@ -1012,20 +1000,20 @@ class CheckpointClient:
             if not ok and self._completed_ok(file_id, file_crc, total):
                 # Duplicate FILE_DONE for an already-verified file (the
                 # success ACK was lost). Re-ACK without re-saving.
-                print(f"  duplicate FILE_DONE for completed {file_id:08x} — re-ACKing")
+                print(f"  duplicate FILE_DONE for completed {file_id:016x} — re-ACKing")
                 ok = True
                 from_cache = True
             if ok and not from_cache:
                 cfg.OUTPUT_DIR.mkdir(exist_ok=True)
                 ext = ".ogg" if data[:4] == b"OggS" else ".wav"
                 is_ogg = (ext == ".ogg")
-                out_path = cfg.OUTPUT_DIR / f"file_{file_id:08x}{ext}"
-                meta_path = cfg.OUTPUT_DIR / f"file_{file_id:08x}.json"
+                out_path = cfg.OUTPUT_DIR / f"file_{file_id:016x}{ext}"
+                meta_path = cfg.OUTPUT_DIR / f"file_{file_id:016x}.json"
                 out_path.write_bytes(data)
                 print(f"  File complete and CRC verified -> {out_path} ({total} bytes)")
                 try:
                     meta_path.write_text(json.dumps({
-                        "file_id": f"{file_id:08x}", "total": total,
+                        "file_id": f"{file_id:016x}", "total": total,
                         "total_frags": f.total_frags,
                         "expected_crc": f"{file_crc:08x}",
                         "actual_crc": f"{actual_crc:08x}",
@@ -1081,7 +1069,7 @@ class CheckpointClient:
                                 ingest_status=ingest_init_status, vad_status=vad_init_status)
         except Exception as e:
             print(f"  [!] bench finalize failed: {e}")
-        self._emit({"type": "file_done", "file_id": f"{file_id:08x}",
+        self._emit({"type": "file_done", "file_id": f"{file_id:016x}",
                     "crc_ok": ok, "total_bytes": total,
                     "ingest_status": ingest_init_status, "vad_status": vad_init_status})
 
@@ -1119,13 +1107,25 @@ async def supervise_link(client, *, log, is_stopped, on_ready=None,
     while not is_stopped():
         client.link_lost.clear()
         try:
+            # Physical link and application handshake are separate states:
+            # a fresh link always needs a handshake; a live link whose
+            # handshake failed must re-handshake instead of being trusted.
             if not (client.client and client.client.is_connected):
                 await client.connect()
                 await client.do_handshake()
+            elif client.link_state != "up":
+                await client.do_handshake()
+            if not (client.client and client.client.is_connected):
+                raise ConnectionError("Link dropped during handshake")
             client.link_lost.clear()  # drop stale signals once handshake is good
         except asyncio.CancelledError:
             raise
         except Exception as e:
+            client.link_state = "down"
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
             log(f"connect failed: {e} — retry in {delay:.0f}s ...")
             delay = min(delay * 2.0, max_delay)
             if await _sleep_or_stopped(is_stopped, delay):

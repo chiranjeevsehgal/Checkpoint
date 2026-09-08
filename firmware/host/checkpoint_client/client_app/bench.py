@@ -82,7 +82,7 @@ class BenchRecorder:
         rtts = sorted(self._rtts)
         row = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "file_id": f"{self._file_meta['file_id']:08x}",
+            "file_id": f"{self._file_meta['file_id']:016x}",
             "total_bytes": total,
             "total_frags": self._file_meta["total_frags"],
             "mtu": mtu or 0,

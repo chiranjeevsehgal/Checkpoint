@@ -119,23 +119,26 @@ bool crypto_decrypt(const uint8_t nonce[CRYPTO_NONCE_BYTES], const uint8_t *ciph
   return rc == 0;
 }
 
-void crypto_build_nonce(uint32_t session_id, uint32_t file_id, uint16_t seq, uint8_t out[CRYPTO_NONCE_BYTES]) {
-  // NONCE INVARIANT: (session_id, file_id, seq) must be unique per key.
-  // Retries reuse same nonce only because plaintext is identical; do not
-  // re-encrypt different data with the same tuple.
-  memset(out, 0, CRYPTO_NONCE_BYTES);
-  out[0] = session_id & 0xFF;
-  out[1] = (session_id >> 8) & 0xFF;
-  out[2] = (session_id >> 16) & 0xFF;
-  out[3] = (session_id >> 24) & 0xFF;
-  out[4] = file_id & 0xFF;
-  out[5] = (file_id >> 8) & 0xFF;
-  out[6] = (file_id >> 16) & 0xFF;
-  out[7] = (file_id >> 24) & 0xFF;
-  out[8] = seq & 0xFF;
-  out[9] = (seq >> 8) & 0xFF;
-  out[10] = 0xA5;
-  out[11] = 0x5A;
+void crypto_build_nonce(uint32_t session_id, uint64_t file_uid, uint16_t seq, uint8_t out[CRYPTO_NONCE_BYTES]) {
+  // NONCE INVARIANT: (session_id, file_uid, seq) must be unique per key.
+  // Deterministic 96-bit digest of the tuple (v2: uid is 64-bit, so the raw
+  // tuple no longer fits 12 bytes). Retries reuse the same nonce only
+  // because the plaintext is identical.
+  static const char kDom[] = "checkpoint-nonce-v1";
+  uint8_t msg[19 + 4 + 8 + 2];
+  memcpy(msg, kDom, 19);
+  msg[19] = session_id & 0xFF;
+  msg[20] = (session_id >> 8) & 0xFF;
+  msg[21] = (session_id >> 16) & 0xFF;
+  msg[22] = (session_id >> 24) & 0xFF;
+  for (int i = 0; i < 8; i++) msg[23 + i] = (uint8_t)((file_uid >> (i * 8)) & 0xFF);
+  msg[31] = seq & 0xFF;
+  msg[32] = (seq >> 8) & 0xFF;
+  uint8_t hash[32];
+  mbedtls_sha256(msg, sizeof(msg), hash, 0);
+  memcpy(out, hash, CRYPTO_NONCE_BYTES);
+  memset(msg, 0, sizeof(msg));
+  memset(hash, 0, sizeof(hash));
 }
 
 static void hmac_sha256(const uint8_t *key, size_t key_len,
@@ -182,21 +185,18 @@ bool crypto_hkdf_sha256(const uint8_t *salt, size_t salt_len,
   return true;
 }
 
-bool crypto_derive_file_key(const uint8_t master_key[CRYPTO_KEY_BYTES], uint32_t session_id, uint32_t file_id, uint8_t out[CRYPTO_KEY_BYTES]) {
+bool crypto_derive_file_key(const uint8_t master_key[CRYPTO_KEY_BYTES], uint32_t session_id, uint64_t file_uid, uint8_t out[CRYPTO_KEY_BYTES]) {
   // RFC 5869 HKDF-SHA256, domain-separated from the session key below.
   // NOTE: callers pass the per-session key received in HELLO_ACK, whose own
   // derivation uses a different info string, so domains never collide.
   static const char kInfo[] = "checkpoint-file-v1";
-  uint8_t info[sizeof(kInfo) - 1 + 8];
+  uint8_t info[sizeof(kInfo) - 1 + 4 + 8];
   memcpy(info, kInfo, sizeof(kInfo) - 1);
   info[18] = session_id & 0xFF;
   info[19] = (session_id >> 8) & 0xFF;
   info[20] = (session_id >> 16) & 0xFF;
   info[21] = (session_id >> 24) & 0xFF;
-  info[22] = file_id & 0xFF;
-  info[23] = (file_id >> 8) & 0xFF;
-  info[24] = (file_id >> 16) & 0xFF;
-  info[25] = (file_id >> 24) & 0xFF;
+  for (int i = 0; i < 8; i++) info[22 + i] = (uint8_t)((file_uid >> (i * 8)) & 0xFF);
   uint8_t okm[CRYPTO_KEY_BYTES];
   bool ok = crypto_hkdf_sha256(nullptr, 0, master_key, CRYPTO_KEY_BYTES,
                                info, sizeof(info), okm, sizeof(okm));
