@@ -177,8 +177,54 @@ services:
         condition: service_healthy
     environment:
       KAFKA_TOPIC_TRANSCRIPTION: ${KAFKA_TOPIC_TRANSCRIPTION:-transcription.jobs.v1}
+      KAFKA_TOPIC_EMBEDDING: ${KAFKA_TOPIC_EMBEDDING:-embedding.jobs.v1}
+      KAFKA_TOPIC_EXTRACTION: ${KAFKA_TOPIC_EXTRACTION:-extraction.jobs.v1}
     command: >
       /bin/bash -c "
       /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_TRANSCRIPTION} --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
       /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_TRANSCRIPTION}.dlq --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_EMBEDDING} --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_EMBEDDING}.dlq --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_EXTRACTION} --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_EXTRACTION}.dlq --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
       "
+
+  transcription-migrate:
+    build:
+      context: ./transcription-service
+      target: migrate
+    container_name: transcription-migrate
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+
+  transcription:
+    build:
+      context: ./transcription-service
+      target: worker
+    container_name: transcription
+    networks:
+      - backend
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      transcription-migrate:
+        condition: service_completed_successfully
+    environment:
+      CONFIG_PATH: /app/config.yaml
+      KAFKA_BROKERS: kafka:9092
+      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      POSTGRES_DSN: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    restart: unless-stopped
