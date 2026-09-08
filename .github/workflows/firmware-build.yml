@@ -1,0 +1,36 @@
+name: firmware-build
+
+on:
+  push:
+    paths:
+      - "firmware/checkpoint/**"
+      - ".github/workflows/firmware-build.yml"
+  pull_request:
+    paths:
+      - "firmware/checkpoint/**"
+      - ".github/workflows/firmware-build.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 core and libraries
+        run: |
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32@3.3.11
+          arduino-cli lib install "ArduinoJson@7.4.3" "NimBLE-Arduino@2.5.1" "Adafruit NeoPixel@1.15.5" "PCMFlow@0.2.1" "PCMFlowOpus@0.2.0"
+
+      - name: Compile checkpoint (ESP32-S3 16M)
+        run: |
+          arduino-cli compile --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=opi,CDCOnBoot=default,USBMode=hwcdc,FlashMode=qio,UploadSpeed=921600" "firmware/checkpoint" --output-dir "firmware/checkpoint/build"
+
+      - name: Upload flash-ready build
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkpoint-firmware-${{ github.sha }}
+          path: firmware/checkpoint/build
+          retention-days: 30
