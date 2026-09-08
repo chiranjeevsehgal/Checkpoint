@@ -147,7 +147,9 @@ class CheckpointClient:
                                     meta_path: Path, file_id: int):
         file_hex = f"{file_id:016x}"
         filename = out_path.name
-        idem_key = f"{self.session_id:08x}-{file_hex}" if self.session_id is not None else file_hex
+        # Stable identity is the 64-bit file UID: session ids change per
+        # reconnect, so the backend can deduplicate re-uploads.
+        idem_key = file_hex
         vad_status = "disabled"
         vad_speech = 0.0
         if self.vad_enabled:
@@ -1009,7 +1011,11 @@ class CheckpointClient:
                 is_ogg = (ext == ".ogg")
                 out_path = cfg.OUTPUT_DIR / f"file_{file_id:016x}{ext}"
                 meta_path = cfg.OUTPUT_DIR / f"file_{file_id:016x}.json"
-                out_path.write_bytes(data)
+                # Durable before FILE_DONE_ACK: the ACK means stored, not cached.
+                with open(out_path, "wb") as fh:
+                    fh.write(data)
+                    fh.flush()
+                    os.fsync(fh.fileno())
                 print(f"  File complete and CRC verified -> {out_path} ({total} bytes)")
                 try:
                     meta_path.write_text(json.dumps({
@@ -1117,7 +1123,6 @@ async def supervise_link(client, *, log, is_stopped, on_ready=None,
                 await client.do_handshake()
             if not (client.client and client.client.is_connected):
                 raise ConnectionError("Link dropped during handshake")
-            client.link_lost.clear()  # drop stale signals once handshake is good
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -1138,7 +1143,14 @@ async def supervise_link(client, *, log, is_stopped, on_ready=None,
                 await on_ready()
         if on_alive is not None:
             await on_alive()
-        while not is_stopped() and not client.link_lost.is_set():
+        # A disconnect between handshake and here must not be erased: never
+        # clear link_lost except at the top of the cycle.
+        while not is_stopped():
+            if client.link_lost.is_set():
+                break
+            if not (client.client and client.client.is_connected):
+                client.link_lost.set()
+                break
             await asyncio.sleep(0.5)
             if tick is not None:
                 await tick()

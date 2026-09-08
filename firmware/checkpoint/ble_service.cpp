@@ -298,10 +298,9 @@ uint16_t ble_conn_interval_ms() {
 }
 
 uint16_t ble_mtu_negotiated() {
-  if (!s_connected || s_conn_handle == 0xFFFF || !s_server) return BLE_MTU;
+  if (!s_connected || s_conn_handle == 0xFFFF || !s_server) return 0;
   NimBLEConnInfo info = s_server->getPeerInfoByHandle(s_conn_handle);
-  uint16_t mtu = info.getMTU();
-  return mtu ? mtu : BLE_MTU;
+  return info.getMTU(); // 0 = unknown: host must refuse transfer, not assume
 }
 
 uint8_t ble_phy() {

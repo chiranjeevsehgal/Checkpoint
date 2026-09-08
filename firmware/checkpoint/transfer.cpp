@@ -58,7 +58,15 @@ static void file_note_failure(const String &path) {
     if (s_cool[i].path == path) { slot = i; break; }
     if (slot < 0 && s_cool[i].path.length() == 0) slot = i;
   }
-  if (slot < 0) slot = 0; // table full: reuse oldest slot, still bounded
+  if (slot < 0) {
+    // Table full: evict the entry expiring earliest.
+    slot = 0;
+    for (int i = 1; i < 8; i++) {
+      if ((int32_t)(s_cool[i].until_ms - s_cool[slot].until_ms) < 0) slot = i;
+    }
+    // A different file takes this slot: fresh failure history.
+    if (s_cool[slot].path != path) s_cool[slot].fails = 0;
+  }
   s_cool[slot].path = path;
   if (s_cool[slot].fails < 255) s_cool[slot].fails++;
   s_cool[slot].until_ms = millis() + cool_delay_ms(s_cool[slot].fails);

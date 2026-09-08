@@ -340,6 +340,50 @@ def test_supervisor_rehandshakes_live_unready_link():
 
 
 @needs_deps
+def test_supervisor_keeps_disconnect_between_handshake_and_wait():
+    import asyncio
+
+    from client_app.ble_client import CheckpointClient, supervise_link
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    connects = []
+
+    class FakeConnected:
+        is_connected = True
+
+    async def fake_connect():
+        connects.append(1)
+        client.client = FakeConnected()
+
+    async def fake_handshake():
+        client.link_state = "up"
+        # Bluetooth drops after handshake but before the steady-state wait.
+        client.link_lost.set()
+        client.client = None
+
+    async def fake_disconnect():
+        client.client = None
+
+    client.connect = fake_connect
+    client.do_handshake = fake_handshake
+    client.disconnect = fake_disconnect
+    stopped = [False]
+
+    async def run():
+        async def stopper():
+            await asyncio.sleep(2.0)
+            stopped[0] = True
+
+        await asyncio.gather(
+            supervise_link(client, log=lambda m: None,
+                           is_stopped=lambda: stopped[0],
+                           base_delay=0.1, max_delay=0.2),
+            stopper())
+
+    asyncio.run(run())
+    assert len(connects) >= 2, "erased disconnect must still trigger reconnect"
+
+
+@needs_deps
 def test_connect_with_retry_recovers():
     import asyncio
 

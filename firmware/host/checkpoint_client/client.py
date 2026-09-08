@@ -829,7 +829,12 @@ class CheckpointClient:
                 ext = ".ogg" if data[:4] == b"OggS" else ".wav"
                 # Prefer .ogg for new 16k Opus (100KB/50s), .wav for legacy PCM
                 out_path = OUTPUT_DIR / f"file_{file_id:016x}{ext}"
-                out_path.write_bytes(data)
+                out_path.parent.mkdir(exist_ok=True)
+                # Durable before FILE_DONE_ACK: the ACK means stored, not cached.
+                with open(out_path, "wb") as fh:
+                    fh.write(data)
+                    fh.flush()
+                    os.fsync(fh.fileno())
                 print(f"  ✓ File complete and CRC verified -> {out_path} ({total} bytes)")
                 # also write bench meta json alongside wav
                 try:
@@ -926,7 +931,6 @@ async def main():
                     await client.do_handshake()
                 if not (client.client and client.client.is_connected):
                     raise ConnectionError("Link dropped during handshake")
-                client.link_lost.clear()
             except Exception as e:
                 client.link_state = "down"
                 try:
@@ -939,7 +943,15 @@ async def main():
                 continue
             delay = 1.0
             print("\nListening for file transfers. Press Ctrl+C to stop.\n")
-            await client.link_lost.wait()
+            # Never clear link_lost here: a disconnect between handshake and
+            # this loop must not be erased.
+            while True:
+                if client.link_lost.is_set():
+                    break
+                if not (client.client and client.client.is_connected):
+                    client.link_lost.set()
+                    break
+                await asyncio.sleep(0.5)
             print("link lost — reconnecting ...")
             try:
                 await client.disconnect()
