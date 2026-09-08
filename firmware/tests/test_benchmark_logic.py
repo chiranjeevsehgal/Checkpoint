@@ -7,7 +7,7 @@ Covers:
   transfer.cpp bench instrumentation presence
   checkpoint.ino bench dump presence
   ble_service helpers
-  client.py MTU_OVERHEAD + resume prefill + bench csv + duplicate tracking
+  client.py MTU_OVERHEAD + resume restart + bench csv + duplicate tracking
   benchmark_capture.py existence + arg handling
   goodput / RTT / csv math
   failure/empty/boundary cases
@@ -87,19 +87,18 @@ def test_ble_helpers():
 
 def test_client_mtu_overhead():
     assert "MTU_OVERHEAD" in SRC_CLIENT, "MTU_OVERHEAD missing — T5"
-    # backward compat string for old test_client_logic grep
-    assert "mtu - 27" in SRC_CLIENT or "mtu-27" in SRC_CLIENT, "legacy mtu - 27 string must remain for compatibility"
+    # Protocol v1: frag pinned at 220, MTU below MIN_MTU_REQUIRED refuses transfer
+    assert "MIN_MTU_REQUIRED" in SRC_CLIENT, "MTU floor missing"
     assert "MTU_OVERHEAD = PROTO_HEADER" in SRC_CLIENT, "MTU_OVERHEAD must derive from PROTO_HEADER"
-    assert "mtu - MTU_OVERHEAD" in SRC_CLIENT, "derived must use MTU_OVERHEAD"
     print("PASS client_mtu_overhead")
 
 
 def test_client_resume_prefill():
-    assert "resume_from = device_start_seq" in SRC_CLIENT, "resume_from calc missing"
-    assert "bytearray(resume_from * self.frag_size)" in SRC_CLIENT, "resume prefill buffer missing"
-    assert "set(range(resume_from))" in SRC_CLIENT, "resume prefill set missing"
-    assert "resume prefill" in SRC_CLIENT, "log line for resume prefill expected"
-    print("PASS resume_prefill")
+    # Phase 7: resume only from bytes actually on disk (.part + sidecar).
+    assert "_load_resume_state" in SRC_CLIENT, "disk-backed resume loader missing"
+    assert "bytearray(resume_from *" not in SRC_CLIENT, "zero-prefill must be gone"
+    assert "_completed_ok" in SRC_CLIENT, "completed-file confirmation missing"
+    print("PASS resume_from_disk")
 
 
 def test_client_bench_csv():
@@ -117,7 +116,7 @@ def test_client_bench_csv():
 def test_client_duplicate_and_decrypt_fail():
     assert "_bench_duplicates" in SRC_CLIENT, "duplicates counter missing"
     assert "_bench_decrypt_fail" in SRC_CLIENT, "decrypt_fail counter missing"
-    assert "if seq in self.current_file.received_frags" in SRC_CLIENT, "duplicate check missing"
+    assert "if seq in f.received_frags" in SRC_CLIENT, "duplicate check missing"
     assert "self._bench_decrypt_fail += 1" in SRC_CLIENT, "decrypt fail inc missing"
     print("PASS duplicate_decrypt")
 

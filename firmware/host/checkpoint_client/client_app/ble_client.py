@@ -78,10 +78,19 @@ class CheckpointClient:
         self.current_file: IncomingFile | None = None
         self.file_done_event = asyncio.Event()
         self.announce_event = asyncio.Event()
+        self.link_lost = asyncio.Event()
+        self.link_lost.set()  # no link yet; supervisor clears on each cycle
+        self.link_state = "down"
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self.completed: dict[int, dict] = {}
+        self._part_fh = None
+        self._part_id: int | None = None
         self._seq_gen = 1
         self._ctrl_pending: dict[int, asyncio.Future] = {}
         self._data_lock = asyncio.Lock()
         self._ack_lock = asyncio.Lock()
+        self._ctrl_tx_lock = asyncio.Lock()
+        self._file_state_lock = asyncio.Lock()
 
         self.ingest_enabled = ingest_enabled
         self.ingest_delete_after = ingest_delete_after
@@ -117,6 +126,8 @@ class CheckpointClient:
     def next_seq(self) -> int:
         seq = self._seq_gen
         self._seq_gen = (self._seq_gen + 1) & 0xFFFF
+        if self._seq_gen == 0:
+            self._seq_gen = 1  # 0 is reserved for unsolicited STATUS pushes
         return seq
 
     def _emit(self, evt: dict):
@@ -239,16 +250,17 @@ class CheckpointClient:
 
     async def connect(self):
         print(f"Connecting to {self.address} ...")
-        self.client = BleakClient(self.address)
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
+        self.client = BleakClient(self.address,
+                                  disconnected_callback=self._on_link_lost)
         await self.client.connect()
         print(f"Connected. is_connected={self.client.is_connected} address={self.address}")
-        print("Pairing (if required by OS)...")
-        try:
-            paired = await self.client.pair()
-            print(f"  pair() returned {paired} is_connected={self.client.is_connected}")
-        except Exception as e:
-            print(f"  (pair() call skipped/handled by OS: {e}) "
-                  f"is_connected={self.client.is_connected if self.client else 'no-client'}")
+        # Pairing is on demand: HELLO first, pair() only if the device
+        # reports 0x01 not-encrypted (see do_handshake).
+        print("Pairing on demand (only if device reports 0x01) ...")
         await self._log_windows_bond_state_async()
         await self.client.start_notify(cfg.CTRL_UUID, self._on_ctrl_indicate)
         await self.client.start_notify(cfg.DATA_UUID, self._on_data_notify)
@@ -283,6 +295,30 @@ class CheckpointClient:
     async def disconnect(self):
         if self.client and self.client.is_connected:
             await self.client.disconnect()
+
+    def _on_link_lost(self, _client=None):
+        # Bleak may call this off the event loop (WinRT thread) — hop to it.
+        if self._loop is not None:
+            try:
+                self._loop.call_soon_threadsafe(self._handle_link_lost)
+                return
+            except RuntimeError:
+                pass
+        self._handle_link_lost()
+
+    def _handle_link_lost(self):
+        self.link_state = "down"
+        for fut in list(self._ctrl_pending.values()):
+            if not fut.done():
+                try:
+                    fut.set_exception(ConnectionError("BLE disconnected"))
+                except Exception:
+                    pass
+        self._ctrl_pending.clear()
+        self.hello_acked.clear()
+        self.error_event.clear()
+        self.link_lost.set()
+        self._emit({"type": "link", "state": "down"})
 
     async def disconnect_graceful(self, wait_pending_s: float = 10.0):
         try:
@@ -319,19 +355,26 @@ class CheckpointClient:
             pass
 
     async def write_ctrl(self, ptype: int, seq: int, payload: bytes = b""):
-        await self.client.write_gatt_char(cfg.CTRL_UUID, proto_build(ptype, seq, payload),
-                                          response=True)
+        async with self._ctrl_tx_lock:
+            await self.client.write_gatt_char(cfg.CTRL_UUID, proto_build(ptype, seq, payload),
+                                              response=True)
 
-    async def write_ack(self, ptype: int, seq: int, payload: bytes = b""):
+    async def write_ack(self, ptype: int, seq: int, payload: bytes = b"",
+                        required: bool = False) -> bool:
         pkt = proto_build(ptype, seq, payload)
         async with self._ack_lock:
             try:
                 await self.client.write_gatt_char(cfg.ACK_UUID, pkt, response=False)
+                return True
             except Exception as e:
                 try:
                     await self.client.write_gatt_char(cfg.ACK_UUID, pkt, response=True)
+                    return True
                 except Exception as e2:
                     print(f"  [!] ACK write failed seq={seq}: {e} / {e2}")
+                    if required:
+                        print("  [!] critical ACK lost (announce/done) — state kept")
+                    return False
 
     def _ctrl_complete(self, seq: int, result):
         fut = self._ctrl_pending.pop(seq, None)
@@ -525,6 +568,8 @@ class CheckpointClient:
         return "acked" if self.hello_acked.is_set() else "error"
 
     def _print_handshake_complete(self):
+        self.link_state = "up"
+        self._emit({"type": "link", "state": "up"})
         print(f"Handshake complete. session_id={self.session_id:#010x}, "
               f"mtu={self.mtu} chunk_sec={self.chunk_sec} frag_size={self.frag_size}, "
               f"key={'present' if self.master_key else 'ABSENT (unencrypted transfer!)'}")
@@ -559,12 +604,14 @@ class CheckpointClient:
             if outcome == "reconnected":
                 continue
             if outcome == "acked":
+                await self._send_ready()
                 self._print_handshake_complete()
                 return
             if self.last_error == 0x01 and attempt < 6:
                 if not settled:
                     settled = True
                     if await self._settle_for_encryption():
+                        await self._send_ready()
                         return
                 if self.auto_rebond and not rebonded and attempt >= 1:
                     print("  HELLO rejected (0x01) persists after pair() — "
@@ -612,8 +659,10 @@ class CheckpointClient:
         print(f"<- ctrl {name} seq={pkt.seq} len={len(pkt.payload)}")
 
         if pkt.type == cfg.PKT_HELLO_ACK:
-            self._parse_hello_ack(pkt.payload)
-            self.hello_acked.set()
+            if self._parse_hello_ack(pkt.payload):
+                self.hello_acked.set()
+            else:
+                self.error_event.set()
 
         elif pkt.type == cfg.PKT_FILE_ANNOUNCE:
             await self._handle_announce(pkt)
@@ -682,32 +731,151 @@ class CheckpointClient:
                 f"0x{code:02x}" if code is not None else "empty"
             print(f"  [!] Device PKT_ERROR: {detail} payload={pkt.payload!r}")
 
-    def _parse_hello_ack(self, payload: bytes):
+    def _parse_hello_ack(self, payload: bytes) -> bool:
         if len(payload) < 11:
             print("  [!] HELLO_ACK payload too short")
-            return
+            return False
         proto_ver = payload[0]
         if proto_ver != cfg.PROTO_VER:
             print(f"  [!] HELLO_ACK proto_ver mismatch device={proto_ver} client={cfg.PROTO_VER}")
+            return False
         self.session_id = struct.unpack("<I", payload[1:5])[0]
         self.mtu = struct.unpack("<H", payload[5:7])[0]
         self.chunk_sec = struct.unpack("<I", payload[7:11])[0]
-        if self.mtu:
-            derived = self.mtu - cfg.MTU_OVERHEAD
-            self.frag_size = min(cfg.BLE_FRAG_SIZE_GUESS, derived) if derived > 0 \
-                else cfg.BLE_FRAG_SIZE_GUESS
-        else:
-            self.frag_size = cfg.BLE_FRAG_SIZE_GUESS
+        # Protocol v1: fragment size is fixed at 220 on both sides (firmware
+        # offsets by BLE_FRAG_SIZE). Deriving it from MTU corrupts offsets.
+        self.frag_size = cfg.BLE_FRAG_SIZE_GUESS
+        if (self.mtu or 0) < cfg.MIN_MTU_REQUIRED:
+            print(f"  [!] Unsupported MTU {self.mtu} (<{cfg.MIN_MTU_REQUIRED}); refusing transfer")
+            return False
         print(f"  proto_ver={proto_ver} mtu={self.mtu} chunk_sec={self.chunk_sec} "
               f"frag_size={self.frag_size}")
         if len(payload) >= 27:
             self.master_key = payload[11:27]
-            print("  Received AES master key from device.")
+            print("  Received per-session AES key from device.")
         else:
             self.master_key = None
             print("  No key in HELLO_ACK — transfer will be unencrypted or fail.")
+            return False
+        return True
+
+    async def _send_ready(self) -> None:
+        await self.write_ctrl(cfg.PKT_READY, self.next_seq(),
+                              struct.pack("<I", self.session_id or 0))
+
+    def _part_paths(self, file_id: int):
+        hex8 = f"{file_id:08x}"
+        return (cfg.OUTPUT_DIR / f"file_{hex8}.part",
+                cfg.OUTPUT_DIR / f"file_{hex8}.part.json")
+
+    def _close_part(self):
+        fh = self._part_fh
+        self._part_fh = None
+        self._part_id = None
+        if fh is not None:
+            try:
+                fh.close()
+            except Exception:
+                pass
+
+    def _discard_part(self, file_id: int):
+        self._close_part()
+        part, side = self._part_paths(file_id)
+        for path in (part, side):
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    def _open_part(self, file_id: int, total: int):
+        self._close_part()
+        try:
+            cfg.OUTPUT_DIR.mkdir(exist_ok=True)
+            part, _side = self._part_paths(file_id)
+            if not part.exists() or part.stat().st_size != total:
+                with open(part, "wb") as fh:
+                    fh.truncate(total)
+            self._part_fh = open(part, "r+b")
+            self._part_id = file_id
+        except Exception as e:
+            print(f"  [!] part file unavailable: {e} — continuing without resume")
+            self._part_fh = None
+            self._part_id = None
+
+    def _load_resume_state(self, file_id: int, file_crc: int,
+                           total: int, total_frags: int):
+        """Returns (resume_from, part_bytes, received) from a previous attempt.
+
+        Only bytes actually present on disk are trusted — never prefills zeros.
+        """
+        part, side = self._part_paths(file_id)
+        try:
+            meta = json.loads(side.read_text())
+        except Exception:
+            return 0, b"", set()
+        if (meta.get("crc") != f"{file_crc:08x}" or meta.get("total") != total
+                or meta.get("total_frags") != total_frags
+                or meta.get("frag_size") != cfg.BLE_FRAG_SIZE_GUESS):
+            return 0, b"", set()
+        try:
+            part_bytes = part.read_bytes()
+        except Exception:
+            return 0, b"", set()
+        available = len(part_bytes) // cfg.BLE_FRAG_SIZE_GUESS
+        received = {s for s in meta.get("received", [])
+                    if isinstance(s, int) and 0 <= s < total_frags and s < available}
+        contig = -1
+        while contig + 1 in received:
+            contig += 1
+        resume = contig + 1
+        if resume <= 0 or resume >= total_frags:
+            return 0, b"", set()
+        return resume, part_bytes, received
+
+    def _write_part_fragment(self, file_id: int, seq: int, plain: bytes):
+        if self._part_fh is None or self._part_id != file_id:
+            return
+        try:
+            self._part_fh.seek(seq * cfg.BLE_FRAG_SIZE_GUESS)
+            self._part_fh.write(plain)
+        except Exception:
+            self._close_part()
+
+    def _save_part_meta(self, file_id: int, file_crc: int,
+                        total: int, total_frags: int, received: set):
+        try:
+            _part, side = self._part_paths(file_id)
+            if self._part_fh is not None:
+                self._part_fh.flush()
+            side.write_text(json.dumps({
+                "crc": f"{file_crc:08x}", "total": total,
+                "total_frags": total_frags,
+                "frag_size": cfg.BLE_FRAG_SIZE_GUESS,
+                "received": sorted(received),
+            }))
+        except Exception:
+            pass
+
+    def _completed_ok(self, file_id: int, file_crc: int, total: int) -> bool:
+        rec = self.completed.get(file_id)
+        if not rec or rec.get("crc") != f"{file_crc:08x}" or rec.get("size") != total:
+            return False
+        try:
+            return crc32(Path(rec["path"]).read_bytes()) == file_crc
+        except Exception:
+            return False
+
+    def _remember_completed(self, file_id: int, file_crc: int, total: int, path: Path):
+        self.completed[file_id] = {"crc": f"{file_crc:08x}", "size": total,
+                                   "path": str(path)}
+        while len(self.completed) > 16:
+            self.completed.pop(next(iter(self.completed)))
 
     async def _handle_announce(self, pkt: Packet):
+        async with self._file_state_lock:
+            await self._handle_announce_locked(pkt)
+
+    async def _handle_announce_locked(self, pkt: Packet):
         p = pkt.payload
         if len(p) < 17:
             print("  [!] FILE_ANNOUNCE payload too short")
@@ -730,19 +898,39 @@ class CheckpointClient:
             expected_crc=file_crc, key=key, session_id=self.session_id,
             frag_size=self.frag_size)
         self.file_done_event.clear()
-        resume_from = device_start_seq if device_start_seq < total_frags else 0
+        async with self._data_lock:
+            resume_from = 0
+            if total_frags > 0 and device_start_seq == total_frags \
+                    and self._completed_ok(file_id, file_crc, total):
+                # Host already verified this file (lost FILE_DONE_ACK case).
+                resume_from = total_frags
+                self.current_file.received_frags = set(range(total_frags))
+                self.current_file.contig_seq = total_frags - 1
+                print(f"  [resume] {file_id:08x} already completed — confirming")
+            else:
+                resume_from, part_bytes, received = self._load_resume_state(
+                    file_id, file_crc, total, total_frags)
+                if resume_from > 0:
+                    self.current_file.buffer = bytearray(total)
+                    self.current_file.buffer[:len(part_bytes)] = part_bytes
+                    self.current_file.received_frags = set(received)
+                    contig = -1
+                    while contig + 1 in self.current_file.received_frags:
+                        contig += 1
+                    self.current_file.contig_seq = contig
+                    print(f"  [resume] {file_id:08x} continuing at {resume_from}/{total_frags}")
+                else:
+                    self.current_file.contig_seq = -1
+                    self._discard_part(file_id)
+                self._open_part(file_id, total)
         self.bench.reset_file(file_id, total, total_frags, resume_from)
-        if resume_from > 0:
-            self.current_file.buffer = bytearray(resume_from * self.frag_size)
-            self.current_file.received_frags = set(range(resume_from))
-            self.current_file.contig_seq = resume_from - 1
-            print(f"  [bench] resume prefill {resume_from}/{total_frags} fragments "
-                  f"contig={self.current_file.contig_seq}")
-        else:
-            self.current_file.contig_seq = -1
 
-        await self.write_ack(cfg.PKT_FILE_ANNOUNCE_ACK, self.next_seq(),
-                             struct.pack("<HH", pkt.seq, resume_from))
+        sent = await self.write_ack(cfg.PKT_FILE_ANNOUNCE_ACK, self.next_seq(),
+                                    struct.pack("<HH", pkt.seq, resume_from),
+                                    required=True)
+        if not sent:
+            print("  [!] ANNOUNCE_ACK write failed — keeping state for firmware retry")
+            return
         print(f"  -> FILE_ANNOUNCE_ACK sent (resume_from={resume_from})")
         self._emit({"type": "announce", "file_id": f"{file_id:08x}",
                     "total_bytes": total, "total_frags": total_frags})
@@ -752,10 +940,11 @@ class CheckpointClient:
         async with self._data_lock:
             if pkt.type != cfg.PKT_DATA:
                 return
-            if not self.current_file:
+            f = self.current_file
+            if not f:
                 print("  [!] DATA received with no active file — ignoring")
                 return
-            if not self.current_file.key:
+            if not f.key:
                 print("  [!] No key available — cannot decrypt fragment")
                 return
             seq = pkt.seq
@@ -764,36 +953,43 @@ class CheckpointClient:
                 print(f"  [!] DATA fragment too short (seq={seq})")
                 return
             plain = decrypt_fragment(
-                self.current_file.key, self.current_file.session_id,
-                self.current_file.file_id, seq, len(raw) - cfg.CRYPTO_TAG_BYTES, raw)
+                f.key, f.session_id,
+                f.file_id, seq, len(raw) - cfg.CRYPTO_TAG_BYTES, raw)
             if plain is None:
                 self.bench.decrypt_fail += 1
                 # Duplicate cumulative ACK so firmware retransmits the hole.
-                contig = self.current_file.contig_seq
-                if contig >= 0 and len(self.current_file.received_frags) % 8 == 0:
+                contig = f.contig_seq
+                if contig >= 0 and len(f.received_frags) % 8 == 0:
                     ack_seq = contig
                 # Fall through to send below (outside data lock).
             else:
-                if seq in self.current_file.received_frags:
+                if seq in f.received_frags:
                     self.bench.duplicates += 1
-                self.current_file.add_fragment(seq, plain)
+                f.add_fragment(seq, plain)
+                self._write_part_fragment(f.file_id, seq, plain)
                 self.bench.t_send[seq] = time.perf_counter()
-                n = len(self.current_file.received_frags)
-                if n % 20 == 0 or n == self.current_file.total_frags:
-                    print(f"  progress: {n}/{self.current_file.total_frags} fragments")
-                    self._emit({"type": "progress", "file_id": f"{self.current_file.file_id:08x}",
-                                "received": n, "total_frags": self.current_file.total_frags})
+                n = len(f.received_frags)
+                if n % 20 == 0 or n == f.total_frags:
+                    print(f"  progress: {n}/{f.total_frags} fragments")
+                    self._emit({"type": "progress", "file_id": f"{f.file_id:08x}",
+                                "received": n, "total_frags": f.total_frags})
                 # Cumulative ACK: highest contiguous seq, at least once per 8-frag window.
-                contig = self.current_file.contig_seq
+                contig = f.contig_seq
                 if contig >= 0 and (n % 8 == 0 or (contig + 1) % 8 == 0
-                                    or n == self.current_file.total_frags):
+                                    or n == f.total_frags):
                     ack_seq = contig
+                    self._save_part_meta(f.file_id, f.expected_crc, f.total_bytes,
+                                         f.total_frags, f.received_frags)
         if ack_seq is not None:
             await self.write_ack(cfg.PKT_ACK, self.next_seq(),
                                  struct.pack("<HB", ack_seq & 0xFFFF, 0x00))
         self.bench.note_data_arrival()
 
     async def _handle_file_done(self, pkt: Packet):
+        async with self._file_state_lock:
+            await self._handle_file_done_locked(pkt)
+
+    async def _handle_file_done_locked(self, pkt: Packet):
         p = pkt.payload
         if len(p) < 12:
             print("  [!] FILE_DONE payload too short")
@@ -808,11 +1004,18 @@ class CheckpointClient:
         out_path: Path | None = None
         meta_path: Path | None = None
         is_ogg = False
+        from_cache = False
         if f and f.file_id == file_id:
             data = bytes(f.buffer[:total])
             actual_crc = crc32(data)
             ok = (actual_crc == file_crc) and (len(f.received_frags) == f.total_frags)
-            if ok:
+            if not ok and self._completed_ok(file_id, file_crc, total):
+                # Duplicate FILE_DONE for an already-verified file (the
+                # success ACK was lost). Re-ACK without re-saving.
+                print(f"  duplicate FILE_DONE for completed {file_id:08x} — re-ACKing")
+                ok = True
+                from_cache = True
+            if ok and not from_cache:
                 cfg.OUTPUT_DIR.mkdir(exist_ok=True)
                 ext = ".ogg" if data[:4] == b"OggS" else ".wav"
                 is_ogg = (ext == ".ogg")
@@ -847,9 +1050,20 @@ class CheckpointClient:
         else:
             print("  [!] FILE_DONE for unknown/mismatched file_id")
 
-        await self.write_ack(cfg.PKT_FILE_DONE_ACK, self.next_seq(),
-                             struct.pack("<HBBB", pkt.seq, 0x01 if ok else 0x00, 0, 0))
+        sent = await self.write_ack(cfg.PKT_FILE_DONE_ACK, self.next_seq(),
+                                      struct.pack("<HBBB", pkt.seq, 0x01 if ok else 0x00, 0, 0),
+                                      required=True)
+        if not sent:
+            print("  [!] FILE_DONE_ACK write failed — keeping state for firmware retry")
+            return
         print(f"  -> FILE_DONE_ACK sent (status={'ok' if ok else 'fail'})")
+        async with self._data_lock:
+            if ok and out_path is not None:
+                self._remember_completed(file_id, file_crc, total, out_path)
+            if ok:
+                self._discard_part(file_id)  # transfer over: resume state obsolete
+            else:
+                self._close_part()  # keep .part for the firmware retry
         ingest_init_status = ""
         vad_init_status = ""
         if ok and out_path is not None:
@@ -879,8 +1093,62 @@ class CheckpointClient:
             except Exception as e:
                 print(f"  [!] ingest schedule failed: {e}")
 
-        self.current_file = None
+        if self.current_file is f and f.file_id == file_id:
+            self.current_file = None
         self.file_done_event.set()
+
+
+async def _sleep_or_stopped(is_stopped, delay: float) -> bool:
+    waited = 0.0
+    while waited < delay:
+        if is_stopped():
+            return True
+        await asyncio.sleep(0.5)
+        waited += 0.5
+    return is_stopped()
+
+
+async def supervise_link(client, *, log, is_stopped, on_ready=None,
+                         on_alive=None, tick=None,
+                         base_delay: float = 1.0, max_delay: float = 10.0) -> None:
+    """Single reconnect supervisor: connect+handshake, wait for link loss,
+    back off, repeat. Returns when is_stopped() is true. Steady-state
+    reconnect decisions live only here — not in individual call sites."""
+    delay = base_delay
+    ready_once = False
+    while not is_stopped():
+        client.link_lost.clear()
+        try:
+            if not (client.client and client.client.is_connected):
+                await client.connect()
+                await client.do_handshake()
+            client.link_lost.clear()  # drop stale signals once handshake is good
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log(f"connect failed: {e} — retry in {delay:.0f}s ...")
+            delay = min(delay * 2.0, max_delay)
+            if await _sleep_or_stopped(is_stopped, delay):
+                return
+            continue
+        delay = base_delay
+        if not ready_once:
+            ready_once = True
+            if on_ready is not None:
+                await on_ready()
+        if on_alive is not None:
+            await on_alive()
+        while not is_stopped() and not client.link_lost.is_set():
+            await asyncio.sleep(0.5)
+            if tick is not None:
+                await tick()
+        if is_stopped():
+            return
+        log("link lost — reconnecting …")
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
 
 async def find_device(name_or_addr: str | None) -> str:
@@ -985,12 +1253,12 @@ async def cli_async_main() -> None:
         vad_enabled=vad_enabled, vad_model=vad_model,
         vad_threshold=vad_threshold, vad_min_speech_s=vad_min_speech,
         auto_rebond=auto_rebond)
-    await client.connect()
-    await client.do_handshake()
-    print("\nListening for file transfers. Press Ctrl+C to stop.\n")
+    async def _on_alive():
+        print("\nListening for file transfers. Press Ctrl+C to stop.\n")
+
     try:
-        while True:
-            await asyncio.sleep(1)
+        await supervise_link(client, log=print, is_stopped=lambda: False,
+                             on_alive=_on_alive)
     except KeyboardInterrupt:
         print("\nShutting down...")
     finally:

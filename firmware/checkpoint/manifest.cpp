@@ -2,6 +2,7 @@
 #include "sd_manager.h"
 #include <ArduinoJson.h>
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 
 static ManifestEntry *s_entries = nullptr;
 static size_t s_capacity = 0;
@@ -60,6 +61,8 @@ bool manifest_load() {
         s_entries[i].crc = o["crc"] | s_entries[i].crc;
         s_entries[i].next_seq = o["seq"] | s_entries[i].next_seq;
         s_entries[i].size = o["size"] | s_entries[i].size;
+        s_entries[i].uid = o["uid"] | s_entries[i].uid;
+        if (s_entries[i].uid == 0) s_entries[i].uid = esp_random();
         break;
       }
     }
@@ -269,6 +272,8 @@ bool manifest_add_file(const String &path, uint32_t size, uint32_t crc) {
   s_entries[s_count].path = path;
   s_entries[s_count].size = size;
   s_entries[s_count].crc = crc;
+  s_entries[s_count].uid = esp_random();
+  if (s_entries[s_count].uid == 0) s_entries[s_count].uid = 1;
   s_entries[s_count].created_ms = millis();
   s_entries[s_count].pending = true;
   s_entries[s_count].next_seq = 0;
@@ -333,10 +338,27 @@ bool manifest_save() {
     o["path"] = s_entries[i].path;
     o["size"] = s_entries[i].size;
     o["crc"] = s_entries[i].crc;
+    o["uid"] = s_entries[i].uid;
     o["seq"] = s_entries[i].next_seq;
   }
   xSemaphoreGive(s_manifest_mutex);
   String out;
   serializeJson(doc, out);
   return sd_write_atomic(String(REC_MANIFEST), (const uint8_t *)out.c_str(), out.length());
+}
+
+uint32_t manifest_uid_or_generate(const String &path, uint32_t fallback) {
+  if (xSemaphoreTake(s_manifest_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) return fallback;
+  uint32_t uid = fallback;
+  for (size_t i = 0; i < s_count; i++) {
+    if (s_entries[i].path == path) {
+      if (s_entries[i].uid == 0) s_entries[i].uid = esp_random();
+      if (s_entries[i].uid == 0) s_entries[i].uid = 1;
+      uid = s_entries[i].uid;
+      break;
+    }
+  }
+  xSemaphoreGive(s_manifest_mutex);
+  if (uid != fallback) manifest_save();
+  return uid;
 }

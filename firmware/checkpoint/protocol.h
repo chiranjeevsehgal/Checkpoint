@@ -22,7 +22,8 @@ enum PacketType : uint8_t {
   PKT_STORAGE_REQ = 0x24,
   PKT_STORAGE_RESP = 0x25,
   PKT_LIST_REQ = 0x26,
-  PKT_LIST_RESP = 0x27
+  PKT_LIST_RESP = 0x27,
+  PKT_READY = 0x28 // host confirms HELLO_ACK processed; completes handshake
 };
 
 struct Packet {

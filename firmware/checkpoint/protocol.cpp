@@ -107,6 +107,7 @@ const char *proto_type_name(uint8_t type) {
     case PKT_STORAGE_RESP: return "STORAGE_RESP";
     case PKT_LIST_REQ: return "LIST_REQ";
     case PKT_LIST_RESP: return "LIST_RESP";
+    case PKT_READY: return "READY";
     default: return "UNKNOWN";
   }
 }

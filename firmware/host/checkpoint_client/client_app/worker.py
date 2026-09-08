@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import config as cfg
 from .audio_vad import vad_load_model, vad_prewarm
-from .ble_client import CheckpointClient, find_device
+from .ble_client import CheckpointClient, find_device, supervise_link
 
 
 @dataclass
@@ -109,50 +109,58 @@ class BleWorker:
             vad_threshold=settings.threshold, vad_min_speech_s=settings.min_speech_s,
             on_event=self._on_event)
         self.client._gui_bench_csv = self.bench_csv
-        await self.client.connect()
-        await self.client.do_handshake()
         self.stop_evt = asyncio.Event()
-        self._on_status("listening", "green")
-        if self._on_connected is not None:
-            try:
-                self._on_connected()
-            except Exception:
-                pass
-        self._on_log("[gui] listening for file transfers …")
-        try:
-            info = await self.client.req_status()
-            self._on_event({"type": "rec_status", **info})
-        except Exception as e:
-            self._on_log(f"[gui] initial status failed: {e}")
-        try:
-            sinfo = await self.client.req_storage()
-            self._on_event({"type": "storage", **sinfo})
-            linfo = await self.client.req_list(0)
-            self._on_event({"type": "file_list", **linfo})
-        except Exception as e:
-            self._on_log(f"[gui] initial storage load failed: {e}")
-        self._on_log(f"[gui] queue-wait until SUBMITTED (Kafka {cfg.KAFKA_TOPIC_HINT}); "
-                     f"verify: docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh "
-                     f"--topic {cfg.KAFKA_TOPIC_HINT} --bootstrap-server kafka:9092")
-        await self._poll_status_until_stopped()
+        last_poll = [time.monotonic() - cfg.STATUS_POLL_INTERVAL_S]
 
-    async def _poll_status_until_stopped(self) -> None:
-        last_poll = time.monotonic()
-        try:
-            while not self.stop_evt.is_set():
-                await asyncio.sleep(0.5)
-                if time.monotonic() - last_poll < cfg.STATUS_POLL_INTERVAL_S:
-                    continue
-                last_poll = time.monotonic()
-                if self.client is None:
-                    continue
+        async def _first_sync():
+            if self._on_connected is not None:
                 try:
-                    info = await self.client.req_status()
-                    self._on_event({"type": "rec_status", **info})
-                except Exception as e:
-                    self._on_log(f"[gui] status poll failed: {e}")
+                    self._on_connected()
+                except Exception:
+                    pass
+            self._on_log("[gui] listening for file transfers …")
+            try:
+                info = await self.client.req_status()
+                self._on_event({"type": "rec_status", **info})
+            except Exception as e:
+                self._on_log(f"[gui] initial status failed: {e}")
+            try:
+                sinfo = await self.client.req_storage()
+                self._on_event({"type": "storage", **sinfo})
+                linfo = await self.client.req_list(0)
+                self._on_event({"type": "file_list", **linfo})
+            except Exception as e:
+                self._on_log(f"[gui] initial storage load failed: {e}")
+            self._on_log(f"[gui] queue-wait until SUBMITTED (Kafka {cfg.KAFKA_TOPIC_HINT}); "
+                         f"verify: docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh "
+                         f"--topic {cfg.KAFKA_TOPIC_HINT} --bootstrap-server kafka:9092")
+
+        async def _on_alive():
+            self._on_status("listening", "green")
+
+        async def _poll_tick():
+            if self.client is None or self.stop_evt.is_set():
+                return
+            if time.monotonic() - last_poll[0] < cfg.STATUS_POLL_INTERVAL_S:
+                return
+            last_poll[0] = time.monotonic()
+            try:
+                info = await self.client.req_status()
+                self._on_event({"type": "rec_status", **info})
+            except Exception as e:
+                self._on_log(f"[gui] status poll failed: {e}")
+
+        def _is_stopped():
+            return self.stop_evt is not None and self.stop_evt.is_set()
+
+        try:
+            await supervise_link(self.client, log=self._on_log,
+                                 is_stopped=_is_stopped,
+                                 on_ready=_first_sync, on_alive=_on_alive,
+                                 tick=_poll_tick)
         except asyncio.CancelledError:
             pass
+        self._on_status("reconnecting", "amber")
 
     async def disconnect_flow(self) -> None:
         if self.stop_evt is not None:

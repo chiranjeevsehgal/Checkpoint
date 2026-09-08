@@ -66,18 +66,19 @@ def test_output_dir_script_relative():
     print("PASS output_dir_script_relative")
 
 def test_frag_size_derivation_from_mtu():
+    # Protocol v1: frag pinned at 220 both sides; MTU below 241 refuses transfer.
     assert "self.frag_size" in SRC, "frag_size field missing"
     assert "self.mtu" in SRC and "self.chunk_sec" in SRC, "mtu/chunk_sec not persisted"
-    assert "mtu - 27" in SRC, "derived frag_size must be mtu-27 (6 hdr +8 tag +4 crc +3 ATT +4 spare -> 27)"
-    assert "min(BLE_FRAG_SIZE_GUESS" in SRC, "should cap at 220"
-    # boundary: mtu=0 -> fallback 220
-    assert "if mtu:" in SRC, "zero mtu fallback missing"
-    print("PASS frag_size_derivation")
+    assert "self.frag_size = BLE_FRAG_SIZE_GUESS" in SRC, "frag must be pinned at 220"
+    assert "MIN_MTU_REQUIRED" in SRC, "MTU floor missing"
+    print("PASS frag_size_pinned")
 
 def test_incoming_file_uses_frag_size():
     assert "frag_size: int = BLE_FRAG_SIZE_GUESS" in SRC, "IncomingFile frag_size default missing"
     assert "seq * self.frag_size" in SRC, "add_fragment must use instance frag_size"
-    assert "seq * BLE_FRAG_SIZE_GUESS" not in SRC, "old guess constant still used in add_fragment"
+    # add_fragment itself must not use the constant (part-file seek may share the stride)
+    seg = SRC.split("def add_fragment")[1].split("def ")[0]
+    assert "seq * BLE_FRAG_SIZE_GUESS" not in seg, "add_fragment must use instance frag_size"
     print("PASS incoming_file_frag_size")
 
 def test_is_complete_byte_coverage():
@@ -90,9 +91,12 @@ def test_is_complete_byte_coverage():
     print("PASS is_complete_byte_coverage")
 
 def test_resume_honor():
-    assert "device_start_seq if device_start_seq < total_frags else 0" in SRC or "resume_from = device_start_seq" in SRC, "must honor device_start_seq"
+    # Phase 7: resume only from bytes actually on disk (.part + sidecar).
+    assert "_load_resume_state" in SRC, "disk-backed resume loader missing"
+    assert "bytearray(resume_from *" not in SRC, "zero-prefill must be gone"
+    assert "_completed_ok" in SRC, "completed-file confirmation missing"
     assert 'frag_size=self.frag_size' in SRC, "IncomingFile must receive negotiated frag_size"
-    print("PASS resume_honor")
+    print("PASS resume_from_disk")
 
 def test_handshake_error_handling():
     assert "self.error_event" in SRC, "error_event missing"
@@ -124,8 +128,9 @@ def test_handshake_invalid_input():
 
 def test_null_empty_boundary():
     assert "if not pkt:" in SRC, "proto_parse None guard missing in handlers"
-    assert "if not self.current_file:" in SRC, "DATA without file guard missing"
-    assert "if not self.current_file.key:" in SRC, "no-key guard missing"
+    assert "f = self.current_file" in SRC, "DATA must bind file to a local"
+    assert "if not f:" in SRC, "DATA without file guard missing"
+    assert "if not f.key:" in SRC, "no-key guard missing"
     assert "if f and f.file_id == file_id:" in SRC, "FILE_DONE unknown file guard missing"
     # proto_parse empty
     assert "len(data) < PROTO_HEADER + PROTO_CRC" in SRC, "empty packet guard missing"
@@ -145,10 +150,10 @@ def test_protocol_parity():
     print("PASS protocol_parity")
 
 def test_crypto_parity_with_firmware():
-    # derive_file_key must be SHA256(master) -> SHA256(prk+info+0x01)
-    assert "hashlib.sha256(master_key).digest()" in SRC
-    assert 'info + b"\\x01"' in SRC or "info + b\"\\x01\"" in SRC or "+ b\"\\x01\"" in SRC
-    assert "h[:CRYPTO_KEY_BYTES]" in SRC
+    # derive_file_key must be RFC 5869 HKDF-SHA256 (see crypto.cpp/hkdf test vector)
+    assert "hkdf_sha256" in SRC, "HKDF helper missing"
+    assert "hmac.new" in SRC, "HMAC-SHA256 missing"
+    assert '"checkpoint-file-v1"' in SRC or "'checkpoint-file-v1'" in SRC, "domain string missing"
     # build_nonce LE pack + A5 5A
     assert 'struct.pack("<IIH"' in SRC
     assert 'b"\\xA5\\x5A"' in SRC
@@ -190,11 +195,11 @@ def test_derive_and_nonce_known_vector():
     master = bytes(range(16))
     sess, fid = 0x12345678, 0xdeadbeef
     k = MOD.derive_file_key(master, sess, fid)
-    # Known answer from firmware logic: SHA256(master)=prk, tmp=prk+LE(sess,fid)+0x01
-    import hashlib, struct
-    prk = hashlib.sha256(master).digest()
-    info = struct.pack("<II", sess, fid)
-    expect = hashlib.sha256(prk + info + b"\x01").digest()[:16]
+    # Known answer: RFC 5869 HKDF-SHA256 over info "checkpoint-file-v1"+LE(sess,fid)
+    import hashlib, hmac, struct
+    prk = hmac.new(b"", master, hashlib.sha256).digest()
+    info = b"checkpoint-file-v1" + struct.pack("<II", sess, fid)
+    expect = hmac.new(prk, info + b"\x01", hashlib.sha256).digest()[:16]
     assert k == expect, f"KDF mismatch {k.hex()} != {expect.hex()}"
     n = MOD.build_nonce(sess, fid, 42)
     assert n == struct.pack("<IIH", sess, fid, 42) + b"\xA5\x5A"

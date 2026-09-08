@@ -82,12 +82,23 @@ Recorder started, 1-min chunks
 2. Pull the card and play a clip on your computer. Speech should be clear. No clicks.
 3. Insert the card. The pendant continues. No reboot.
 4. Press the button. You get a `bookmark` blink on the LED.
-5. Open your BLE test app. Connect to `Checkpoint`. The pendant runs a handshake. Then it sends one file at a time in `220`-byte fragments with sequence numbers. It waits for `ACK`, retries up to 5 times, resumes after drops. It deletes a file only after it gets `FILE_DONE_ACK`.
+5. Open your BLE test app. Connect to `Checkpoint`. The pendant runs a handshake
+   (HELLO → HELLO_ACK → host READY, then transfers start). Then it sends one file
+   at a time in `220`-byte fragments with sequence numbers. It waits for cumulative
+   `ACK`s, retries with backoff, resumes real partial progress from the host's
+   `.part` files, and deletes a file only after it gets `FILE_DONE_ACK`.
+   Requires negotiated MTU ≥ 241; the app refuses smaller MTUs instead of corrupting.
 6. Pull power mid-record. Reboot. The pendant keeps old files. The open `.tmp` either promotes or drops if too small. It starts a fresh chunk.
 
 ## BLE pairing
 
-The pendant uses `NimBLE` Secure Connections with bonding and Just Works pairing (`BLE_HS_IO_NO_INPUT_OUTPUT` — no passkey display; pendant has LED only). On first boot it creates a 16-byte master key and stores it in `NVS` (`checkpoint/ccmmaster`). The phone stores the bond. `HELLO_ACK` sends `session || mtu || chunk || master key` over the encrypted link (gated on `s_encrypted`). App derives a per-file key with `SHA256`. Fragments use `AES-128-CCM` with `8-byte` tag. Nonce is `session || file || seq`. You do not need to configure keys. To rotate, erase NVS: hold `BOOT` on flash or call `Preferences.clear`.
+The pendant uses `NimBLE` Secure Connections with bonding and Just Works pairing
+(no passkey display; pendant has LED only) with MITM off — no display for
+numeric comparison; previously bonded phones need one re-pair after this change.
+On first boot it creates a 16-byte master key and stores it in `NVS`
+(`checkpoint/ccmmaster`). `HELLO_ACK` sends a per-session key derived from it
+(the master itself never leaves the device). App derives per-file keys with
+RFC 5869 HKDF-SHA256. Fragments use `AES-128-CCM` with `8-byte` tag. Nonce is `session || file || seq`. You do not need to configure keys. To rotate, erase NVS: hold `BOOT` on flash or call `Preferences.clear`.
 
 The recorder keeps a 96 kB PSRAM ring. Short SD stalls do not drop audio. The manifest keeps `next_seq` in `/rec/manifest.json` so resume survives reboot. Recovered `.tmp` files get a patched WAV header.
 

@@ -63,4 +63,5 @@ PKT_NAMES = {
     cfg.PKT_STORAGE_RESP: "STORAGE_RESP",
     cfg.PKT_LIST_REQ: "LIST_REQ",
     cfg.PKT_LIST_RESP: "LIST_RESP",
+    cfg.PKT_READY: "READY",
 }

@@ -12,6 +12,8 @@ static bool s_connected = false;
 static bool s_handshaked = false;
 static bool s_encrypted = false;
 static uint32_t s_handshake_start_ms = 0;
+static uint32_t s_last_handshake_ms = 0; // refreshed at auth-complete + HELLO_ACK
+static bool s_hello_sent = false; // HELLO_ACK transmitted, READY pending
 static uint32_t s_final_diag_due_ms = 0;
 static uint16_t s_conn_handle = 0xFFFF;
 static void (*s_packet_cb)(const uint8_t *, size_t) = nullptr;
@@ -24,6 +26,30 @@ static NimBLECharacteristic *s_ack = nullptr;
 
 static uint32_t rand32() { return esp_random(); }
 
+// Serializes all GATT writes: the loop task (control_poll), the transfer
+// task (announce/done/DATA), and the NimBLE callback task (HELLO_ACK/ERROR)
+// share s_ctrl/s_data, which are not thread-safe. Short hold, never across
+// SD/crypto/filesystem work.
+static SemaphoreHandle_t s_ble_tx_mutex = nullptr;
+
+static bool ble_tx_lock(uint32_t timeout_ms = 500) {
+  if (!s_ble_tx_mutex) s_ble_tx_mutex = xSemaphoreCreateMutex();
+  if (!s_ble_tx_mutex) return false;
+  return xSemaphoreTake(s_ble_tx_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}
+
+static void ble_tx_unlock() {
+  if (s_ble_tx_mutex) xSemaphoreGive(s_ble_tx_mutex);
+}
+
+// Direct CTRL indicate for the NimBLE callback task (same mutex as above).
+static void ctrl_indicate_locked(const uint8_t *buf, size_t bl) {
+  if (!s_ctrl || !ble_tx_lock()) return;
+  s_ctrl->setValue(buf, bl);
+  s_ctrl->indicate();
+  ble_tx_unlock();
+}
+
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) override {
     (void)pServer;
@@ -34,6 +60,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     s_session = rand32();
     s_conn_handle = connInfo.getConnHandle();
     s_handshake_start_ms = millis();
+    s_last_handshake_ms = s_handshake_start_ms;
+    s_hello_sent = false;
     // Always reload master key to avoid leaking a derived per-file key
     // if a previous transfer was interrupted mid-file (R3).
     crypto_load_or_gen_key();
@@ -51,6 +79,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     s_encrypted = false;
     s_state = BLE_DISCONNECTED;
     s_handshake_start_ms = 0;
+    s_last_handshake_ms = 0;
+    s_hello_sent = false;
     s_final_diag_due_ms = 0;
     s_conn_handle = 0xFFFF;
     // Restore master key if a derived file key was active when link dropped.
@@ -59,6 +89,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   }
   void onAuthenticationComplete(NimBLEConnInfo &connInfo) override {
     s_encrypted = connInfo.isEncrypted();
+    if (s_encrypted) s_last_handshake_ms = millis();
   }
 };
 
@@ -68,14 +99,30 @@ class CtrlCallbacks : public NimBLECharacteristicCallbacks {
     std::string v = pCharacteristic->getValue();
     if (v.empty() || !s_packet_cb) return;
     s_packet_cb((const uint8_t *)v.data(), v.size());
+    if (v.size() >= 2 && (uint8_t)v[1] == PKT_READY) {
+      // Host confirms HELLO_ACK processed (session/mtu/crypto installed).
+      // Only the handshake completes here — transfers stay gated until now.
+      Packet ready;
+      if (s_hello_sent && !s_handshaked &&
+          proto_parse((const uint8_t *)v.data(), v.size(), &ready) &&
+          ready.len >= 4) {
+        uint32_t echo = 0;
+        memcpy(&echo, ready.payload, 4);
+        if (echo == s_session) {
+          s_handshaked = true;
+          s_handshake_start_ms = 0;
+          s_state = BLE_READY;
+        }
+      }
+      return;
+    }
     if (v.size() >= 2 && (uint8_t)v[1] == PKT_HELLO) {
       if ((uint8_t)v[0] != PROTO_VER) {
         uint8_t err = 0x02;
         uint8_t buf[PROTO_MAX_PACKET];
         size_t bl = sizeof(buf);
         if (proto_build(PKT_ERROR, 0, &err, 1, buf, &bl) && s_ctrl) {
-          s_ctrl->setValue(buf, bl);
-          s_ctrl->indicate();
+          ctrl_indicate_locked(buf, bl);
         }
         return;
       }
@@ -84,8 +131,7 @@ class CtrlCallbacks : public NimBLECharacteristicCallbacks {
         uint8_t buf[PROTO_MAX_PACKET];
         size_t bl = sizeof(buf);
         if (proto_build(PKT_ERROR, 0, &err, 1, buf, &bl) && s_ctrl) {
-          s_ctrl->setValue(buf, bl);
-          s_ctrl->indicate();
+          ctrl_indicate_locked(buf, bl);
         }
         return;
       }
@@ -99,18 +145,22 @@ class CtrlCallbacks : public NimBLECharacteristicCallbacks {
       uint32_t chunk = REC_CHUNK_SEC;
       memcpy(payload + 7, &chunk, 4);
       size_t plen = 11;
-      uint8_t key[CRYPTO_KEY_BYTES];
-      if (crypto_get_key(key)) {
-        memcpy(payload + 11, key, CRYPTO_KEY_BYTES);
+      // Per-session key: the permanent master never leaves the device.
+      uint8_t master[CRYPTO_KEY_BYTES];
+      uint8_t sess_key[CRYPTO_KEY_BYTES];
+      if (crypto_get_key(master) &&
+          crypto_derive_session_key(master, s_session, sess_key)) {
+        memcpy(payload + 11, sess_key, CRYPTO_KEY_BYTES);
         plen = 27;
-        memset(key, 0, sizeof(key));
+        memset(sess_key, 0, sizeof(sess_key));
       }
+      memset(master, 0, sizeof(master));
       if (proto_build(PKT_HELLO_ACK, 0, payload, plen, resp, &rl)) {
-        s_ctrl->setValue(resp, rl);
-        s_ctrl->indicate();
-        s_handshaked = true;
-        s_handshake_start_ms = 0;
-        s_state = BLE_READY;
+        ctrl_indicate_locked(resp, rl);
+        // Handshake completes only when the host answers PKT_READY
+        // (proves session/mtu/crypto installed). Transfers stay gated.
+        s_hello_sent = true;
+        s_last_handshake_ms = millis(); // fresh 5s budget for the READY reply
         // hybrid: 15ms iOS-safe, DLE 251, try 2M
         if (s_server && s_conn_handle != 0xFFFF) {
           s_server->updateConnParams(s_conn_handle, 12, 12, 0, 400);
@@ -138,7 +188,7 @@ bool ble_init() {
   NimBLEDevice::init(BLE_DEVICE_NAME);
   NimBLEDevice::setMTU(BLE_MTU);
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
-  NimBLEDevice::setSecurityAuth(true, true, true);
+  NimBLEDevice::setSecurityAuth(true, false, true); // bonding + SC, no MITM: no display/input
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
   s_server = NimBLEDevice::createServer();
   s_server->setCallbacks(new ServerCallbacks());
@@ -181,7 +231,11 @@ uint32_t ble_session_id() { return s_session; }
 bool ble_handshake_timed_out() {
   if (s_state != BLE_HANDSHAKING) return false;
   if (s_handshake_start_ms == 0) return false;
-  return (millis() - s_handshake_start_ms) > BLE_HANDSHAKE_TIMEOUT_MS;
+  // Pairing/encryption may take a while (first-time Windows bond); the
+  // application HELLO/READY exchange afterwards gets a short budget.
+  if (!s_encrypted) return (millis() - s_handshake_start_ms) > BLE_AUTH_TIMEOUT_MS;
+  uint32_t base = s_last_handshake_ms ? s_last_handshake_ms : s_handshake_start_ms;
+  return (millis() - base) > BLE_HANDSHAKE_TIMEOUT_MS;
 }
 
 void ble_check_handshake_timeout() {
@@ -204,8 +258,11 @@ void ble_check_final_diag() {
 bool ble_send_raw(const uint8_t *data, size_t len) {
   if (!s_connected || !s_handshaked) return false;
   if (!s_data) return false;
+  if (!ble_tx_lock()) return false;
   s_data->setValue(data, len);
-  return s_data->notify();
+  bool ok = s_data->notify();
+  ble_tx_unlock();
+  return ok;
 }
 
 bool ble_send_packet(uint8_t type, uint16_t seq, const uint8_t *payload, uint16_t len) {
@@ -214,8 +271,11 @@ bool ble_send_packet(uint8_t type, uint16_t seq, const uint8_t *payload, uint16_
   if (!proto_build(type, seq, payload, len, buf, &bl)) return false;
   if (type == PKT_DATA) return ble_send_raw(buf, bl);
   if (!s_ctrl) return false;
+  if (!ble_tx_lock()) return false;
   s_ctrl->setValue(buf, bl);
-  return s_ctrl->indicate();
+  bool ok = s_ctrl->indicate();
+  ble_tx_unlock();
+  return ok;
 }
 
 void ble_on_packet(void (*cb)(const uint8_t *data, size_t len)) { s_packet_cb = cb; }

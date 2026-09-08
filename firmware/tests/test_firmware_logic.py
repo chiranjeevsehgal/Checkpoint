@@ -69,8 +69,9 @@ def test_header_patch():
 def test_window_retry_logic():
     tr = (BASE / "transfer.cpp").read_text()
     assert "xQueueCreate" in tr
-    assert "attempts" in tr
-    assert "xSemaphoreTake(s_ack_mutex, 0)" not in tr
+    assert "ack_timeouts" in tr and "XFER_MAX_ACK_TIMEOUTS" in tr
+    assert "s_cool_until_ms" in tr and "cool_delay_ms" in tr
+    assert "SD.exists" in tr
     # must still wait with BLE_ACK_TIMEOUT_MS but now with short-circuit for already-acked base
     assert "BLE_ACK_TIMEOUT_MS" in tr
     assert "window[0].acked" in tr

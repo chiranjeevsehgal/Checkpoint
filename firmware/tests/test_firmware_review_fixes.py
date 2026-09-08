@@ -177,6 +177,38 @@ def test_nonce_invariant_comment():
     assert "HKDF" in cry or "SHA256" in cry
     print("PASS nonce invariant comment")
 
+def test_rfc5869_hkdf_and_session_key():
+    cry = read("crypto.cpp")
+    hdr = read("crypto.h")
+    assert "crypto_hkdf_sha256" in cry and "crypto_hkdf_sha256" in hdr
+    assert "hmac_sha256" in cry
+    assert "checkpoint-file-v1" in cry
+    assert "crypto_derive_session_key" in cry and "crypto_derive_session_key" in hdr
+    assert "checkpoint-session-v1" in cry
+    assert "SHA256(master_key).digest()" not in cry, "custom KDF must be gone"
+    print("PASS hkdf session key")
+
+def test_ble_security_and_ready():
+    ble = read("ble_service.cpp")
+    assert "setSecurityAuth(true, false, true)" in ble, "MITM must be off"
+    assert "crypto_derive_session_key" in ble, "HELLO_ACK must carry session key"
+    assert "PKT_READY" in ble, "READY completion missing"
+    assert "s_hello_sent" in ble and "BLE_AUTH_TIMEOUT_MS" in ble
+    cfg = read("config.h")
+    assert "BLE_AUTH_TIMEOUT_MS 15000" in cfg
+    print("PASS ble security ready")
+
+def test_manifest_uid():
+    man = read("manifest.cpp")
+    hdr = read("manifest.h")
+    assert "uid" in hdr and "manifest_uid_or_generate" in hdr
+    assert 'o["uid"]' in man
+    assert "esp_random()" in man
+    tr = read("transfer.cpp")
+    assert "manifest_uid_or_generate" in tr
+    assert "file_crc ^ total" in tr, "legacy fallback must remain"
+    print("PASS manifest uid")
+
 # ---- I5: SD lock gap ----
 def test_sd_patch_locked_variant():
     sd = read("sd_manager.cpp")
@@ -251,6 +283,9 @@ if __name__ == "__main__":
     test_file_announce_ack_len_fix()
     test_file_announce_ack_boundary()
     test_nonce_invariant_comment()
+    test_rfc5869_hkdf_and_session_key()
+    test_ble_security_and_ready()
+    test_manifest_uid()
     test_sd_patch_locked_variant()
     test_manifest_no_unlock_gap()
     test_sd_end_takes_lock()
