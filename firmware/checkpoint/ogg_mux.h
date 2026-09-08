@@ -64,11 +64,23 @@ static inline size_t ogg_opus_tags(uint8_t *out) {
 static inline size_t ogg_write_bos(File &f, uint32_t serial) {
   uint8_t head[19]; ogg_opus_head(head);
   uint8_t tags[64]; size_t tlen = ogg_opus_tags(tags);
-  const uint8_t *pkts[2]={head, tags};
-  size_t lens[2]={19, tlen};
   uint8_t page[300];
-  size_t n = ogg_build_page(page, 0, 0, 0x02, pkts, lens, 2, serial);
-  return f.write(page, n);
+  size_t total = 0;
+  // Page 0: BOS + OpusHead only (RFC 7845: identification header alone on BOS)
+  {
+    const uint8_t *pkts[1] = {head};
+    size_t lens[1] = {19};
+    size_t n = ogg_build_page(page, 0, 0, 0x02, pkts, lens, 1, serial);
+    total += f.write(page, n);
+  }
+  // Page 1: OpusTags
+  {
+    const uint8_t *pkts[1] = {tags};
+    size_t lens[1] = {tlen};
+    size_t n = ogg_build_page(page, 0, 1, 0x00, pkts, lens, 1, serial);
+    total += f.write(page, n);
+  }
+  return total;
 }
 static inline size_t ogg_write_audio_frame(File &f, const uint8_t *opus, size_t olen, uint64_t granule, uint32_t seq, uint32_t serial) {
   const uint8_t *pkts[1]={opus};

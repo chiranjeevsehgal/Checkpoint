@@ -187,9 +187,9 @@ static bool open_chunk() {
     return false;
   }
 #if REC_CODEC_OPUS
-  // OGG-Opus BOS: OpusHead + OpusTags
+  // OGG-Opus BOS: page 0 = OpusHead (BOS), page 1 = OpusTags
   s_opus_serial = (s_boot_id << 16) ^ s_file_seq ^ (uint32_t)millis();
-  s_opus_seq = 1; // 0 is BOS
+  s_opus_seq = 2; // 0 = OpusHead BOS, 1 = OpusTags
   s_opus_granule = 0;
   s_opus_frames = 0;
   s_i2s_frames = 0;

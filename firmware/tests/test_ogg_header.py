@@ -29,3 +29,19 @@ def test_granule_still_48k_timeline():
     rec = (BASE / "recorder.cpp").read_text()
     # Opus granule timeline is always 48k: +960 per 20ms frame, unchanged
     assert "s_opus_granule += 960" in rec or "s_opus_granule + 960" in rec
+
+
+def test_bos_split_head_and_tags():
+    h = (BASE / "ogg_mux.h").read_text()
+    seg = h.split("ogg_write_bos")[1].split("ogg_write_audio_frame")[0]
+    # Two single-packet pages: seq 0 BOS then seq 1 normal
+    assert seg.count("ogg_build_page") == 2, "BOS must build two pages"
+    assert ", 0, 0x02," in seg, "page 0 must be BOS seq 0"
+    assert ", 1, 0x00," in seg, "page 1 must be normal seq 1"
+    assert "lens, 2," not in seg, "combined two-packet BOS must be gone"
+
+
+def test_audio_seq_starts_at_two():
+    rec = (BASE / "recorder.cpp").read_text()
+    assert "s_opus_seq = 2" in rec, "audio must start at seq 2 (0=head, 1=tags)"
+    assert "s_opus_seq = 1;" not in rec, "old seq 1 start must be gone"
