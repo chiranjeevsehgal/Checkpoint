@@ -66,6 +66,7 @@ class CheckpointWindow:
         self.BRIGHT_DEBOUNCE_MS = 500
         self.recording: bool | None = None
         self._rec_busy = False
+        self._last_pending: int | None = None
 
         self._build_widgets()
         self.refs = UiRefs(
@@ -171,11 +172,26 @@ class CheckpointWindow:
             else:
                 apply_event(self.refs, payload)
             if payload.get("type") == "rec_status" and "recording" in payload:
+                recording_changed = (
+                    self.recording is not None
+                    and bool(payload["recording"]) != self.recording
+                )
+                pending = payload.get("pending")
+                pending_changed = (
+                    pending is not None
+                    and self._last_pending is not None
+                    and pending != self._last_pending
+                )
                 self._set_recording(bool(payload["recording"]))
+                if pending is not None:
+                    self._last_pending = pending
+                if recording_changed or pending_changed:
+                    self._storage_refresh_soon()
         elif tag == "status":
             self._set_status(*payload)
         elif tag == "connected":
             self._set_recording(None)
+            self._last_pending = None
             self._set_buttons(True, False)
 
     def _set_buttons(self, connected: bool, busy: bool):

@@ -47,6 +47,13 @@ static uint32_t s_erase_armed_ms = 0;
 // BLE auto-upload gate. Written only in control_poll (loop task), read in
 // transfer_task; single-byte volatile matches the s_busy cross-task style.
 static volatile bool s_sync_enabled = true;
+// Last pushed status snapshot (loop task only). Powers the unsolicited
+// STATUS_RESP push that keeps the host in sync after hardware-side changes
+// (physical button, VAD transitions, new chunks) without host polling.
+static uint8_t s_last_status[CTRL_STATUS_LEN] = {0};
+static uint32_t s_last_push_ms = 0;
+static bool s_has_last_status = false;
+static constexpr uint32_t kStatusPushMinMs = 1000;
 
 // Guards the req-flag handoff: NimBLE callback task writes, loop task
 // (control_poll) reads+clears. Critical section, never held across
@@ -162,6 +169,39 @@ void control_build_status(uint8_t out[CTRL_STATUS_LEN]) {
   out[14] = (uint8_t)((utt >> 16) & 0xFF);
   out[15] = (uint8_t)((utt >> 24) & 0xFF);
   out[16] = s_sync_enabled ? 1 : 0;
+}
+
+static bool status_event_changed(const uint8_t *current, const uint8_t *previous) {
+  if (current[0] != previous[0] || current[3] != previous[3] ||
+      current[4] != previous[4] || current[16] != previous[16]) {
+    return true;
+  }
+  // Layout: [6..7] pending, [8..15] chunks + utterances.
+  // Skips [1..2] VAD and [5] mic level: live meter values visible on
+  // explicit polls, never push triggers.
+  if (memcmp(current + 6, previous + 6, 2) != 0) {
+    return true;
+  }
+  return memcmp(current + 8, previous + 8, 8) != 0;
+}
+
+void control_push_status_if_changed() {
+  if (!ble_is_connected() || !ble_is_handshaked()) {
+    return;
+  }
+  uint8_t current[CTRL_STATUS_LEN];
+  control_build_status(current);
+  if (s_has_last_status && !status_event_changed(current, s_last_status)) {
+    return;
+  }
+  if (s_has_last_status && (millis() - s_last_push_ms) < kStatusPushMinMs) {
+    return;
+  }
+  if (ble_send_packet(PKT_STATUS_RESP, 0, current, CTRL_STATUS_LEN)) {
+    memcpy(s_last_status, current, CTRL_STATUS_LEN);
+    s_last_push_ms = millis();
+    s_has_last_status = true;
+  }
 }
 
 uint8_t control_do_rec_start() {
@@ -583,6 +623,9 @@ void control_poll() {
       uint8_t payload[CTRL_STATUS_LEN];
       control_build_status(payload);
       ble_send_packet(PKT_STATUS_RESP, status_seq, payload, CTRL_STATUS_LEN);
+      memcpy(s_last_status, payload, CTRL_STATUS_LEN);
+      s_last_push_ms = millis();
+      s_has_last_status = true;
     }
   }
 
@@ -661,5 +704,9 @@ void control_poll() {
       uint8_t extra[1] = {s_sync_enabled ? (uint8_t)1 : (uint8_t)0};
       control_send_cmd_resp(sync_get_seq, CTRL_CMD_SYNC_GET, CTRL_OK, extra, 1);
     }
+  }
+
+  if (!status_req) {
+    control_push_status_if_changed();
   }
 }

@@ -134,9 +134,23 @@ class BleWorker:
         self._on_log(f"[gui] queue-wait until SUBMITTED (Kafka {cfg.KAFKA_TOPIC_HINT}); "
                      f"verify: docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh "
                      f"--topic {cfg.KAFKA_TOPIC_HINT} --bootstrap-server kafka:9092")
+        await self._poll_status_until_stopped()
+
+    async def _poll_status_until_stopped(self) -> None:
+        last_poll = time.monotonic()
         try:
             while not self.stop_evt.is_set():
                 await asyncio.sleep(0.5)
+                if time.monotonic() - last_poll < cfg.STATUS_POLL_INTERVAL_S:
+                    continue
+                last_poll = time.monotonic()
+                if self.client is None:
+                    continue
+                try:
+                    info = await self.client.req_status()
+                    self._on_event({"type": "rec_status", **info})
+                except Exception as e:
+                    self._on_log(f"[gui] status poll failed: {e}")
         except asyncio.CancelledError:
             pass
 

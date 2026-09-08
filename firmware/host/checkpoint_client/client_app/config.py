@@ -46,6 +46,9 @@ VAD_PAD_MS = int(os.getenv("VAD_PAD_MS", "200"))
 
 BLE_AUTO_REBOND_DEFAULT = os.getenv("BLE_AUTO_REBOND", "1") == "1"
 
+STATUS_POLL_INTERVAL_S = float(os.getenv("STATUS_POLL_INTERVAL_S", "5"))
+STATUS_PUSH_SEQ = 0
+
 BENCH_FIELDNAMES = [
     "ts", "file_id", "total_bytes", "total_frags", "mtu", "frag_size",
     "goodput_kBps", "median_rtt_ms", "p95_rtt_ms", "duplicates", "retries",

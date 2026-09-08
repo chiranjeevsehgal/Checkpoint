@@ -649,7 +649,8 @@ class CheckpointClient:
         elif pkt.type == cfg.PKT_STATUS_RESP:
             info = self.parse_status(pkt.payload)
             if info:
-                print(f"  STATUS_RESP rec={info['recording']} "
+                kind = "push" if pkt.seq == cfg.STATUS_PUSH_SEQ else "resp"
+                print(f"  STATUS_{kind} rec={info['recording']} "
                       f"vad={info['vad_active']}/{info['vad_speech']} "
                       f"muted={info['muted']} bright={info['brightness']} "
                       f"pend={info['pending']} sync={info['sync']}")

@@ -34,6 +34,8 @@ enum CtrlStatus : uint8_t {
 // [0]=recording [1]=vad_active [2]=vad_speech [3]=muted [4]=brightness
 // [5]=level_dbfs int8 [6..7]=pending u16 [8..11]=chunks u32 [12..15]=utterances u32
 // [16]=sync_enabled (BLE auto-upload on/off)
+// Replies echo the STATUS_REQ seq; unsolicited pushes use seq 0 so the host
+// can distinguish polls from hardware-side change events.
 #define CTRL_STATUS_LEN 17
 
 // LED brightness bounds. 0 is only honored while muted; unmuted values
