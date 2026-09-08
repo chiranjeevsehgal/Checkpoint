@@ -1,0 +1,31 @@
+provider: deepgram
+
+providers:
+  deepgram:
+    api_key_env: DEEPGRAM_API_KEY
+    model: nova-3
+    language: multi
+    options:
+      diarize_model: latest
+      smart_format: "true"
+      utterances: "true"
+      paragraphs: "true"
+      numerals: "true"
+      filler_words: "true"
+
+kafka:
+  brokers:
+    - kafka:9092
+  consume_topic: transcription.jobs.v1
+  produce_topic1: embedding.jobs.v1
+  produce_topic2: extraction.jobs.v1
+  consumer_group: transcription-service
+
+minio:
+  endpoint: minio:9000
+  access_key_env: MINIO_ACCESS_KEY
+  secret_key_env: MINIO_SECRET_KEY
+  use_ssl: false
+
+postgres:
+  dsn_env: POSTGRES_DSN
