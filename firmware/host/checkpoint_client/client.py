@@ -373,13 +373,33 @@ class CheckpointClient:
             self._loop = asyncio.get_running_loop()
         except RuntimeError:
             self._loop = None
-        self.client = BleakClient(self.address,
-                                  disconnected_callback=self._on_link_lost)
-        await self.client.connect()
+        new_client = BleakClient(self.address,
+                                   disconnected_callback=self._on_link_lost)
+        # Install the new generation BEFORE clearing the old event: late
+        # callbacks from the previous client then fail the identity check.
+        self.client = new_client
+        self.link_state = "down"
+        self.link_lost.clear()
+        await new_client.connect()
         is_conn = self.client.is_connected
         print(f"Connected. is_connected={is_conn} address={self.address}")
-        # Pairing is on demand: HELLO first, pair() only on 0x01 (see do_handshake).
-        print("Pairing on demand (only if device reports 0x01) ...")
+        # Split security ownership: new peer -> we pair before HELLO;
+        # bonded peer -> firmware restores encryption via startSecurity().
+        bonded = await self._windows_bond_present()
+        print(f"  Windows bond present: {bonded}")
+        if bonded is False:
+            print("No Windows bond — pairing before HELLO ...")
+            try:
+                result = await self.client.pair()
+                print(f"  pair result={result}")
+            except Exception as e:
+                print(f"  initial pair failed: {e}")
+                try:
+                    await self.client.disconnect()
+                except Exception:
+                    pass
+                raise
+        # Pairing is otherwise on demand: HELLO first, pair() only on 0x01 (see do_handshake).
 
         await self.client.start_notify(CTRL_UUID, self._on_ctrl_indicate)
         await self.client.start_notify(DATA_UUID, self._on_data_notify)
@@ -392,21 +412,46 @@ class CheckpointClient:
         except Exception:
             pass
 
+    async def _windows_bond_present(self):
+        """True/False whether Windows holds a bond record for this peer.
+
+        None when unknown (non-Windows or probe error) — caller then uses
+        the on-demand path. Best-effort — never raises.
+        """
+        try:
+            from winrt.windows.devices.bluetooth import BluetoothLEDevice
+            addr = int(self.address.replace(":", ""), 16)
+            dev = await BluetoothLEDevice.from_bluetooth_address_async(addr)
+            if dev is None:
+                return False
+            return bool(dev.device_information.pairing.is_paired)
+        except Exception:
+            return None
+
     async def disconnect(self):
         if self.client and self.client.is_connected:
             await self.client.disconnect()
 
-    def _on_link_lost(self, _client=None):
+    def _on_link_lost(self, client=None):
+        print(f"[ble] disconnect callback callback_client={id(client)} "
+              f"active_client={id(self.client)} stale={client is not self.client}")
+        # Ignore delayed callbacks from a superseded BleakClient generation.
+        if client is not None and client is not self.client:
+            print("[ble] ignoring stale disconnect callback")
+            return
         # Bleak may call this off the event loop (WinRT thread) — hop to it.
         if self._loop is not None:
             try:
-                self._loop.call_soon_threadsafe(self._handle_link_lost)
+                self._loop.call_soon_threadsafe(self._handle_link_lost, client)
                 return
             except RuntimeError:
                 pass
-        self._handle_link_lost()
+        self._handle_link_lost(client)
 
-    def _handle_link_lost(self):
+    def _handle_link_lost(self, client=None):
+        # Recheck: self.client may have changed while marshalling to the loop.
+        if client is not None and client is not self.client:
+            return
         self.link_state = "down"
         self.hello_acked.clear()
         self.error_event.clear()

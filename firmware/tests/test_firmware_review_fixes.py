@@ -195,7 +195,7 @@ def test_ble_security_and_ready():
     assert "PKT_READY" in ble, "READY completion missing"
     assert "s_hello_sent" in ble and "BLE_AUTH_TIMEOUT_MS" in ble
     cfg = read("config.h")
-    assert "BLE_AUTH_TIMEOUT_MS 15000" in cfg
+    assert "BLE_AUTH_TIMEOUT_MS 30000" in cfg, "debug-generous auth timeout expected"
     print("PASS ble security ready")
 
 def test_manifest_uid():

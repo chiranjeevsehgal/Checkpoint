@@ -484,11 +484,30 @@ def test_connect_bond_probe_reports_missing_record(monkeypatch, capsys):
             async def from_bluetooth_address_async(addr):
                 return None
 
-    monkeypatch.setattr(mod, "BleakClient", _make_fake_bleak())
+    paired = []
+
+    class PairingBleak:
+        def __init__(self, address, *args, **kwargs):
+            self.is_connected = False
+
+        async def connect(self):
+            self.is_connected = True
+
+        async def pair(self):
+            paired.append(True)
+            return True
+
+        async def start_notify(self, *args):
+            return None
+
+    monkeypatch.setattr(mod, "BleakClient", PairingBleak)
     monkeypatch.setitem(_sys.modules, "winrt.windows.devices.bluetooth", FakeBtMod)
     client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
     asyncio.run(client.connect())
-    assert "no WinRT record" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Windows bond present: False" in out
+    assert "pairing before HELLO" in out
+    assert paired == [True]
 
 
 @needs_deps
@@ -782,6 +801,62 @@ def test_next_seq_skips_zero():
     assert client.next_seq() == 0xFFFF
     assert client.next_seq() == 1
     assert client._seq_gen == 2
+
+
+@needs_deps
+def test_stale_disconnect_callback_ignored():
+    import asyncio
+
+    from client_app.ble_client import CheckpointClient
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    current, old = object(), object()
+    client.client = current
+    client.link_state = "up"
+    client.link_lost.clear()
+    # Late callback from a superseded generation must not kill the live link.
+    client._handle_link_lost(old)
+    assert client.link_state == "up"
+    assert not client.link_lost.is_set()
+    # Callback for the active generation still works.
+    client._handle_link_lost(current)
+    assert client.link_state == "down"
+    assert client.link_lost.is_set()
+
+
+@needs_deps
+def test_connect_installs_new_generation(monkeypatch):
+    import asyncio
+
+    from client_app import ble_client as mod
+    from client_app.ble_client import CheckpointClient
+
+    created = []
+
+    class FakeBleak:
+        def __init__(self, address, *args, **kwargs):
+            created.append(kwargs.get("disconnected_callback"))
+            self.is_connected = False
+
+        async def connect(self):
+            self.is_connected = True
+
+        async def pair(self):
+            return True
+
+        async def start_notify(self, *args):
+            return None
+
+    monkeypatch.setattr(mod, "BleakClient", FakeBleak)
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    old = object()
+    client.client = old
+    client.link_state = "up"
+    client.link_lost.set()
+    asyncio.run(client.connect())
+    assert client.client is not old
+    assert callable(created[-1])
+    assert client.link_state == "down"
+    assert not client.link_lost.is_set()
 
 
 @needs_deps

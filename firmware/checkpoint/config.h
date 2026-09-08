@@ -109,7 +109,7 @@
 #define BLE_ACK_TIMEOUT_MS 1500
 #define BLE_RETRY_MAX 8
 #define BLE_HANDSHAKE_TIMEOUT_MS 5000
-#define BLE_AUTH_TIMEOUT_MS 15000
+#define BLE_AUTH_TIMEOUT_MS 30000 // debug-generous for Windows pairing; reduce once flow is clean
 #define BLE_KEEPALIVE_MS 5000
 
 // Protocol — DATA is frag(220)+CCM tag(8)=228, need header+crc

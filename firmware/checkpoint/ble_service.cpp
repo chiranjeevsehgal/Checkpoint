@@ -63,6 +63,16 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     s_handshake_start_ms = millis();
     s_last_handshake_ms = s_handshake_start_ms;
     s_hello_sent = false;
+    // Existing bond: actively restore encryption. New peer: leave pairing
+    // initiation to the host (Windows/Bleak) so two sides don't race.
+    bool bonded = connInfo.isBonded();
+    Serial.printf("BLE connect handle=%u encrypted=%d bonded=%d\n",
+                  s_conn_handle, (int)connInfo.isEncrypted(),
+                  (int)bonded);
+    if (bonded) {
+      bool sec_started = NimBLEDevice::startSecurity(s_conn_handle);
+      Serial.printf("BLE restore security started=%d\n", (int)sec_started);
+    }
     // Always reload master key to avoid leaking a derived per-file key
     // if a previous transfer was interrupted mid-file (R3).
     crypto_load_or_gen_key();
@@ -74,7 +84,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     // re-pair on every reconnect. Genuine staleness is recovered host-side
     // by CheckpointClient._rebond(), so the bond must be left intact.
     (void)connInfo;
-    (void)reason;
+    Serial.printf("BLE disconnect reason=%d\n", reason);
     s_connected = false;
     s_handshaked = false;
     s_encrypted = false;
@@ -91,6 +101,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onAuthenticationComplete(NimBLEConnInfo &connInfo) override {
     s_encrypted = connInfo.isEncrypted();
     if (s_encrypted) s_last_handshake_ms = millis();
+    Serial.printf("BLE auth complete encrypted=%d bonded=%d\n",
+                  (int)connInfo.isEncrypted(), (int)connInfo.isBonded());
   }
 };
 
