@@ -170,6 +170,8 @@ func newEnvelope(eventType string) model.Envelope {
 
 func buildProvider(cfg *config.Config) (provider.Transcriber, error) {
 	switch cfg.Provider {
+	case "elevenlabs":
+		return provider.NewElevenLabsProvider(cfg.Providers.ElevenLabs), nil
 	case "deepgram":
 		return provider.NewDeepgramProvider(cfg.Providers.Deepgram), nil
 	default:

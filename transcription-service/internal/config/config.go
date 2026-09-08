@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,7 +18,8 @@ type Config struct {
 }
 
 type ProvidersConfig struct {
-	Deepgram DeepgramConfig `yaml:"deepgram"`
+	Deepgram   DeepgramConfig   `yaml:"deepgram"`
+	ElevenLabs ElevenLabsConfig `yaml:"elevenlabs"`
 }
 
 type DeepgramConfig struct {
@@ -30,6 +32,18 @@ type DeepgramConfig struct {
 
 func (d *DeepgramConfig) APIKey() string {
 	return d.apiKey
+}
+
+type ElevenLabsConfig struct {
+	APIKeyEnv      string `yaml:"api_key_env"`
+	ModelID        string `yaml:"model_id"`
+	Diarize        bool   `yaml:"diarize"`
+	TagAudioEvents bool   `yaml:"tag_audio_events"`
+	apiKey         string
+}
+
+func (e *ElevenLabsConfig) APIKey() string {
+	return e.apiKey
 }
 
 type KafkaConfig struct {
@@ -71,9 +85,28 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config file: %w", err)
 	}
 
+	if override := strings.TrimSpace(os.Getenv("TRANSCRIPTION_PROVIDER")); override != "" {
+		cfg.Provider = override
+	}
+	cfg.Provider = strings.ToLower(strings.TrimSpace(cfg.Provider))
+	if cfg.Provider == "" {
+		cfg.Provider = "elevenlabs"
+	}
+
 	cfg.Providers.Deepgram.apiKey = os.Getenv(cfg.Providers.Deepgram.APIKeyEnv)
-	if cfg.Provider == "deepgram" && cfg.Providers.Deepgram.apiKey == "" {
-		return nil, fmt.Errorf("env var %s is empty but provider is set to deepgram", cfg.Providers.Deepgram.APIKeyEnv)
+	cfg.Providers.ElevenLabs.apiKey = os.Getenv(cfg.Providers.ElevenLabs.APIKeyEnv)
+
+	switch cfg.Provider {
+	case "elevenlabs":
+		if cfg.Providers.ElevenLabs.apiKey == "" {
+			return nil, fmt.Errorf("env var %s is empty but provider is set to elevenlabs", cfg.Providers.ElevenLabs.APIKeyEnv)
+		}
+	case "deepgram":
+		if cfg.Providers.Deepgram.apiKey == "" {
+			return nil, fmt.Errorf("env var %s is empty but provider is set to deepgram", cfg.Providers.Deepgram.APIKeyEnv)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported transcription provider %q: must be elevenlabs or deepgram", cfg.Provider)
 	}
 
 	cfg.MinIO.accessKey = os.Getenv(cfg.MinIO.AccessKey)

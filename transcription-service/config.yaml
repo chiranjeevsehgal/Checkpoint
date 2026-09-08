@@ -1,6 +1,11 @@
-provider: deepgram
+provider: elevenlabs
 
 providers:
+  elevenlabs:
+    api_key_env: ELEVENLABS_API_KEY
+    model_id: scribe_v2
+    diarize: true
+    tag_audio_events: true
   deepgram:
     api_key_env: DEEPGRAM_API_KEY
     model: nova-3

@@ -46,6 +46,10 @@ func main() {
 	}
 
 	goose.SetDialect("postgres")
+	// Dedicated version table: ingestion and transcription share one
+	// database, and both have a 00001 migration. The default shared
+	// goose_db_version table makes one service skip the other's 00001.
+	goose.SetTableName("ingestion_schema_version")
 
 	var cmdErr error
 	switch flag.Arg(0) {
