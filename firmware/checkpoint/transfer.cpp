@@ -13,7 +13,7 @@
 #include <SD.h>
 #endif
 #include "esp_heap_caps.h"
-// Test compat retains for review fixes (blast mode, no per-frag halt)
+// Cumulative ACK flow control: ack_seq means 0..ack_seq contiguous OK.
 // remain = BLE_ACK_TIMEOUT_MS
 // INVARIANT: same nonce+key only for identical plaintext retry
 
@@ -26,12 +26,12 @@ static uint16_t s_resume_seq = 0;
 static String s_retry_path = "";
 static int s_retry_count = 0;
 
-// PSRAM batch buffer for window reads — ~7KB for W32*220, off 8KB transfer stack
+// PSRAM batch buffer for window reads — ~1.8KB for W8*220, off 8KB transfer stack
 static uint8_t *s_window_buf = nullptr;
 static size_t s_window_buf_size = 0;
 
 struct AckMsg { uint16_t seq; bool ok; };
-// Blast mode: fire-and-forget, reliability via FILE_DONE CRC + full retry.
+// Cumulative ACK: base advances only on PKT_ACK(seq=status 0x00).
 // Short-circuit if base was already acked - already acked
 
 static void signal_ack(uint16_t seq, bool ok) {
@@ -209,14 +209,14 @@ void transfer_task(void *arg) {
       if (sd_lock(500)) { f.close(); sd_unlock(); } else f.close();
       s_retry_count++;
       if (s_retry_count >= XFER_MAX_FILE_RETRIES) {
-        LOG_E("XFER skip %08lx announce", (unsigned long)file_id);
-        sd_safe_delete_after_ack(job->path);
-        manifest_mark_done(job->path);
+        // Keep SD file + manifest pending for retry later.
+        // Delete only after FILE_DONE_ACK success.
+        LOG_E("XFER keep %08lx announce (retry later)", (unsigned long)file_id);
         s_retry_path = "";
         s_retry_count = 0;
         s_busy = false;
         ui_signal_error();
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(2000));
         continue;
       }
       s_busy = false;
@@ -247,7 +247,7 @@ void transfer_task(void *arg) {
     uint16_t base = next;
     memset(window, 0, sizeof(window));
 
-    // P0 batch headless: W32 cumulative ACK16 WNR, backpressure, batch slide
+    // W8 cumulative ACK per window, backpressure, batch slide
     // Throttled persistence: checkpoint every ~512 frags / ~2s instead of per-frag
     uint32_t last_seq_save_ms = millis();
     uint16_t frags_since_save = 0;
@@ -255,7 +255,7 @@ void transfer_task(void *arg) {
     const uint32_t SEQ_SAVE_MS_INTERVAL = 2000;
     while (base < total_frags && !failed) {
       if (!ble_is_connected()) { failed = true; break; }
-      // --- Batch fill: one SD lock per window (~7KB) instead of per-220B fragment ---
+      // --- Batch fill: one SD lock per window (~1.8KB) instead of per-220B fragment ---
       int first_missing = -1;
       for (int w = 0; w < BLE_WINDOW && (base + w) < total_frags; w++) {
         if (window[w].acked) continue;
@@ -316,8 +316,8 @@ void transfer_task(void *arg) {
               window[w].len = frag_len;
               window[w].acked = false;
               window[w].attempts = 0;
-              // Pacing 2ms per notify to avoid NimBLE queue overflow without ACK backpressure
-              vTaskDelay(pdMS_TO_TICKS(2));
+              // Pacing 4ms per notify as extra guard; ACK backpressure is the real flow control
+              vTaskDelay(pdMS_TO_TICKS(4));
             }
           }
         } else {
@@ -354,7 +354,7 @@ void transfer_task(void *arg) {
             window[w].len = frag_len;
             window[w].acked = false;
             window[w].attempts = 0;
-            vTaskDelay(pdMS_TO_TICKS(2));
+            vTaskDelay(pdMS_TO_TICKS(4));
           }
         }
       }
@@ -366,34 +366,43 @@ void transfer_task(void *arg) {
         continue;
       }
       vTaskDelay(pdMS_TO_TICKS(1)); // yield to NimBLE host
-      // Fire-and-forget mode: no per-frag ACK halt (full retry on FILE_DONE CRC fail)
-      // Legacy wait for base ack - cumulative: ack_seq means 0..ack_seq contiguous OK
-      // Previously: while (!base_acked && millis() - wait_start < BLE_ACK_TIMEOUT_MS) { ... }
-      // Short-circuit if base was already acked - kept for test compat
-      bool base_acked = window[0].acked; // test compat: bool base_acked = window[0].acked
-      uint32_t wait_start = millis(); // test compat: while(!base_acked && millis()-wait_start < BLE_ACK_TIMEOUT_MS)
-      (void)wait_start;
-      // Drain any stray per-frag ACKs (client now fire-and-forget, may still send old ACKs)
-      {
-        AckMsg m;
-        while (xQueueReceive(s_ack_q, &m, 0) == pdTRUE) {
-          // ignore per-frag PKT_ACK in blast mode, keep queue clean for ANNOUNCE/DONE
-        }
-      }
-      if (!ble_is_connected()) { failed = true; break; }
-      // In blast mode, mark all sent window slots as acked immediately for sliding
-      // Actual reliability via FILE_DONE CRC + full file retry (simplest, halts gone)
-      for (int w = 0; w < BLE_WINDOW; w++) {
-        if (!window[w].acked && window[w].len != 0) {
-          window[w].acked = true;
-        }
-      }
-      base_acked = window[0].acked;
-      if (failed) break;
-      // No per-frag retry in blast mode; if window[0] not acked it was just marked, so no stall
-      // Retain short-circuit comment for review-fix compat.
+      // Cumulative ACK wait: ack_seq means 0..ack_seq contiguous OK.
       // Short-circuit if base was already acked - already acked
-      // slide all contiguous acked - batch for cumulative ACK16, throttled persistence
+      bool base_acked = window[0].acked;
+      uint32_t wait_start = millis(); // while(!base_acked && millis()-wait_start < BLE_ACK_TIMEOUT_MS)
+      while (!base_acked && millis() - wait_start < BLE_ACK_TIMEOUT_MS) {
+        AckMsg m;
+        uint32_t remain = BLE_ACK_TIMEOUT_MS - (millis() - wait_start);
+        uint32_t wait = remain > 50 ? 50 : remain;
+        if (xQueueReceive(s_ack_q, &m, pdMS_TO_TICKS(wait)) == pdTRUE) {
+          if (!m.ok) continue;
+          if (m.seq < base) {
+            base_acked = window[0].acked;
+            continue;
+          }
+          uint16_t top = m.seq - base;
+          if (top >= BLE_WINDOW) top = (uint16_t)(BLE_WINDOW - 1);
+          for (uint16_t w = 0; w <= top; w++) {
+            if (window[w].len != 0) window[w].acked = true;
+          }
+          base_acked = window[0].acked;
+          continue;
+        }
+        if (!ble_is_connected() || !ble_is_handshaked()) { failed = true; break; }
+      }
+      if (failed) break;
+      if (!ble_is_connected()) { failed = true; break; }
+      if (!base_acked) {
+        // ACK timeout: retransmit from base next iteration (same nonce+plaintext).
+        for (int w = 0; w < BLE_WINDOW; w++) {
+          if (!window[w].acked) {
+            window[w].len = 0;
+            window[w].attempts++;
+          }
+        }
+        continue;
+      }
+      // slide all contiguous acked - batch for cumulative ACK, throttled persistence
       uint16_t slid = 0;
       while (base < total_frags && window[0].acked) {
         base++;
@@ -431,16 +440,15 @@ void transfer_task(void *arg) {
       if (!is_ble_disconnect) {
         s_retry_count++;
         if (s_retry_count >= XFER_MAX_FILE_RETRIES) {
-          LOG_E("XFER skip %08lx window", (unsigned long)file_id);
-          // f already closed above, just delete
+          // Keep SD file + manifest pending for retry later.
+          // Delete only after FILE_DONE_ACK success.
+          LOG_E("XFER keep %08lx window (retry later)", (unsigned long)file_id);
           if (use_derived) crypto_load_or_gen_key();
-          sd_safe_delete_after_ack(job->path);
-          manifest_mark_done(job->path);
           s_retry_path = "";
           s_retry_count = 0;
           s_busy = false;
           ui_signal_error();
-          vTaskDelay(pdMS_TO_TICKS(500));
+          vTaskDelay(pdMS_TO_TICKS(2000));
           continue;
         }
       }
@@ -467,11 +475,10 @@ void transfer_task(void *arg) {
     } else {
       s_retry_count++;
       LOG_E("XFER done fail %08lx %d/3", (unsigned long)file_id, s_retry_count);
+      // Keep SD file + manifest pending for retry later.
+      // Delete only after FILE_DONE_ACK success.
       if (s_retry_count >= XFER_MAX_FILE_RETRIES) {
-        LOG_E("XFER skip %08lx done", (unsigned long)file_id);
-        // Client reported CRC fail repeatedly - file likely bad or link too lossy, skip to avoid loop
-        sd_safe_delete_after_ack(job->path);
-        manifest_mark_done(job->path);
+        LOG_E("XFER keep %08lx done (retry later)", (unsigned long)file_id);
         s_retry_path = "";
         s_retry_count = 0;
         s_current = "";

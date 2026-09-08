@@ -95,7 +95,7 @@
 #define REC_WAV_EXT ".wav"
 #define REC_DEL_EXT ".del"
 
-// BLE — P0 battery headless: W32/15ms, MTU 517+DLE 251, 1500ms, ACK16 WNR IDLE100, iOS-safe, auto ADV no Serial needed
+// BLE — ACK flow control: W8/220B frags, cumulative ACK per window, 1500ms timeout
 #define BLE_DEVICE_NAME "Checkpoint"
 #define BLE_SERVICE_UUID "9a8b0001-4a2b-4e3c-8f1a-5b2c9d0e1f2a"
 #define BLE_CTRL_UUID "9a8b0002-4a2b-4e3c-8f1a-5b2c9d0e1f2a"
@@ -103,8 +103,8 @@
 #define BLE_ACK_UUID "9a8b0004-4a2b-4e3c-8f1a-5b2c9d0e1f2a"
 #define BLE_MTU 517
 #define BLE_FRAG_SIZE 220
-#define BLE_WINDOW 32
-#define BLE_ACK_EVERY 16
+#define BLE_WINDOW 8
+#define BLE_ACK_EVERY 8
 #define BLE_IDLE_MS 100
 #define BLE_ACK_TIMEOUT_MS 1500
 #define BLE_RETRY_MAX 8

@@ -554,6 +554,7 @@ class CheckpointClient:
 
     async def _handle_data_packet(self, pkt: Packet):
         # Serialize to avoid concurrent buffer extends / ACK interleaving
+        ack_seq: int | None = None
         async with self._data_lock:
             if pkt.type != PKT_DATA:
                 # Handle RESUME_RESP that may arrive on DATA char edge-case — ignore
@@ -578,25 +579,28 @@ class CheckpointClient:
             )
             if plain is None:
                 self._bench_decrypt_fail += 1
-                # Fire-and-forget: no per-frag NACK, just count (file will retry on FILE_DONE CRC fail)
-                # struct.pack("<HB", seq, 0x01) kept for test compat
-                return
-
-            # Duplicate detection for bench
-            if seq in self.current_file.received_frags:
-                self._bench_duplicates += 1
-            self.current_file.add_fragment(seq, plain)
-            status = 0x00  # ok
-            # Track ACK send time for RTT (no per-frag ACK in blast mode)
-            self._bench_t_send[seq] = time.perf_counter()
-            # Fire-and-forget: no per-frag PKT_ACK, only FILE_DONE_ACK at end
-            # Device blasts without halt, relies on FILE_DONE CRC + full retry
-            # struct.pack("<HB", seq, status) kept for test compat
-            # Cumulative ACK removed: ack_seq = contig_seq no longer sent
-
-            n = len(self.current_file.received_frags)
-            if n % 20 == 0 or n == self.current_file.total_frags:
-                print(f"  progress: {n}/{self.current_file.total_frags} fragments")
+                # Duplicate cumulative ACK so firmware retransmits the hole.
+                contig = self.current_file.contig_seq
+                if contig >= 0 and len(self.current_file.received_frags) % 8 == 0:
+                    ack_seq = contig
+            else:
+                # Duplicate detection for bench
+                if seq in self.current_file.received_frags:
+                    self._bench_duplicates += 1
+                self.current_file.add_fragment(seq, plain)
+                # Track ACK send time for RTT
+                self._bench_t_send[seq] = time.perf_counter()
+                n = len(self.current_file.received_frags)
+                if n % 20 == 0 or n == self.current_file.total_frags:
+                    print(f"  progress: {n}/{self.current_file.total_frags} fragments")
+                # Cumulative ACK: highest contiguous seq, at least once per 8-frag window.
+                contig = self.current_file.contig_seq
+                if contig >= 0 and (n % 8 == 0 or (contig + 1) % 8 == 0
+                                    or n == self.current_file.total_frags):
+                    ack_seq = contig
+        if ack_seq is not None:
+            await self.write_ack(PKT_ACK, self.next_seq(),
+                                 struct.pack("<HB", ack_seq & 0xFFFF, 0x00))
         # For bench we approximate RTT as time between consecutive DATA arrivals
         # Real RTT would need firmware timestamps; client RTT is inter-frag gap proxy
         if len(self._bench_rtts) < 5000:

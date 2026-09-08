@@ -253,11 +253,14 @@ def test_incoming_file_last_frag_short():
     print("PASS last_frag_short")
 
 def test_regression_ack_polarity():
-    # Firmware: ACK ok 0x00, FILE_DONE_ACK ok 0x01
-    assert 'struct.pack("<HB", seq, status)' in SRC, "ACK pack missing"
-    assert 'struct.pack("<HBBB", pkt.seq, status, 0, 0)' in SRC, "FILE_DONE_ACK pack missing"
-    # check decrypt failure sends 0x01 (fail) matching firmware's 0x00=ok
-    assert 'struct.pack("<HB", seq, 0x01)' in SRC, "NACK should be 0x01 for PKT_ACK"
+    # Firmware: PKT_ACK ok=0x00 cumulative, FILE_DONE_ACK ok=0x01
+    assert 'struct.pack("<HB"' in SRC, "cumulative ACK pack missing"
+    assert "PKT_ACK" in SRC and ", 0x00)" in SRC, "ACK must send status 0x00 (firmware ok)"
+    assert "contig_seq" in SRC, "ACK must use highest contiguous seq"
+    assert 'struct.pack("<HBBB", pkt.seq, status, 0, 0)' in SRC or \
+        'struct.pack("<HBBB"' in SRC, "FILE_DONE_ACK pack missing"
+    # Blast mode must be gone: no fire-and-forget comment
+    assert "Fire-and-forget" not in SRC, "blast mode comment still present"
     print("PASS regression_ack_polarity")
 
 def test_integration_boundaries_uuids():

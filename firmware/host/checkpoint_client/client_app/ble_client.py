@@ -747,6 +747,7 @@ class CheckpointClient:
                     "total_bytes": total, "total_frags": total_frags})
 
     async def _handle_data_packet(self, pkt: Packet):
+        ack_seq: int | None = None
         async with self._data_lock:
             if pkt.type != cfg.PKT_DATA:
                 return
@@ -766,16 +767,29 @@ class CheckpointClient:
                 self.current_file.file_id, seq, len(raw) - cfg.CRYPTO_TAG_BYTES, raw)
             if plain is None:
                 self.bench.decrypt_fail += 1
-                return
-            if seq in self.current_file.received_frags:
-                self.bench.duplicates += 1
-            self.current_file.add_fragment(seq, plain)
-            self.bench.t_send[seq] = time.perf_counter()
-            n = len(self.current_file.received_frags)
-            if n % 20 == 0 or n == self.current_file.total_frags:
-                print(f"  progress: {n}/{self.current_file.total_frags} fragments")
-                self._emit({"type": "progress", "file_id": f"{self.current_file.file_id:08x}",
-                            "received": n, "total_frags": self.current_file.total_frags})
+                # Duplicate cumulative ACK so firmware retransmits the hole.
+                contig = self.current_file.contig_seq
+                if contig >= 0 and len(self.current_file.received_frags) % 8 == 0:
+                    ack_seq = contig
+                # Fall through to send below (outside data lock).
+            else:
+                if seq in self.current_file.received_frags:
+                    self.bench.duplicates += 1
+                self.current_file.add_fragment(seq, plain)
+                self.bench.t_send[seq] = time.perf_counter()
+                n = len(self.current_file.received_frags)
+                if n % 20 == 0 or n == self.current_file.total_frags:
+                    print(f"  progress: {n}/{self.current_file.total_frags} fragments")
+                    self._emit({"type": "progress", "file_id": f"{self.current_file.file_id:08x}",
+                                "received": n, "total_frags": self.current_file.total_frags})
+                # Cumulative ACK: highest contiguous seq, at least once per 8-frag window.
+                contig = self.current_file.contig_seq
+                if contig >= 0 and (n % 8 == 0 or (contig + 1) % 8 == 0
+                                    or n == self.current_file.total_frags):
+                    ack_seq = contig
+        if ack_seq is not None:
+            await self.write_ack(cfg.PKT_ACK, self.next_seq(),
+                                 struct.pack("<HB", ack_seq & 0xFFFF, 0x00))
         self.bench.note_data_arrival()
 
     async def _handle_file_done(self, pkt: Packet):
