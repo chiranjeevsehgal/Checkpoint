@@ -876,6 +876,138 @@ def test_connect_installs_new_generation(monkeypatch):
 
 
 @needs_deps
+def test_supervisor_escalates_after_repeated_handshake_failure():
+    import asyncio
+
+    from client_app.ble_client import CheckpointClient, supervise_link
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    connects, escalations = [], []
+
+    class FakeDevice:
+        address = "00:00:00:00:00:00"
+        name = "Checkpoint"
+
+    class FakeConnected:
+        is_connected = True
+
+    async def fake_rediscover(timeout=3.0):
+        return FakeDevice()
+
+    async def fake_connect(device=None):
+        connects.append(1)
+        client.client = FakeConnected()
+        client.link_lost.clear()
+
+    async def failing_handshake():
+        raise ConnectionError("HELLO timed out")
+
+    async def fake_disconnect():
+        client.client = None
+
+    async def fake_clear_bond(log=print):
+        escalations.append(1)
+
+    client.rediscover = fake_rediscover
+    client.connect = fake_connect
+    client.do_handshake = failing_handshake
+    client.disconnect = fake_disconnect
+    client.clear_stale_bond = fake_clear_bond
+    stopped = [False]
+
+    async def run():
+        async def stopper():
+            for _ in range(60):
+                await asyncio.sleep(0.2)
+                if escalations:
+                    break
+            stopped[0] = True
+
+        await asyncio.gather(
+            supervise_link(client, log=lambda m: None,
+                           is_stopped=lambda: stopped[0]),
+            stopper())
+
+    asyncio.run(run())
+    assert escalations == [1], "must escalate exactly once per 3 setup failures"
+    assert len(connects) >= 3
+
+
+@needs_deps
+def test_supervisor_escalates_after_repeated_connect_failure():
+    import asyncio
+
+    from client_app.ble_client import CheckpointClient, supervise_link
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    connects, escalations = [], []
+
+    class FakeDevice:
+        address = "00:00:00:00:00:00"
+        name = "Checkpoint"
+
+    async def fake_rediscover(timeout=3.0):
+        return FakeDevice()
+
+    async def failing_connect(device=None):
+        # Link dies during subscribe, before any handshake: the observed
+        # power-cycle failure mode.
+        connects.append(1)
+        raise ConnectionError("Characteristic was not found!")
+
+    async def fake_disconnect():
+        client.client = None
+
+    async def fake_clear_bond(log=print):
+        escalations.append(1)
+
+    client.rediscover = fake_rediscover
+    client.connect = failing_connect
+    client.disconnect = fake_disconnect
+    client.clear_stale_bond = fake_clear_bond
+    stopped = [False]
+
+    async def run():
+        async def stopper():
+            for _ in range(60):
+                await asyncio.sleep(0.2)
+                if escalations:
+                    break
+            stopped[0] = True
+
+        await asyncio.gather(
+            supervise_link(client, log=lambda m: None,
+                           is_stopped=lambda: stopped[0]),
+            stopper())
+
+    asyncio.run(run())
+    assert escalations == [1], "connect-phase failures must escalate too"
+    assert len(connects) >= 3
+
+
+@needs_deps
+def test_clear_stale_bond_unpairs_and_resets():
+    import asyncio
+
+    from client_app.ble_client import CheckpointClient
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    calls = []
+
+    class FakeBleak:
+        async def unpair(self):
+            calls.append("unpair")
+
+        async def disconnect(self):
+            calls.append("disconnect")
+
+    current = FakeBleak()
+    client.client = current
+    client.link_state = "up"
+    asyncio.run(client.clear_stale_bond(log=lambda m: None))
+    assert calls == ["unpair", "disconnect"]
+    assert client.client is None
+    assert client.link_state == "down"
+
+
+@needs_deps
 def test_ctrl_writes_serialized():
     import asyncio
 

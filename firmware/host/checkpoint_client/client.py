@@ -465,6 +465,29 @@ class CheckpointClient:
         if self.client and self.client.is_connected:
             await self.client.disconnect()
 
+    async def clear_stale_bond(self, log=print):
+        """Drop the Windows bond so the next cycle pairs fresh.
+
+        Last resort for deterministic setup failure: BLE connects but the
+        handshake never completes, which means host and device disagree
+        about bonding state.
+        """
+        log("[ble] clearing possibly-stale bond ...")
+        current = self.client
+        self.client = None
+        if current is not None:
+            if hasattr(current, "unpair"):
+                try:
+                    await current.unpair()
+                    log("[ble] bond cleared")
+                except Exception as e:
+                    log(f"[ble] unpair failed (continuing): {e}")
+            try:
+                await current.disconnect()
+            except Exception:
+                pass
+        self.link_state = "down"
+
     def _on_link_lost(self, client=None):
         print(f"[ble] disconnect callback callback_client={id(client)} "
               f"active_client={id(self.client)} stale={client is not self.client}")
@@ -1010,6 +1033,7 @@ async def main():
     address = await find_device(arg)
 
     client = CheckpointClient(address, bench_csv=bench_csv)
+    setup_fails = 0
     try:
         while True:
             # Single reconnect supervisor: OFFLINE -> DISCOVER -> CONNECT.
@@ -1034,9 +1058,17 @@ async def main():
                     await client.disconnect()
                 except Exception:
                     pass
-                print(f"[ble] connection attempt failed: {e}")
+                setup_fails += 1
+                print(f"[ble] setup failed: {e}")
+                if setup_fails >= 3:
+                    setup_fails = 0
+                    try:
+                        await client.clear_stale_bond(print)
+                    except Exception:
+                        pass
                 await asyncio.sleep(2.0)
                 continue
+            setup_fails = 0
             print("\nListening for file transfers. Press Ctrl+C to stop.\n")
             # Never clear link_lost here: a disconnect between handshake and
             # this loop must not be erased.

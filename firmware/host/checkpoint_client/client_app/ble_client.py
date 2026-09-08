@@ -602,6 +602,30 @@ class CheckpointClient:
         await asyncio.sleep(2.0)
         return True
 
+    async def clear_stale_bond(self, log=print):
+        """Drop the Windows bond so the next cycle pairs fresh.
+
+        Last resort for deterministic setup failure: BLE connects but the
+        handshake never completes, which means host and device disagree
+        about bonding state. The next supervisor cycle then takes the
+        new-peer path (pair before HELLO) automatically.
+        """
+        log("[ble] clearing possibly-stale bond ...")
+        current = self.client
+        self.client = None
+        if current is not None:
+            if hasattr(current, "unpair"):
+                try:
+                    await current.unpair()
+                    log("[ble] bond cleared")
+                except Exception as e:
+                    log(f"[ble] unpair failed (continuing): {e}")
+            try:
+                await current.disconnect()
+            except Exception:
+                pass
+        self.link_state = "down"
+
     async def _connect_with_retry(self, tries: int = 3, wait_s: float = 2.0) -> None:
         """Reconnect, tolerating the device mid-reboot or mid-advertise flap."""
         last: Exception | None = None
@@ -1188,6 +1212,7 @@ async def supervise_link(client, *, log, is_stopped, on_ready=None,
     -> MONITOR. Returns when is_stopped() is true. Steady-state reconnect
     decisions live only here — not in individual call sites."""
     ready_once = False
+    setup_fails = 0
     while not is_stopped():
         # 1. DISCOVER: no pairing/recovery until the device is visible.
         try:
@@ -1202,7 +1227,9 @@ async def supervise_link(client, *, log, is_stopped, on_ready=None,
             if await _sleep_or_stopped(is_stopped, 2.0):
                 return
             continue
-        # 2. CONNECT + SECURITY + HANDSHAKE on the fresh BLEDevice.
+        # 2+3. CONNECT + HANDSHAKE on the fresh BLEDevice. The device was
+        # just seen advertising, so repeated failure here (either phase)
+        # means host and device disagree about bonding — escalate.
         try:
             await client.connect(device)
             await client.do_handshake()
@@ -1216,18 +1243,26 @@ async def supervise_link(client, *, log, is_stopped, on_ready=None,
                 await client.disconnect()
             except Exception:
                 pass
-            log(f"[ble] connection attempt failed: {e}")
+            setup_fails += 1
+            log(f"[ble] setup failed: {e}")
+            if setup_fails >= 3:
+                setup_fails = 0
+                try:
+                    await client.clear_stale_bond(log)
+                except Exception:
+                    pass
             if await _sleep_or_stopped(is_stopped, 2.0):
                 return
             continue
-        # 3. READY (once) + per-cycle alive notification.
+        setup_fails = 0
+        # 4. READY (once) + per-cycle alive notification.
         if not ready_once:
             ready_once = True
             if on_ready is not None:
                 await on_ready()
         if on_alive is not None:
             await on_alive()
-        # 4. MONITOR the live connection. Never clear link_lost here: a
+        # 5. MONITOR the live connection. Never clear link_lost here: a
         # disconnect between handshake and this loop must not be erased.
         while not is_stopped():
             if client.link_lost.is_set():
