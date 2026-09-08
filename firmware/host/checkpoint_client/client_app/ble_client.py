@@ -251,20 +251,53 @@ class CheckpointClient:
             self.bench.update_ingest(file_hex, "", "failed", err,
                                      vad_status, f"{vad_speech:.2f}")
 
-    async def connect(self):
+    async def rediscover(self, timeout: float = 3.0):
+        """Rescan for Checkpoint. Returns a fresh BLEDevice, or None if offline.
+
+        A hard power-cycle leaves no graceful disconnect and the cached
+        address may be stale, so every reconnect rediscovers first.
+        """
+        print(f"[ble] scanning for {self.address} / {cfg.DEVICE_NAME} ...")
+        try:
+            found = await BleakScanner.discover(timeout=timeout, return_adv=True)
+            devices = [item[0] for item in found.values()]
+        except TypeError:
+            devices = await BleakScanner.discover(timeout=timeout)
+        want = (self.address or "").upper()
+        named = None
+        for device in devices:
+            addr = (device.address or "").upper()
+            if addr and addr == want:
+                print(f"[ble] rediscovered {device.name} [{device.address}]")
+                return device
+            if (device.name or "") == cfg.DEVICE_NAME and named is None:
+                named = device
+        if named is not None:
+            print(f"[ble] rediscovered {cfg.DEVICE_NAME} [{named.address}]")
+            self.address = named.address
+            return named
+        return None
+
+    async def connect(self, device=None):
         print(f"Connecting to {self.address} ...")
         try:
             self._loop = asyncio.get_running_loop()
         except RuntimeError:
             self._loop = None
-        new_client = BleakClient(self.address,
+        new_client = BleakClient(device if device is not None else self.address,
                                  disconnected_callback=self._on_link_lost)
         # Install the new generation BEFORE clearing the old event: late
         # callbacks from the previous client then fail the identity check.
         self.client = new_client
         self.link_state = "down"
         self.link_lost.clear()
-        await new_client.connect()
+        try:
+            await new_client.connect(timeout=10.0)
+        except Exception:
+            if self.client is new_client:
+                self.client = None
+            self.link_state = "down"
+            raise
         print(f"Connected. is_connected={self.client.is_connected} address={self.address}")
         # Split security ownership: new peer -> we pair before HELLO;
         # bonded peer -> firmware restores encryption via startSecurity().
@@ -335,17 +368,40 @@ class CheckpointClient:
         if client is not None and client is not self.client:
             return
         self.link_state = "down"
+        self._teardown_session()
+        self.link_lost.set()
+        self._emit({"type": "link", "state": "down"})
+
+    def _teardown_session(self):
+        """Fresh-restart teardown for a dead link.
+
+        Fails pending commands, drops in-memory transfer/handshake state so
+        the next cycle rescans and rebuilds everything from scratch. Disk
+        state (.part files, completed cache, saved outputs) survives for
+        resume and duplicate-DONE re-ACK after reconnect.
+        """
         for fut in list(self._ctrl_pending.values()):
             if not fut.done():
                 try:
                     fut.set_exception(ConnectionError("BLE disconnected"))
                 except Exception:
                     pass
+                try:
+                    # The waiter may never await (link dropped mid-write),
+                    # so retrieve here or asyncio logs "never retrieved".
+                    fut.exception()
+                except Exception:
+                    pass
         self._ctrl_pending.clear()
         self.hello_acked.clear()
         self.error_event.clear()
-        self.link_lost.set()
-        self._emit({"type": "link", "state": "down"})
+        self.last_error = None
+        self.session_id = None
+        self.master_key = None
+        self.mtu = None
+        self.chunk_sec = None
+        self.current_file = None
+        self._close_part()
 
     async def disconnect_graceful(self, wait_pending_s: float = 10.0):
         try:
@@ -1127,26 +1183,31 @@ async def _sleep_or_stopped(is_stopped, delay: float) -> bool:
 
 
 async def supervise_link(client, *, log, is_stopped, on_ready=None,
-                         on_alive=None, tick=None,
-                         base_delay: float = 1.0, max_delay: float = 10.0) -> None:
-    """Single reconnect supervisor: connect+handshake, wait for link loss,
-    back off, repeat. Returns when is_stopped() is true. Steady-state
-    reconnect decisions live only here — not in individual call sites."""
-    delay = base_delay
+                         on_alive=None, tick=None) -> None:
+    """Single reconnect supervisor: OFFLINE -> DISCOVER -> CONNECT -> READY
+    -> MONITOR. Returns when is_stopped() is true. Steady-state reconnect
+    decisions live only here — not in individual call sites."""
     ready_once = False
     while not is_stopped():
-        client.link_lost.clear()
+        # 1. DISCOVER: no pairing/recovery until the device is visible.
         try:
-            # Physical link and application handshake are separate states:
-            # a fresh link always needs a handshake; a live link whose
-            # handshake failed must re-handshake instead of being trusted.
+            device = await client.rediscover(timeout=3.0)
+        except Exception as e:
+            log(f"[ble] scan error: {e}")
+            if await _sleep_or_stopped(is_stopped, 2.0):
+                return
+            continue
+        if device is None:
+            log("[ble] Checkpoint offline — waiting for power/advertising...")
+            if await _sleep_or_stopped(is_stopped, 2.0):
+                return
+            continue
+        # 2. CONNECT + SECURITY + HANDSHAKE on the fresh BLEDevice.
+        try:
+            await client.connect(device)
+            await client.do_handshake()
             if not (client.client and client.client.is_connected):
-                await client.connect()
-                await client.do_handshake()
-            elif client.link_state != "up":
-                await client.do_handshake()
-            if not (client.client and client.client.is_connected):
-                raise ConnectionError("Link dropped during handshake")
+                raise ConnectionError("BLE disappeared during handshake")
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -1155,32 +1216,35 @@ async def supervise_link(client, *, log, is_stopped, on_ready=None,
                 await client.disconnect()
             except Exception:
                 pass
-            log(f"connect failed: {e} — retry in {delay:.0f}s ...")
-            delay = min(delay * 2.0, max_delay)
-            if await _sleep_or_stopped(is_stopped, delay):
+            log(f"[ble] connection attempt failed: {e}")
+            if await _sleep_or_stopped(is_stopped, 2.0):
                 return
             continue
-        delay = base_delay
+        # 3. READY (once) + per-cycle alive notification.
         if not ready_once:
             ready_once = True
             if on_ready is not None:
                 await on_ready()
         if on_alive is not None:
             await on_alive()
-        # A disconnect between handshake and here must not be erased: never
-        # clear link_lost except at the top of the cycle.
+        # 4. MONITOR the live connection. Never clear link_lost here: a
+        # disconnect between handshake and this loop must not be erased.
         while not is_stopped():
             if client.link_lost.is_set():
                 break
             if not (client.client and client.client.is_connected):
-                client.link_lost.set()
                 break
-            await asyncio.sleep(0.5)
             if tick is not None:
-                await tick()
+                try:
+                    await tick()
+                except Exception:
+                    # A failed status poll can also reveal a dead link.
+                    if not (client.client and client.client.is_connected):
+                        break
+            await asyncio.sleep(0.5)
         if is_stopped():
             return
-        log("link lost — reconnecting …")
+        log("[ble] link disappeared — rediscovering...")
         try:
             await client.disconnect()
         except Exception:

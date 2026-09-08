@@ -295,51 +295,6 @@ def test_hello_exchange_raises_without_reconnecting(monkeypatch):
 
 
 @needs_deps
-def test_supervisor_rehandshakes_live_unready_link():
-    import asyncio
-
-    from client_app.ble_client import CheckpointClient, supervise_link
-    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
-    connects, handshakes = [], []
-
-    class FakeConnected:
-        is_connected = True
-
-    async def fake_connect():
-        connects.append(1)
-        client.client = FakeConnected()
-
-    async def fake_handshake():
-        handshakes.append(1)
-        client.link_state = "up"
-
-    async def fake_disconnect():
-        client.client = None
-
-    client.connect = fake_connect
-    client.do_handshake = fake_handshake
-    client.disconnect = fake_disconnect
-    # Link alive at BLE level but handshake failed: must re-handshake, not trust.
-    client.client = FakeConnected()
-    client.link_state = "down"
-    stopped = [False]
-
-    async def run():
-        async def stopper():
-            await asyncio.sleep(0.3)
-            stopped[0] = True
-
-        await asyncio.gather(
-            supervise_link(client, log=lambda m: None,
-                           is_stopped=lambda: stopped[0]),
-            stopper())
-
-    asyncio.run(run())
-    assert connects == [], "no fresh connect needed on a live link"
-    assert handshakes, "live-but-unready link must re-handshake"
-
-
-@needs_deps
 def test_supervisor_keeps_disconnect_between_handshake_and_wait():
     import asyncio
 
@@ -347,12 +302,22 @@ def test_supervisor_keeps_disconnect_between_handshake_and_wait():
     client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
     connects = []
 
+    class FakeDevice:
+        address = "00:00:00:00:00:00"
+        name = "Checkpoint"
+
     class FakeConnected:
         is_connected = True
 
-    async def fake_connect():
+    async def fake_rediscover(timeout=3.0):
+        return FakeDevice()
+
+    async def fake_connect(device=None):
+        assert device is not None
         connects.append(1)
         client.client = FakeConnected()
+        # Faithful to connect(): installing a generation clears stale events.
+        client.link_lost.clear()
 
     async def fake_handshake():
         client.link_state = "up"
@@ -363,6 +328,7 @@ def test_supervisor_keeps_disconnect_between_handshake_and_wait():
     async def fake_disconnect():
         client.client = None
 
+    client.rediscover = fake_rediscover
     client.connect = fake_connect
     client.do_handshake = fake_handshake
     client.disconnect = fake_disconnect
@@ -370,13 +336,12 @@ def test_supervisor_keeps_disconnect_between_handshake_and_wait():
 
     async def run():
         async def stopper():
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(3.5)
             stopped[0] = True
 
         await asyncio.gather(
             supervise_link(client, log=lambda m: None,
-                           is_stopped=lambda: stopped[0],
-                           base_delay=0.1, max_delay=0.2),
+                           is_stopped=lambda: stopped[0]),
             stopper())
 
     asyncio.run(run())
@@ -427,7 +392,7 @@ def _make_fake_bleak():
             self.is_connected = False
             self.disconnected_callback = kwargs.get("disconnected_callback")
 
-        async def connect(self):
+        async def connect(self, *args, **kwargs):
             self.is_connected = True
 
         async def pair(self):
@@ -490,7 +455,7 @@ def test_connect_bond_probe_reports_missing_record(monkeypatch, capsys):
         def __init__(self, address, *args, **kwargs):
             self.is_connected = False
 
-        async def connect(self):
+        async def connect(self, *args, **kwargs):
             self.is_connected = True
 
         async def pair(self):
@@ -701,17 +666,28 @@ def test_supervisor_reconnects_on_link_loss():
     connects = []
     losses = [False]
 
+    class FakeDevice:
+        address = "00:00:00:00:00:00"
+        name = "Checkpoint"
+
     class FakeConnected:
         is_connected = True
 
-    async def fake_connect():
+    async def fake_rediscover(timeout=3.0):
+        return FakeDevice()
+
+    async def fake_connect(device=None):
+        assert device is not None
         connects.append(1)
         client.client = FakeConnected()
+        # Faithful to connect(): installing a generation clears stale events.
+        client.link_lost.clear()
         client.link_state = "up"
 
     async def fake_handshake():
         pass
 
+    client.rediscover = fake_rediscover
     client.connect = fake_connect
     client.do_handshake = fake_handshake
 
@@ -804,6 +780,46 @@ def test_next_seq_skips_zero():
 
 
 @needs_deps
+def test_link_lost_tears_down_session(tmp_path, monkeypatch):
+    import asyncio
+    import gc
+
+    from client_app import config as cfg
+    from client_app.ble_client import CheckpointClient, IncomingFile
+    monkeypatch.setattr(cfg, "OUTPUT_DIR", tmp_path)
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    loop = asyncio.new_event_loop()
+    try:
+        # Pending command whose waiter died mid-write: nobody will await it.
+        fut = loop.create_future()
+        client._ctrl_pending[7] = fut
+        client.session_id = 0x12345678
+        client.master_key = b"K" * 16
+        client.mtu = 517
+        client.chunk_sec = 50
+        client.current_file = IncomingFile(
+            file_id=0x1, total_bytes=220, total_frags=1, expected_crc=0,
+            key=b"k" * 16, session_id=1)
+        client._open_part(0x1, 220)
+        assert client._part_fh is not None
+        loop.call_soon(client._handle_link_lost)
+        loop.run_until_complete(asyncio.sleep(0.05))
+        assert client._ctrl_pending == {}
+        assert client.current_file is None
+        assert client.session_id is None
+        assert client.master_key is None
+        assert client.mtu is None
+        assert client._part_fh is None
+        assert client.link_lost.is_set()
+        # Exception was retrieved inside teardown: no "never retrieved" on GC.
+        assert isinstance(fut.exception(), ConnectionError)
+        del fut
+        gc.collect()
+    finally:
+        loop.close()
+
+
+@needs_deps
 def test_stale_disconnect_callback_ignored():
     import asyncio
 
@@ -837,7 +853,7 @@ def test_connect_installs_new_generation(monkeypatch):
             created.append(kwargs.get("disconnected_callback"))
             self.is_connected = False
 
-        async def connect(self):
+        async def connect(self, *args, **kwargs):
             self.is_connected = True
 
         async def pair(self):

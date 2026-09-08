@@ -231,6 +231,7 @@ bool ble_init() {
     adv->setScanResponseData(scanResp);
   }
   adv->start();
+  Serial.println("BLE advertising started");
   crypto_init();
   crypto_load_or_gen_key();
   return true;
