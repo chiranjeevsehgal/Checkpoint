@@ -121,6 +121,16 @@ static void send_error_locked(uint8_t code) {
   }
 }
 
+static void send_ready_ack() {
+  uint8_t ack_payload[4];
+  memcpy(ack_payload, &s_session, 4);
+  uint8_t resp[PROTO_MAX_PACKET];
+  size_t rl = sizeof(resp);
+  if (proto_build(PKT_READY_ACK, 0, ack_payload, sizeof(ack_payload), resp, &rl)) {
+    ctrl_indicate_locked(resp, rl);
+  }
+}
+
 static void handle_hello(const uint8_t *raw, size_t raw_len) {
   if (raw_len >= 1 && raw[0] != PROTO_VER) {
     send_error_locked(0x02);
@@ -131,18 +141,16 @@ static void handle_hello(const uint8_t *raw, size_t raw_len) {
     return;
   }
   Packet hello;
-  if (!proto_parse(raw, raw_len, &hello) || hello.len < 17) {
+  if (!proto_parse(raw, raw_len, &hello) || hello.len != 1) {
     send_error_locked(0x03);
     return;
   }
-  uint8_t client_id[16];
-  memcpy(client_id, hello.payload, 16);
-  bool enroll_requested = (hello.payload[16] & 0x01) != 0;
+  bool enroll_requested = (hello.payload[0] & 0x01) != 0;
   if (!crypto_random_bytes(s_device_nonce, sizeof(s_device_nonce))) {
     send_error_locked(0x03);
     return;
   }
-  if (!auth_begin(s_session, client_id, enroll_requested, s_device_nonce)) {
+  if (!auth_begin(s_session, enroll_requested, s_device_nonce)) {
     send_error_locked(0x03);
     return;
   }
@@ -187,15 +195,15 @@ static void handle_auth(const uint8_t *raw, size_t raw_len) {
     return;
   }
   Packet pkt;
-  if (!s_hello_sent || !proto_parse(raw, raw_len, &pkt) || pkt.len < 48) {
+  if (!s_hello_sent || !proto_parse(raw, raw_len, &pkt) || pkt.len != 64) {
     send_error_locked(0x03);
     return;
   }
   uint8_t client_nonce[16];
-  memcpy(client_nonce, pkt.payload, 16);
+  memcpy(client_nonce, pkt.payload + 16, 16);
   bool is_enroll = false;
   uint8_t server_proof[32];
-  if (!auth_verify_client_proof(client_nonce, pkt.payload + 16, &is_enroll, server_proof)) {
+  if (!auth_verify_client_proof(pkt.payload, client_nonce, pkt.payload + 32, &is_enroll, server_proof)) {
     memset(client_nonce, 0, sizeof(client_nonce));
     send_error_locked(0x03);
     if (s_server && s_conn_handle != 0xFFFF) s_server->disconnect(s_conn_handle);
@@ -217,13 +225,21 @@ static void handle_ready(const uint8_t *raw, size_t raw_len) {
     return;
   }
   Packet ready;
-  if (!s_hello_sent || s_handshaked || !proto_parse(raw, raw_len, &ready) || ready.len < 36) {
+  if (!s_hello_sent || !proto_parse(raw, raw_len, &ready) || ready.len != 36) {
     send_error_locked(0x03);
     return;
   }
   uint32_t echo = 0;
   memcpy(&echo, ready.payload, 4);
   if (echo != s_session) {
+    send_error_locked(0x03);
+    return;
+  }
+  if (s_handshaked && auth_is_authenticated()) {
+    send_ready_ack();
+    return;
+  }
+  if (s_handshaked) {
     send_error_locked(0x03);
     return;
   }
@@ -236,13 +252,7 @@ static void handle_ready(const uint8_t *raw, size_t raw_len) {
   s_handshake_start_ms = 0;
   s_state = BLE_READY;
   ui_signal_auth_ok();
-  uint8_t ack_payload[4];
-  memcpy(ack_payload, &s_session, 4);
-  uint8_t resp[PROTO_MAX_PACKET];
-  size_t rl = sizeof(resp);
-  if (proto_build(PKT_READY_ACK, 0, ack_payload, sizeof(ack_payload), resp, &rl)) {
-    ctrl_indicate_locked(resp, rl);
-  }
+  send_ready_ack();
 }
 
 class CtrlCallbacks : public NimBLECharacteristicCallbacks {

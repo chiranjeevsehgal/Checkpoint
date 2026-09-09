@@ -227,6 +227,272 @@ def test_device_and_storage_events():
 
 
 @needs_deps
+def test_reconnect_uses_stored_client_id(monkeypatch):
+    """Blocker 1: HELLO carries no identity; AUTH must use the stored id.
+
+    Simulates a normal reconnect: the client starts with a fresh random id,
+    learns device_id from HELLO_ACK, loads the stored credential, and must
+    send the STORED client_id in AUTH (the firmware never saw the random one).
+    """
+    import asyncio
+    import struct
+
+    import client_app.credentials as credsmod
+    from client_app import config as cfg
+    from client_app.ble_client import CheckpointClient
+    from client_app.crypto import (
+        SERVER_DOM,
+        build_transcript,
+        derive_session_key_v3,
+        finish_proof,
+    )
+    from client_app.protocol import proto_build, proto_parse
+
+    device_id = bytes(range(16))
+    device_nonce = bytes(range(64, 80))
+    stored_id = bytes(range(16, 32))
+    stored_key = bytes(range(32, 64))
+    session = 0xAABBCCDD
+    monkeypatch.setattr(
+        credsmod, "load_client_credential",
+        lambda dev: (stored_id, stored_key) if bytes(dev) == device_id else None)
+
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    initial_random = bytes(client.client_id)
+    assert initial_random != stored_id
+    writes = []
+
+    async def fake_write(ptype, seq, payload=b""):
+        writes.append((ptype, bytes(payload)))
+
+    client.write_ctrl = fake_write
+    hello_ack = (struct.pack("<B", cfg.PROTO_VER) + struct.pack("<I", session)
+                 + struct.pack("<H", 247) + struct.pack("<I", 50)
+                 + device_id + device_nonce + bytes([0]))
+    assert client._parse_hello_ack(hello_ack) is True
+
+    async def run():
+        await client._auth_exchange()
+
+    async def driver():
+        for _ in range(500):
+            await asyncio.sleep(0.01)
+            auth_writes = [w for w in writes if w[0] == cfg.PKT_AUTH]
+            if auth_writes:
+                break
+        assert auth_writes, "AUTH was never sent"
+        auth_payload = auth_writes[0][1]
+        assert len(auth_payload) == 64
+        assert auth_payload[:16] == stored_id
+        assert auth_payload[:16] != initial_random
+        client_nonce = auth_payload[16:32]
+        transcript = build_transcript(device_id, stored_id, session,
+                                      device_nonce, client_nonce, 0)
+        expect_session = derive_session_key_v3(stored_key, device_nonce, client_nonce,
+                                               device_id, stored_id, session)
+        server_proof = finish_proof(expect_session, SERVER_DOM, transcript)
+        await client._handle_ctrl_packet(
+            proto_parse(proto_build(cfg.PKT_AUTH_OK, 1, server_proof)))
+
+    async def both():
+        await asyncio.gather(run(), driver())
+
+    asyncio.run(both())
+    expect_session = derive_session_key_v3(
+        stored_key, device_nonce, client.client_nonce,
+        device_id, stored_id, session)
+    assert client.session_key == expect_session
+
+
+@needs_deps
+def test_ready_error_does_not_save_credentials(monkeypatch):
+    """Blocker 2: a device ERROR during READY must fail, never save."""
+    import asyncio
+
+    import client_app.credentials as credsmod
+    from client_app import config as cfg
+    from client_app.ble_client import CheckpointClient
+
+    saved = []
+    monkeypatch.setattr(credsmod, "save_client_credential",
+                        lambda dev, cid, ckey: saved.append((bytes(dev), bytes(cid), bytes(ckey))))
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    client.enroll = True
+
+    async def fake_hello_exchange(label):
+        client.session_id = 0x1234ABCD
+        client.device_id = bytes(16)
+        client.device_nonce = bytes(16)
+        client.hello_acked.set()
+        return "acked"
+
+    async def fake_auth_exchange():
+        client.session_key = b"S" * 16
+        client._auth_transcript = b"T" * 88
+        client._pending_enroll_key = b"E" * 32
+
+    async def fake_write_ctrl(ptype, seq, payload=b""):
+        if ptype == cfg.PKT_READY:
+            client.last_error = 0x03
+            client.error_event.set()
+
+    client._hello_exchange = fake_hello_exchange
+    client._auth_exchange = fake_auth_exchange
+    client.write_ctrl = fake_write_ctrl
+    with pytest.raises(RuntimeError, match="READY rejected"):
+        asyncio.run(client.do_handshake())
+    assert saved == [], "rejected READY must not persist an enrollment"
+
+
+@needs_deps
+def test_ready_retry_on_dropped_ack(monkeypatch):
+    """Issue 4 (host): a lost READY_ACK is retried, then succeeds."""
+    import asyncio
+    import struct
+
+    from client_app import config as cfg
+    from client_app.ble_client import CheckpointClient
+    from client_app.protocol import proto_build, proto_parse
+
+    monkeypatch.setattr(cfg, "ACK_TIMEOUT_S", 0.2)
+    try:
+        client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+        ready_sends = []
+
+        async def fake_hello_exchange(label):
+            client.session_id = 0x1234ABCD
+            client.device_id = bytes(16)
+            client.device_nonce = bytes(16)
+            client.hello_acked.set()
+            return "acked"
+
+        async def fake_auth_exchange():
+            client.session_key = b"S" * 16
+            client._auth_transcript = b"T" * 88
+
+        async def fake_write_ctrl(ptype, seq, payload=b""):
+            if ptype == cfg.PKT_READY:
+                ready_sends.append(bytes(payload))
+                if len(ready_sends) == 1:
+                    return  # READY_ACK lost on the way back
+                pkt = proto_parse(proto_build(
+                    cfg.PKT_READY_ACK, 1, struct.pack("<I", 0x1234ABCD)))
+                await client._handle_ctrl_packet(pkt)
+
+        client._hello_exchange = fake_hello_exchange
+        client._auth_exchange = fake_auth_exchange
+        client.write_ctrl = fake_write_ctrl
+        asyncio.run(client.do_handshake())
+        assert len(ready_sends) == 2, "one drop must cause exactly one retry"
+        assert all(len(p) == 36 for p in ready_sends)
+    finally:
+        monkeypatch.undo()
+
+
+@needs_deps
+def test_enroll_clears_enroll_mode(monkeypatch):
+    """Blocker 3: after a validated READY_ACK the client is a normal client."""
+    import asyncio
+    import struct
+
+    import client_app.credentials as credsmod
+    from client_app import config as cfg
+    from client_app.ble_client import CheckpointClient
+    from client_app.protocol import proto_build, proto_parse
+
+    saved = []
+    monkeypatch.setattr(credsmod, "save_client_credential",
+                        lambda dev, cid, ckey: saved.append((bytes(dev), bytes(cid), bytes(ckey))))
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False,
+                              claim_key=bytes(32), enroll=True)
+
+    async def fake_hello_exchange(label):
+        client.session_id = 0x1234ABCD
+        client.device_id = bytes(16)
+        client.device_nonce = bytes(16)
+        client.hello_acked.set()
+        return "acked"
+
+    async def fake_auth_exchange():
+        client.session_key = b"S" * 16
+        client._auth_transcript = b"T" * 88
+        client._pending_enroll_key = b"E" * 32
+
+    async def fake_write_ctrl(ptype, seq, payload=b""):
+        if ptype == cfg.PKT_READY:
+            pkt = proto_parse(proto_build(
+                cfg.PKT_READY_ACK, 1, struct.pack("<I", 0x1234ABCD)))
+            await client._handle_ctrl_packet(pkt)
+
+    client._hello_exchange = fake_hello_exchange
+    client._auth_exchange = fake_auth_exchange
+    client.write_ctrl = fake_write_ctrl
+    asyncio.run(client.do_handshake())
+    assert len(saved) == 1
+    assert client.client_key == b"E" * 32
+    assert client.enroll is False
+    assert client.claim_key is None
+
+
+@needs_deps
+def test_parse_claim_hex_rejects_bad_lengths():
+    from client_app.ble_client import parse_claim_hex
+    assert parse_claim_hex("ab" * 32) == bytes.fromhex("ab" * 32)
+    for bad in ["00", "ab" * 16, "ab" * 31, "ab" * 33, "zz" * 32, "", "  "]:
+        try:
+            parse_claim_hex(bad)
+            raised = None
+        except RuntimeError as e:
+            raised = e
+        assert raised is not None, f"claim {bad!r} must be rejected"
+
+
+@needs_deps
+def test_ready_ack_validates_session():
+    import asyncio
+    import struct
+
+    from client_app import config as cfg
+    from client_app.ble_client import CheckpointClient
+    from client_app.protocol import proto_build, proto_parse
+
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    client.session_id = 0x1234ABCD
+
+    async def run(payload_bytes, session):
+        client.ready_ack_event.clear()
+        client.error_event.clear()
+        client.last_error = None
+        client.session_id = session
+        await client._handle_ctrl_packet(
+            proto_parse(proto_build(cfg.PKT_READY_ACK, 1, payload_bytes)))
+
+    asyncio.run(run(b"short", 0x1234ABCD))
+    assert client.error_event.is_set() and not client.ready_ack_event.is_set()
+    asyncio.run(run(struct.pack("<I", 0xDEADBEEF), 0x1234ABCD))
+    assert client.error_event.is_set() and not client.ready_ack_event.is_set()
+    asyncio.run(run(struct.pack("<I", 0x1234ABCD), 0x1234ABCD))
+    assert client.ready_ack_event.is_set() and not client.error_event.is_set()
+
+
+@needs_deps
+def test_transcript_byte_exact():
+    """Issue 11 (host half): transcript layout must match firmware auth.cpp."""
+    import struct
+
+    from client_app.crypto import build_transcript
+    dev = bytes(range(16))
+    cli = bytes(range(16, 32))
+    dn = bytes(range(32, 48))
+    cn = bytes(range(48, 64))
+    sess, mode = 0x12345678, 1
+    expect = (b"checkpoint-auth-v3" + dev + cli + struct.pack("<I", sess)
+              + dn + cn + bytes([mode]))
+    assert build_transcript(dev, cli, sess, dn, cn, mode) == expect
+    assert len(expect) == 87
+
+
+@needs_deps
 def test_v3_auth_transcript_and_proofs():
     from client_app.crypto import (
         build_transcript,

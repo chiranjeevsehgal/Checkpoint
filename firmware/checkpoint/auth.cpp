@@ -180,11 +180,10 @@ bool auth_client_exists(const uint8_t client_id[AUTH_CLIENT_ID_BYTES]) {
   return find_slot(client_id) >= 0;
 }
 
-bool auth_begin(uint32_t session_id, const uint8_t client_id[AUTH_CLIENT_ID_BYTES], bool enroll_requested,
-                const uint8_t device_nonce[AUTH_NONCE_BYTES]) {
-  if (!client_id || !device_nonce) return false;
+bool auth_begin(uint32_t session_id, bool enroll_requested, const uint8_t device_nonce[AUTH_NONCE_BYTES]) {
+  if (!device_nonce) return false;
   s_session = session_id;
-  memcpy(s_pending_client, client_id, AUTH_CLIENT_ID_BYTES);
+  memset(s_pending_client, 0, sizeof(s_pending_client));
   memcpy(s_device_nonce, device_nonce, AUTH_NONCE_BYTES);
   s_enroll_attempt = enroll_requested && auth_enrollment_active();
   s_handshake_active = true;
@@ -197,9 +196,11 @@ bool auth_begin(uint32_t session_id, const uint8_t client_id[AUTH_CLIENT_ID_BYTE
   return true;
 }
 
-bool auth_verify_client_proof(const uint8_t client_nonce[AUTH_NONCE_BYTES], const uint8_t proof[AUTH_PROOF_BYTES],
+bool auth_verify_client_proof(const uint8_t client_id[AUTH_CLIENT_ID_BYTES],
+                              const uint8_t client_nonce[AUTH_NONCE_BYTES], const uint8_t proof[AUTH_PROOF_BYTES],
                               bool *out_enroll, uint8_t server_proof_out[AUTH_PROOF_BYTES]) {
-  if (!s_handshake_active || !client_nonce || !proof || !server_proof_out) return false;
+  if (!s_handshake_active || !client_id || !client_nonce || !proof || !server_proof_out) return false;
+  memcpy(s_pending_client, client_id, AUTH_CLIENT_ID_BYTES);
   uint8_t mode = s_enroll_attempt ? 1 : 0;
   build_transcript(s_device_id, s_pending_client, s_session, s_device_nonce, client_nonce, mode, s_transcript,
                    &s_transcript_len);

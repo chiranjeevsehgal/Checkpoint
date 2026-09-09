@@ -440,6 +440,9 @@ class CheckpointClient:
         self.client_nonce = None
         self.server_proof = None
         self.auth_mode = 0
+        self._pending_enroll_key = None
+        self._expect_session = None
+        self._auth_transcript = None
         self.mtu = None
         self.chunk_sec = None
         self.current_file = None
@@ -692,7 +695,7 @@ class CheckpointClient:
         self.last_error = None
         seq = self.next_seq()
         print(f"Sending HELLO (seq={seq}) {label} ...")
-        payload = bytes(self.client_id) + bytes([0x01 if self.enroll else 0x00])
+        payload = bytes([0x01 if self.enroll else 0x00])
         try:
             await self.write_ctrl(cfg.PKT_HELLO, seq, payload)
         except Exception as e:
@@ -755,7 +758,7 @@ class CheckpointClient:
         self.error_event.clear()
         self.last_error = None
         await self.write_ctrl(cfg.PKT_AUTH, self.next_seq(),
-                              bytes(self.client_nonce) + bytes(proof))
+                              bytes(self.client_id) + bytes(self.client_nonce) + bytes(proof))
         try:
             await asyncio.wait_for(self._wait_for_auth_result(), timeout=cfg.ACK_TIMEOUT_S)
         except asyncio.TimeoutError:
@@ -782,14 +785,31 @@ class CheckpointClient:
             raise RuntimeError(f"HELLO rejected with error 0x{self.last_error:02x}"
                                if self.last_error is not None else "HELLO rejected")
         await self._auth_exchange()
-        await self._send_ready()
-        try:
-            await asyncio.wait_for(self._wait_for_ready_ack(), timeout=cfg.ACK_TIMEOUT_S)
-        except asyncio.TimeoutError:
-            raise ConnectionError("READY timed out") from None
-        if self.enroll and self.client_key is None and getattr(self, "_pending_enroll_key", None):
-            creds.save_client_credential(self.device_id, self.client_id, self._pending_enroll_key)
-            self.client_key = bytes(self._pending_enroll_key)
+        for attempt in range(1, 4):
+            self.ready_ack_event.clear()
+            self.error_event.clear()
+            self.last_error = None
+            await self._send_ready()
+            try:
+                await asyncio.wait_for(self._wait_for_ready_ack(), timeout=cfg.ACK_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                if attempt == 3:
+                    raise ConnectionError("READY timed out") from None
+                print(f"  READY_ACK lost (attempt {attempt}/3) — retrying ...")
+                continue
+            if self.ready_ack_event.is_set():
+                break
+            if self.last_error is not None:
+                raise RuntimeError(f"READY rejected with error 0x{self.last_error:02x}")
+            raise RuntimeError("READY rejected")
+        if self.enroll:
+            pending = getattr(self, "_pending_enroll_key", None)
+            if pending is None:
+                raise RuntimeError("Enrollment completed without pending key")
+            creds.save_client_credential(self.device_id, self.client_id, pending)
+            self.client_key = bytes(pending)
+            self.enroll = False
+            self.claim_key = None
         self._pending_enroll_key = None
         self._expect_session = None
         self._auth_transcript = None
@@ -912,14 +932,23 @@ class CheckpointClient:
             print(f"  [!] Device PKT_ERROR: {detail} payload={pkt.payload!r}")
 
         elif pkt.type == cfg.PKT_AUTH_OK:
-            if len(pkt.payload) < 32:
-                print("  [!] AUTH_OK payload too short")
+            if len(pkt.payload) != 32:
+                print("  [!] AUTH_OK wrong length — rejecting")
                 self.error_event.set()
             else:
                 self.server_proof = bytes(pkt.payload[:32])
                 self.auth_ok_event.set()
 
         elif pkt.type == cfg.PKT_READY_ACK:
+            if len(pkt.payload) != 4:
+                print("  [!] READY_ACK wrong length — rejecting")
+                self.error_event.set()
+                return
+            sid = struct.unpack("<I", pkt.payload)[0]
+            if sid != self.session_id:
+                print("  [!] READY_ACK session mismatch — rejecting")
+                self.error_event.set()
+                return
             self.ready_ack_event.set()
 
     def _parse_hello_ack(self, payload: bytes) -> bool:
@@ -1405,6 +1434,16 @@ async def find_device(name_or_addr: str | None) -> str:
                        f"{[(d.name, d.address) for d in devices]}")
 
 
+def parse_claim_hex(claim_hex: str) -> bytes:
+    try:
+        claim_key = bytes.fromhex(claim_hex.strip())
+    except ValueError:
+        raise RuntimeError("--claim must be 64 hex chars (32 bytes)")
+    if len(claim_key) != 32:
+        raise RuntimeError("--claim must be 64 hex chars (32 bytes)")
+    return claim_key
+
+
 async def cli_async_main() -> None:
     raw = sys.argv[1:]
     args = [a for a in raw if not a.startswith("-")]
@@ -1477,11 +1516,8 @@ async def cli_async_main() -> None:
             claim_hex = tok.split("=", 1)[1]
     claim_key = None
     if claim_hex:
-        try:
-            claim_key = bytes.fromhex(claim_hex.strip())
-            enroll = True
-        except ValueError:
-            raise RuntimeError("--claim must be 64 hex chars (32 bytes)")
+        claim_key = parse_claim_hex(claim_hex)
+        enroll = True
     arg = args[0] if args else None
     bench_csv = None
     if bench_flag:

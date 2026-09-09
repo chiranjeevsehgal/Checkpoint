@@ -35,7 +35,8 @@ def test_challenge_response_present():
     ble = read("ble_service.cpp")
     for token in ("handle_hello", "handle_auth", "handle_ready",
                   "auth_begin", "auth_verify_client_proof",
-                  "auth_verify_client_finish", "PKT_AUTH_OK", "PKT_READY_ACK"):
+                  "auth_verify_client_finish", "PKT_AUTH_OK", "PKT_READY_ACK",
+                  "send_ready_ack"):
         assert token in ble, f"missing {token}"
     auth = read("auth.cpp")
     for token in ("ckauth", '"c%d_id"', '"c%d_key"',
@@ -84,7 +85,9 @@ def test_button_and_led_and_usb():
     ui = read("ui.cpp")
     assert "UI_LONG_PRESS_MS" in ui
     assert "auth_open_enrollment" in ui
-    assert "LED_ENROLL" in ui and "LED_AUTH_OK" in ui
+    assert "OVERLAY_ENROLL" in ui and "OVERLAY_AUTH_OK" in ui
+    assert "LED_ENROLL" not in ui and "LED_AUTH_OK" not in ui, \
+        "enrollment must be an overlay, not a base LED state"
     cfg = read("config.h")
     assert "UI_LONG_PRESS_MS 5000" in cfg
     assert "AUTH_ENROLL_WINDOW_MS 60000" in cfg
@@ -133,9 +136,23 @@ def test_v3_wire_lengths():
     from client_app import config as cfg
     assert cfg.PROTO_VER == 3
     assert cfg.PKT_AUTH == 0x03 and cfg.PKT_AUTH_OK == 0x04 and cfg.PKT_READY_ACK == 0x05
-    hello = bytes(16) + bytes([0])
-    assert len(hello) == 17
-    auth_p = bytes(16) + bytes(32)
-    assert len(auth_p) == 48
+    hello = bytes([0])
+    assert len(hello) == 1
+    auth_p = bytes(16) + bytes(16) + bytes(32)
+    assert len(auth_p) == 64
     ready = struct.pack("<I", 1) + bytes(32)
     assert len(ready) == 36
+    ble = read("ble_service.cpp")
+    assert "hello.len != 1" in ble, "HELLO must be exactly flags[1]"
+    assert "pkt.len != 64" in ble, "AUTH must be exactly 64 bytes"
+    assert "ready.len != 36" in ble, "READY must be exactly 36 bytes"
+
+
+def test_ready_idempotent_and_session_zeroized():
+    ble = read("ble_service.cpp")
+    assert "if (s_handshaked && auth_is_authenticated())" in ble, \
+        "duplicate READY on a live session must resend READY_ACK"
+    auth = read("auth.cpp")
+    assert "memset(s_session_key, 0, sizeof(s_session_key))" in auth, \
+        "disconnect must zero the session key"
+    assert "s_has_session_key = false" in auth

@@ -6,14 +6,19 @@
 #include "log.h"
 #include <Adafruit_NeoPixel.h>
 
+enum LedState : uint8_t { LED_OFF, LED_ON, LED_BOOKMARK, LED_ERROR, LED_FATAL, LED_VAD_IDLE };
+enum LedOverlay : uint8_t { OVERLAY_NONE, OVERLAY_ENROLL, OVERLAY_AUTH_OK };
+
 static TaskHandle_t s_task = nullptr;
 static volatile uint8_t s_state = 0;
 static volatile bool s_muted = false;
 static volatile uint8_t s_brightness = HW_RGB_BRIGHTNESS;
 static volatile bool s_brightness_dirty = false;
 static volatile uint32_t s_remote_action_ms = 0;
-
-enum LedState : uint8_t { LED_OFF, LED_ON, LED_BOOKMARK, LED_ERROR, LED_FATAL, LED_VAD_IDLE, LED_ENROLL, LED_AUTH_OK };
+// Temporary indication above the recorder base state: expiry always falls
+// back to s_state, so enrollment can never orphan the recording LED.
+static volatile uint8_t s_overlay = OVERLAY_NONE;
+static volatile uint32_t s_overlay_enter_ms = 0;
 
 static Adafruit_NeoPixel s_rgb(1, HW_RGB_PIN, NEO_GRB + NEO_KHZ800);
 static uint32_t s_last_rgb = 0xFFFFFFFFu; // force first show
@@ -78,13 +83,17 @@ void ui_note_remote_action() {
 
 void ui_signal_enroll(bool on) {
   if (on) {
-    s_state = LED_ENROLL;
-  } else if (s_state == LED_ENROLL) {
-    s_state = LED_OFF;
+    s_overlay = OVERLAY_ENROLL;
+    s_overlay_enter_ms = millis();
+  } else if (s_overlay == OVERLAY_ENROLL) {
+    s_overlay = OVERLAY_NONE;
   }
 }
 
-void ui_signal_auth_ok() { s_state = LED_AUTH_OK; }
+void ui_signal_auth_ok() {
+  s_overlay = OVERLAY_AUTH_OK;
+  s_overlay_enter_ms = millis();
+}
 
 static inline bool ui_stealth_active() {
   return s_muted;
@@ -100,7 +109,6 @@ void ui_task(void *arg) {
   bool long_fired = false;
   uint32_t state_enter_ms = 0;
   static uint32_t last_toggle_ms = 0;
-  static uint32_t auth_ok_enter_ms = 0;
   while (true) {
     bool level = digitalRead(HW_BUTTON_GPIO);
     uint32_t now = millis();
@@ -147,19 +155,8 @@ void ui_task(void *arg) {
         state_enter_ms = now;
       }
     }
-    if (auth_enrollment_active()) {
-      if (s_state != LED_ENROLL && s_state != LED_AUTH_OK && s_state != LED_ERROR && s_state != LED_FATAL) {
-        s_state = LED_ENROLL;
-      }
-    } else if (s_state == LED_ENROLL) {
-      s_state = LED_OFF;
-    }
-    if (s_state == LED_AUTH_OK && auth_ok_enter_ms == 0) auth_ok_enter_ms = now;
-    if (s_state == LED_AUTH_OK && (now - auth_ok_enter_ms) > 1000) {
-      auth_ok_enter_ms = 0;
-      s_state = LED_OFF;
-    }
-    if (s_state != LED_AUTH_OK) auth_ok_enter_ms = 0;
+    if (s_overlay == OVERLAY_ENROLL && !auth_enrollment_active()) s_overlay = OVERLAY_NONE;
+    if (s_overlay == OVERLAY_AUTH_OK && (now - s_overlay_enter_ms) > 1000) s_overlay = OVERLAY_NONE;
     // Track state entry for non-blocking blinks
     static uint8_t prev_state = 255;
     if (s_state != prev_state) {
@@ -177,7 +174,13 @@ void ui_task(void *arg) {
       }
     }
     const bool stealth = ui_stealth_active();
-    switch (s_state) {
+    if (s_overlay == OVERLAY_ENROLL) {
+      uint32_t t = (now - s_overlay_enter_ms) % 1000;
+      bool on = (t < 100) || (t >= 250 && t < 350);
+      ui_set_rgb(0, 0, on ? 120 : 0);
+    } else if (s_overlay == OVERLAY_AUTH_OK) {
+      ui_set_rgb(0, 180, 0);
+    } else switch (s_state) {
       case LED_OFF: ui_set_rgb(0, 0, 0); break;
       case LED_ON:
         if (stealth) ui_set_rgb(0, 0, 0);
@@ -216,16 +219,6 @@ void ui_task(void *arg) {
         }
         uint32_t t = (now - state_enter_ms) % 1000;
         ui_set_rgb(0, 0, (t < 100) ? 90 : 0);
-        break;
-      }
-      case LED_ENROLL: {
-        uint32_t t = (now - state_enter_ms) % 1000;
-        bool on = (t < 100) || (t >= 250 && t < 350);
-        ui_set_rgb(0, 0, on ? 120 : 0);
-        break;
-      }
-      case LED_AUTH_OK: {
-        ui_set_rgb(0, 180, 0);
         break;
       }
     }

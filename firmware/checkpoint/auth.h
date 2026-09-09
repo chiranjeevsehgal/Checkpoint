@@ -22,8 +22,8 @@ void auth_close_enrollment();
 
 bool auth_client_exists(const uint8_t client_id[AUTH_CLIENT_ID_BYTES]);
 
-bool auth_begin(uint32_t session_id, const uint8_t client_id[AUTH_CLIENT_ID_BYTES], bool enroll_requested, const uint8_t device_nonce[AUTH_NONCE_BYTES]);
-bool auth_verify_client_proof(const uint8_t client_nonce[AUTH_NONCE_BYTES], const uint8_t proof[AUTH_PROOF_BYTES], bool *out_enroll, uint8_t server_proof_out[AUTH_PROOF_BYTES]);
+bool auth_begin(uint32_t session_id, bool enroll_requested, const uint8_t device_nonce[AUTH_NONCE_BYTES]);
+bool auth_verify_client_proof(const uint8_t client_id[AUTH_CLIENT_ID_BYTES], const uint8_t client_nonce[AUTH_NONCE_BYTES], const uint8_t proof[AUTH_PROOF_BYTES], bool *out_enroll, uint8_t server_proof_out[AUTH_PROOF_BYTES]);
 bool auth_verify_client_finish(const uint8_t finish[AUTH_PROOF_BYTES]);
 
 bool auth_is_authenticated();
