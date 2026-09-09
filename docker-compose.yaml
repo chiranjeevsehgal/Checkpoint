@@ -7,10 +7,6 @@ volumes:
     driver: local
   postgres-data:
     driver: local
-  # Named (Linux-native) volume for MinIO. A Windows bind mount was
-  # measured at p95 ~27s for 88 KB PUTs under 1000-VU load and made
-  # bucket listings hang; the named volume keeps load-test results
-  # about the service, not Docker Desktop file translation.
   minio-data:
     driver: local
 
@@ -41,7 +37,7 @@ services:
       start_period: 30s
 
   postgres:
-    image: postgres:18
+    image: pgvector/pgvector:pg18
     container_name: postgres
     networks:
       - backend
@@ -55,21 +51,9 @@ services:
       TZ: Asia/Kolkata
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    # Server display timezone. Storage is TIMESTAMPTZ (always UTC); this only
-    # affects display of NOW()/timestamps in psql/DBeaver sessions that don't
-    # set their own TimeZone.
-    # The ln step restores the tzdata backward-compat link Asia/Calcutta ->
-    # Asia/Kolkata (slim images ship only Kolkata). Older DBeaver/Java clients
-    # send TimeZone=Asia/Calcutta as a connection startup parameter, which the
-    # server rejects before auth without this alias. Re-created on every start
-    # because the container filesystem is ephemeral. Delegates to the stock
-    # entrypoint so first-init (POSTGRES_* env) keeps working; still prefer
-    # fixing the client driver property to Asia/Kolkata long-term.
     command: >
       /bin/bash -c "ln -sf Kolkata /usr/share/zoneinfo/Asia/Calcutta && exec docker-entrypoint.sh postgres -c timezone=Asia/Kolkata"
     healthcheck:
-      # Use TCP + password auth so a wrong POSTGRES_PASSWORD marks the
-      # service unhealthy instead of passing via socket trust.
       test: ["CMD-SHELL", "PGPASSWORD=${POSTGRES_PASSWORD} pg_isready -h localhost -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
@@ -163,11 +147,6 @@ services:
       KAFKA_CLIENT_ID: ingestion-api
 
   kafka-init:
-    # Creates the transcription topic and its DLQ up front so the first
-    # publish does not auto-create with wrong partitions. Ingestion only
-    # produces to the main topic; the .dlq is reserved for the future
-    # transcription-service consumer. Dispatcher retries broker errors
-    # indefinitely by design (see outbox dispatcher).
     image: apache/kafka:4.3.1
     container_name: kafka-init
     networks:
@@ -229,4 +208,43 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       POSTGRES_DSN: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    restart: unless-stopped
+
+  embedding-migrate:
+    build:
+      context: ./embedding-service
+      target: migrate
+    container_name: embedding-migrate
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+
+  embedding:
+    build:
+      context: ./embedding-service
+      target: worker
+    container_name: embedding
+    networks:
+      - backend
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      embedding-migrate:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_EMBEDDING: ${KAFKA_TOPIC_EMBEDDING:-embedding.jobs.v1}
+      KAFKA_CONSUMER_GROUP: embedding-service
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
+      EMBEDDING_CHUNK_TOKENS: ${EMBEDDING_CHUNK_TOKENS:-1000}
+      EMBEDDING_CHUNK_OVERLAP_TOKENS: ${EMBEDDING_CHUNK_OVERLAP_TOKENS:-100}
     restart: unless-stopped
