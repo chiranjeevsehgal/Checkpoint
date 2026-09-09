@@ -41,7 +41,7 @@ def test_wire_format_vectors():
     from client_app import config as cfg
     from client_app.crypto import build_nonce, derive_file_key
     from client_app.protocol import proto_build, proto_parse
-    header = struct.pack("<BBHH", 2, 0x12, 300, 5)
+    header = struct.pack("<BBHH", cfg.PROTO_VER, 0x12, 300, 5)
     expected = header + b"hello" + struct.pack("<I", zlib.crc32(header + b"hello") & 0xFFFFFFFF)
     assert proto_build(0x12, 300, b"hello") == expected
     assert proto_parse(expected).payload == b"hello"
@@ -227,43 +227,40 @@ def test_device_and_storage_events():
 
 
 @needs_deps
-def test_settle_for_encryption_recovers():
-    import asyncio
-
-    from client_app.ble_client import CheckpointClient
-    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
-    calls = []
-    printed = []
-
-    async def fake_exchange(label):
-        calls.append(label)
-        if len(calls) < 3:
-            client.last_error = 0x01
-            return "error"
-        return "acked"
-
-    client._hello_exchange = fake_exchange
-    client._print_handshake_complete = lambda: printed.append(True)
-    assert asyncio.run(client._settle_for_encryption(tries=3, wait_s=0)) is True
-    assert len(calls) == 3 and printed == [True]
-
-
-@needs_deps
-def test_settle_for_encryption_gives_up():
-    import asyncio
-
-    from client_app.ble_client import CheckpointClient
-    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
-    calls = []
-
-    async def fake_exchange(label):
-        calls.append(label)
-        client.last_error = 0x01
-        return "error"
-
-    client._hello_exchange = fake_exchange
-    assert asyncio.run(client._settle_for_encryption(tries=3, wait_s=0)) is False
-    assert len(calls) == 3
+def test_v3_auth_transcript_and_proofs():
+    from client_app.crypto import (
+        build_transcript,
+        client_proof,
+        derive_client_key_v3,
+        derive_session_key_v3,
+        finish_proof,
+    )
+    dev = bytes(range(16))
+    cli = bytes(range(16, 32))
+    dn = bytes(range(32, 48))
+    cn = bytes(range(48, 64))
+    sess = 0x12345678
+    claim = bytes(range(32))
+    t = build_transcript(dev, cli, sess, dn, cn, 1)
+    assert t.startswith(b"checkpoint-auth-v3")
+    assert len(t) == 18 + 16 + 16 + 4 + 16 + 16 + 1
+    ckey = derive_client_key_v3(claim, dn, cn, dev, cli)
+    assert len(ckey) == 32
+    ksess = derive_session_key_v3(ckey, dn, cn, dev, cli, sess)
+    assert len(ksess) == 16
+    proof = client_proof(ckey, t)
+    assert proof == client_proof(ckey, t)
+    assert proof != client_proof(bytes(32), t)
+    srv = finish_proof(ksess, b"checkpoint-server-finish-v3", t)
+    cli_fin = finish_proof(ksess, b"checkpoint-client-finish-v3", t)
+    assert srv != cli_fin
+    # Tampering any transcript field invalidates the proof.
+    bad = bytearray(t)
+    bad[30] ^= 0xFF
+    assert client_proof(ckey, bytes(bad)) != proof
+    # Different nonces give different session keys.
+    ksess2 = derive_session_key_v3(ckey, bytes(16), cn, dev, cli, sess)
+    assert ksess2 != ksess
 
 
 @needs_deps
@@ -468,10 +465,54 @@ def test_connect_bond_probe_reports_missing_record(monkeypatch, capsys):
     monkeypatch.setattr(mod, "BleakClient", PairingBleak)
     monkeypatch.setitem(_sys.modules, "winrt.windows.devices.bluetooth", FakeBtMod)
     client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
-    asyncio.run(client.connect())
+    try:
+        asyncio.run(client.connect())
+        raised = None
+    except RuntimeError as e:
+        raised = e
     out = capsys.readouterr().out
     assert "Windows bond present: False" in out
-    assert "pairing before HELLO" in out
+    assert raised is not None and "refusing to auto-pair" in str(raised)
+    assert paired == []
+
+
+@needs_deps
+def test_connect_pairs_in_enroll_mode(monkeypatch, capsys):
+    import asyncio
+    import sys as _sys
+
+    from client_app import ble_client as mod
+    from client_app.ble_client import CheckpointClient
+
+    class FakeBtMod:
+        class BluetoothLEDevice:
+            @staticmethod
+            async def from_bluetooth_address_async(addr):
+                return None
+
+    paired = []
+
+    class PairingBleak:
+        def __init__(self, address, *args, **kwargs):
+            self.is_connected = False
+
+        async def connect(self, *args, **kwargs):
+            self.is_connected = True
+
+        async def pair(self):
+            paired.append(True)
+            return True
+
+        async def start_notify(self, *args):
+            return None
+
+    monkeypatch.setattr(mod, "BleakClient", PairingBleak)
+    monkeypatch.setitem(_sys.modules, "winrt.windows.devices.bluetooth", FakeBtMod)
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False,
+                              claim_key=bytes(32), enroll=True)
+    asyncio.run(client.connect())
+    out = capsys.readouterr().out
+    assert "pairing for enrollment" in out
     assert paired == [True]
 
 
@@ -722,21 +763,23 @@ def test_hello_ack_validation():
     from client_app import config as cfg
     from client_app.ble_client import CheckpointClient
 
-    def payload(ver=2, mtu=247, key=True):
+    def payload(ver=3, mtu=247, mode=0):
         p = struct.pack("<B", ver) + struct.pack("<I", 0x11111111)
         p += struct.pack("<H", mtu) + struct.pack("<I", 50)
-        if key:
-            p += b"K" * 16
+        p += bytes(range(16)) + bytes(range(16, 32)) + struct.pack("<B", mode)
         return p
 
     client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
     assert client._parse_hello_ack(b"short") is False
     assert client._parse_hello_ack(payload(ver=99)) is False
     assert client._parse_hello_ack(payload(mtu=100)) is False
-    assert client._parse_hello_ack(payload(key=False)) is False
+    assert client._parse_hello_ack(payload()[:-1]) is False
+    assert client._parse_hello_ack(payload() + b"\x00") is False
     assert client._parse_hello_ack(payload()) is True
     assert client.frag_size == 220
-    assert client.master_key == b"K" * 16
+    assert client.session_key is None
+    assert client.device_id == bytes(range(16))
+    assert client.device_nonce == bytes(range(16, 32))
 
 
 @needs_deps
@@ -753,20 +796,32 @@ def test_handshake_sends_ready():
         client.session_id = 0x1234ABCD
         client.mtu = 247
         client.chunk_sec = 50
-        client.master_key = b"K" * 16
-        client.frag_size = 220
+        client.device_id = bytes(16)
+        client.device_nonce = bytes(range(16))
+        client.session_key = b"S" * 16
+        client._auth_transcript = b"T" * 88
         client.hello_acked.set()
         return "acked"
+
+    async def fake_auth_exchange():
+        client.session_key = b"S" * 16
+        client._auth_transcript = b"T" * 88
 
     async def fake_write_ctrl(ptype, seq, payload=b""):
         writes.append((ptype, seq, payload))
 
+    async def fake_wait_ready():
+        client.ready_ack_event.set()
+
     client._hello_exchange = fake_hello_exchange
+    client._auth_exchange = fake_auth_exchange
     client.write_ctrl = fake_write_ctrl
+    client._wait_for_ready_ack = fake_wait_ready
     asyncio.run(client.do_handshake())
-    assert writes, "READY must be sent after HELLO_ACK validation"
+    assert writes, "READY must be sent after AUTH validation"
     assert writes[0][0] == cfg.PKT_READY
-    assert struct.unpack("<I", writes[0][2])[0] == 0x1234ABCD
+    assert struct.unpack("<I", writes[0][2][:4])[0] == 0x1234ABCD
+    assert len(writes[0][2]) == 36
 
 
 @needs_deps
@@ -794,6 +849,7 @@ def test_link_lost_tears_down_session(tmp_path, monkeypatch):
         fut = loop.create_future()
         client._ctrl_pending[7] = fut
         client.session_id = 0x12345678
+        client.session_key = b"K" * 16
         client.master_key = b"K" * 16
         client.mtu = 517
         client.chunk_sec = 50
@@ -807,7 +863,7 @@ def test_link_lost_tears_down_session(tmp_path, monkeypatch):
         assert client._ctrl_pending == {}
         assert client.current_file is None
         assert client.session_id is None
-        assert client.master_key is None
+        assert client.session_key is None
         assert client.mtu is None
         assert client._part_fh is None
         assert client.link_lost.is_set()
@@ -868,6 +924,11 @@ def test_connect_installs_new_generation(monkeypatch):
     client.client = old
     client.link_state = "up"
     client.link_lost.set()
+
+    async def fake_bond():
+        return True
+
+    monkeypatch.setattr(client, "_windows_bond_present", fake_bond)
     asyncio.run(client.connect())
     assert client.client is not old
     assert callable(created[-1])
@@ -880,7 +941,8 @@ def test_supervisor_escalates_after_repeated_handshake_failure():
     import asyncio
 
     from client_app.ble_client import CheckpointClient, supervise_link
-    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False,
+                              claim_key=bytes(32), enroll=True)
     connects, escalations = [], []
 
     class FakeDevice:
@@ -937,7 +999,8 @@ def test_supervisor_escalates_after_repeated_connect_failure():
     import asyncio
 
     from client_app.ble_client import CheckpointClient, supervise_link
-    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False,
+                              claim_key=bytes(32), enroll=True)
     connects, escalations = [], []
 
     class FakeDevice:
@@ -1137,27 +1200,85 @@ def test_hkdf_rfc5869_vector():
 
 
 @needs_deps
+def test_supervisor_no_bond_escalation_in_normal_mode():
+    import asyncio
+
+    from client_app.ble_client import CheckpointClient, supervise_link
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+    connects, escalations = [], []
+
+    class FakeDevice:
+        address = "00:00:00:00:00:00"
+        name = "Checkpoint"
+
+    async def fake_rediscover(timeout=3.0):
+        return FakeDevice()
+
+    async def failing_connect(device=None):
+        connects.append(1)
+        raise ConnectionError("Characteristic was not found!")
+
+    async def fake_disconnect():
+        client.client = None
+
+    async def fake_clear_bond(log=print):
+        escalations.append(1)
+
+    client.rediscover = fake_rediscover
+    client.connect = failing_connect
+    client.disconnect = fake_disconnect
+    client.clear_stale_bond = fake_clear_bond
+    stopped = [False]
+
+    async def run():
+        async def stopper():
+            for _ in range(60):
+                await asyncio.sleep(0.2)
+                if len(connects) >= 3:
+                    break
+            stopped[0] = True
+
+        await asyncio.gather(
+            supervise_link(client, log=lambda m: None,
+                           is_stopped=lambda: stopped[0]),
+            stopper())
+
+    asyncio.run(run())
+    assert len(connects) >= 3
+    assert escalations == [], "normal mode must not auto-clear bonds"
+
+
+@needs_deps
 def test_end_to_end_key_schedule():
-    """Master -> session key -> file key must match firmware's two-stage
-    schedule (crypto_derive_session_key then crypto_derive_file_key)."""
+    """v3 schedule: claim -> client key -> session key -> file key."""
     import hashlib
     import hmac as _hmac
     import struct
 
-    from client_app.crypto import derive_file_key, hkdf_sha256
-    master = bytes(range(16))
+    from client_app.crypto import derive_client_key_v3, derive_file_key, derive_session_key_v3
+    claim = bytes(range(32))
+    dev = bytes(range(16))
+    cli = bytes(range(16, 32))
+    dn = bytes(range(32, 48))
+    cn = bytes(range(48, 64))
     session = 0x12345678
     uid = 0x1122334455667788
-    session_key = hkdf_sha256(b"", master,
-                              b"checkpoint-session-v1" + struct.pack("<I", session), 16)
+    client_key = derive_client_key_v3(claim, dn, cn, dev, cli)
+    session_key = derive_session_key_v3(client_key, dn, cn, dev, cli, session)
     file_key = derive_file_key(session_key, session, uid)
-    prk1 = _hmac.new(b"", master, hashlib.sha256).digest()
+    salt = dn + cn
+    prk1 = _hmac.new(salt, claim, hashlib.sha256).digest()
+    expect_client = _hmac.new(
+        prk1, b"checkpoint-client-v3" + dev + cli + b"\x01",
+        hashlib.sha256).digest()
+    assert client_key == expect_client
+    prk2 = _hmac.new(salt, expect_client, hashlib.sha256).digest()
     expect_session = _hmac.new(
-        prk1, b"checkpoint-session-v1" + struct.pack("<I", session) + b"\x01",
+        prk2, b"checkpoint-session-v3" + dev + cli + struct.pack("<I", session) + b"\x01",
         hashlib.sha256).digest()[:16]
     assert session_key == expect_session
-    prk2 = _hmac.new(b"", expect_session, hashlib.sha256).digest()
+    prk3 = _hmac.new(b"", expect_session, hashlib.sha256).digest()
     expect_file = _hmac.new(
-        prk2, b"checkpoint-file-v1" + struct.pack("<IQ", session, uid) + b"\x01",
+        prk3, b"checkpoint-file-v1" + struct.pack("<IQ", session, uid) + b"\x01",
         hashlib.sha256).digest()[:16]
     assert file_key == expect_file

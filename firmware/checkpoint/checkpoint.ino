@@ -8,6 +8,7 @@
 #include "transfer.h"
 #include "ui.h"
 #include "crypto.h"
+#include "auth.h"
 #include "log.h"
 #include "control.h"
 
@@ -42,6 +43,8 @@ void setup() {
   manifest_scan_and_recover();
 
   crypto_init();
+
+  auth_init();
 
   if (!recorder_init()) {
     LOG_E("I2S init fail");
@@ -148,6 +151,7 @@ void loop() {
   ble_check_handshake_timeout();
   ble_check_final_diag();
   control_poll();
+  auth_usb_poll();
 
   if (ble_is_connected() && ble_is_handshaked()) {
     // keepalive handled in ble_service (BLE_KEEPALIVE_MS reserved)

@@ -14,7 +14,18 @@ from bleak import BleakClient, BleakScanner
 from . import config as cfg
 from .audio_vad import vad_has_speech, vad_load_model
 from .bench import BenchRecorder
-from .crypto import decrypt_fragment, derive_file_key
+from . import credentials as creds
+from .crypto import (
+    CLIENT_DOM,
+    SERVER_DOM,
+    build_transcript,
+    client_proof,
+    decrypt_fragment,
+    derive_client_key_v3,
+    derive_file_key,
+    derive_session_key_v3,
+    finish_proof,
+)
 from .ingestion import IngestionUploader
 from .protocol import PKT_NAMES, Packet, crc32, proto_build, proto_parse
 
@@ -64,15 +75,30 @@ class CheckpointClient:
                  vad_threshold: float = cfg.VAD_THRESHOLD,
                  vad_min_speech_s: float = cfg.VAD_MIN_SPEECH_S,
                  auto_rebond: bool = cfg.BLE_AUTO_REBOND_DEFAULT,
+                 client_id: bytes | None = None,
+                 claim_key: bytes | None = None,
+                 enroll: bool = False,
                  on_event=None):
         self.address = address
         self.client: BleakClient | None = None
         self.session_id: int | None = None
+        self.session_key: bytes | None = None
         self.master_key: bytes | None = None
+        self.device_id: bytes | None = None
+        self.device_nonce: bytes | None = None
+        self.client_nonce: bytes | None = None
+        self.server_proof: bytes | None = None
+        self.auth_mode: int = 0
+        self.client_id: bytes = bytes(client_id) if client_id else __import__("secrets").token_bytes(16)
+        self.client_key: bytes | None = None
+        self.claim_key: bytes | None = bytes(claim_key) if claim_key else None
+        self.enroll: bool = bool(enroll or (claim_key is not None))
         self.mtu: int | None = None
         self.chunk_sec: int | None = None
         self.frag_size: int = cfg.BLE_FRAG_SIZE_GUESS
         self.hello_acked = asyncio.Event()
+        self.auth_ok_event = asyncio.Event()
+        self.ready_ack_event = asyncio.Event()
         self.error_event = asyncio.Event()
         self.last_error: int | None = None
 
@@ -299,17 +325,25 @@ class CheckpointClient:
             self.link_state = "down"
             raise
         print(f"Connected. is_connected={self.client.is_connected} address={self.address}")
-        # Split security ownership: new peer -> we pair before HELLO;
-        # bonded peer -> firmware restores encryption via startSecurity().
+        # v3: normal mode never pairs automatically. Pairing happens only
+        # inside enroll() with physical button + claim key.
         bonded = await self._windows_bond_present()
         print(f"  Windows bond present: {bonded}")
-        if bonded is False:
-            print("No Windows bond — pairing before HELLO ...")
+        if bonded is False and not self.enroll:
+            try:
+                await self.client.disconnect()
+            except Exception:
+                pass
+            raise RuntimeError(
+                "No BLE bond in normal mode — refusing to auto-pair. "
+                "Hold the Checkpoint button 5s, then run enroll with the claim key.")
+        if bonded is False and self.enroll:
+            print("No Windows bond — pairing for enrollment ...")
             try:
                 result = await self.client.pair()
                 print(f"  pair result={result}")
             except Exception as e:
-                print(f"  initial pair failed: {e}")
+                print(f"  enroll pair failed: {e}")
                 try:
                     await self.client.disconnect()
                 except Exception:
@@ -394,10 +428,18 @@ class CheckpointClient:
                     pass
         self._ctrl_pending.clear()
         self.hello_acked.clear()
+        self.auth_ok_event.clear()
+        self.ready_ack_event.clear()
         self.error_event.clear()
         self.last_error = None
         self.session_id = None
+        self.session_key = None
         self.master_key = None
+        self.device_id = None
+        self.device_nonce = None
+        self.client_nonce = None
+        self.server_proof = None
+        self.auth_mode = 0
         self.mtu = None
         self.chunk_sec = None
         self.current_file = None
@@ -640,18 +682,19 @@ class CheckpointClient:
         raise RuntimeError(f"Reconnect failed: {last}")
 
     async def _hello_exchange(self, label: str) -> str:
-        """Send one HELLO and wait for the result.
+        """Send one v3 HELLO and wait for the result.
 
         Returns 'acked' or 'error'. Never reconnects: supervise_link() is the
-        only reconnect owner. Rebond/pairing decisions stay in do_handshake.
+        only reconnect owner.
         """
         self.hello_acked.clear()
         self.error_event.clear()
         self.last_error = None
         seq = self.next_seq()
         print(f"Sending HELLO (seq={seq}) {label} ...")
+        payload = bytes(self.client_id) + bytes([0x01 if self.enroll else 0x00])
         try:
-            await self.write_ctrl(cfg.PKT_HELLO, seq)
+            await self.write_ctrl(cfg.PKT_HELLO, seq, payload)
         except Exception as e:
             raise ConnectionError(f"HELLO write failed: {e}") from e
         try:
@@ -666,70 +709,114 @@ class CheckpointClient:
         self._emit({"type": "link", "state": "up"})
         print(f"Handshake complete. session_id={self.session_id:#010x}, "
               f"mtu={self.mtu} chunk_sec={self.chunk_sec} frag_size={self.frag_size}, "
-              f"key={'present' if self.master_key else 'ABSENT (unencrypted transfer!)'}")
+              f"key={'present' if self.session_key else 'ABSENT (unencrypted transfer!)'}")
 
-    async def _settle_for_encryption(self, tries: int = 2, wait_s: float = 1.0) -> bool:
-        """Give Windows a brief chance to restore encryption on its own.
-
-        Pure observation: sends HELLOs only — no pairing requests, no unpair.
-        Kept short on purpose: the device drops un-handshaked links after
-        BLE_HANDSHAKE_TIMEOUT_MS (5 s), so a long settle would kill the link
-        it is trying to save. Returns True if ACKed (completion printed).
-        """
-        print("  0x01 with link up: waiting for Windows to restore encryption "
-              f"on its own ({tries}x{wait_s:.0f}s) before forcing a re-pair ...")
-        for n in range(1, tries + 1):
-            await asyncio.sleep(wait_s)
-            outcome = await self._hello_exchange(f"settle retry {n}/{tries}")
-            if outcome == "acked":
-                print(f"  encryption self-restored on settle retry {n} (no re-pair needed)")
-                self._print_handshake_complete()
-                return True
-            if outcome == "error" and self.last_error != 0x01:
-                break
-        print("  encryption did not self-restore — proceeding to pair/rebond ...")
-        return False
+    async def _auth_exchange(self) -> None:
+        import secrets
+        if self.device_id is None or self.session_id is None:
+            raise RuntimeError("AUTH without HELLO_ACK challenge")
+        if self.enroll:
+            if self.claim_key is None:
+                raise RuntimeError("Enrollment requires the claim key from USB export")
+            self.auth_mode = 1
+            self.client_nonce = secrets.token_bytes(16)
+            auth_key = derive_client_key_v3(
+                self.claim_key, self.device_nonce, self.client_nonce,
+                self.device_id, self.client_id)
+            transcript = build_transcript(
+                self.device_id, self.client_id, self.session_id,
+                self.device_nonce, self.client_nonce, self.auth_mode)
+            proof = client_proof(auth_key, transcript)
+            expect_session = derive_session_key_v3(
+                auth_key, self.device_nonce, self.client_nonce,
+                self.device_id, self.client_id, self.session_id)
+            self._pending_enroll_key = bytes(auth_key)
+        else:
+            found = creds.load_client_credential(self.device_id)
+            if found is None:
+                raise RuntimeError(
+                    "Unknown Checkpoint — no stored credential. "
+                    "Hold the button 5s and enroll with the claim key.")
+            stored_id, stored_key = found
+            self.client_id = bytes(stored_id)
+            self.client_key = bytes(stored_key)
+            self.auth_mode = 0
+            self.client_nonce = secrets.token_bytes(16)
+            transcript = build_transcript(
+                self.device_id, self.client_id, self.session_id,
+                self.device_nonce, self.client_nonce, self.auth_mode)
+            proof = client_proof(self.client_key, transcript)
+            expect_session = derive_session_key_v3(
+                self.client_key, self.device_nonce, self.client_nonce,
+                self.device_id, self.client_id, self.session_id)
+        self._expect_session = bytes(expect_session)
+        self._auth_transcript = bytes(transcript)
+        self.auth_ok_event.clear()
+        self.error_event.clear()
+        self.last_error = None
+        await self.write_ctrl(cfg.PKT_AUTH, self.next_seq(),
+                              bytes(self.client_nonce) + bytes(proof))
+        try:
+            await asyncio.wait_for(self._wait_for_auth_result(), timeout=cfg.ACK_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            raise ConnectionError("AUTH timed out") from None
+        if not self.auth_ok_event.is_set():
+            raise RuntimeError(f"AUTH rejected with error 0x{self.last_error:02x}"
+                               if self.last_error is not None else "AUTH rejected")
+        import hmac as _hmac
+        expect_server = finish_proof(self._expect_session, SERVER_DOM, self._auth_transcript)
+        if not _hmac.compare_digest(expect_server, bytes(self.server_proof or b"")):
+            raise RuntimeError("Server proof mismatch — possible MITM")
+        self.session_key = bytes(self._expect_session)
+        self.master_key = bytes(self.session_key)
 
     async def do_handshake(self):
-        rebonded = False
-        settled = False
-        for attempt in range(7):
-            outcome = await self._hello_exchange(f"attempt {attempt + 1}/7")
-            if outcome == "acked":
-                await self._send_ready()
-                self._print_handshake_complete()
-                return
-            if self.last_error == 0x01 and attempt < 6:
-                if not settled:
-                    settled = True
-                    if await self._settle_for_encryption():
-                        await self._send_ready()
-                        return
-                if self.auto_rebond and not rebonded and attempt >= 1:
-                    print("  HELLO rejected (0x01) persists after pair() — "
-                          "stale bond suspected, rebonding ...")
-                    rebonded = True
-                    if await self._rebond():
-                        continue
-                    print("  rebond failed/unavailable — falling back to pair() retry...")
-                print("  HELLO rejected (0x01 not encrypted) — pairing then retrying...")
-                try:
-                    paired = await self.client.pair()
-                    print(f"  pair() retry returned {paired} "
-                          f"is_connected={self.client.is_connected if self.client else 'no-client'}")
-                except Exception as e:
-                    print(f"  pair() retry failed: {e} "
-                          f"is_connected={self.client.is_connected if self.client else 'no-client'}")
-                continue
+        outcome = await self._hello_exchange("attempt 1/1")
+        if outcome != "acked":
             if self.last_error == 0x02:
                 raise RuntimeError("HELLO rejected: version mismatch (error 0x02) — "
                                    f"check PROTO_VER={cfg.PROTO_VER}")
+            if self.last_error == 0x01:
+                raise RuntimeError("HELLO rejected: link not encrypted (error 0x01) — "
+                                   "pair/bond first, then retry (enroll mode only)")
             raise RuntimeError(f"HELLO rejected with error 0x{self.last_error:02x}"
                                if self.last_error is not None else "HELLO rejected")
-        raise RuntimeError("Handshake failed after retry")
+        await self._auth_exchange()
+        await self._send_ready()
+        try:
+            await asyncio.wait_for(self._wait_for_ready_ack(), timeout=cfg.ACK_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            raise ConnectionError("READY timed out") from None
+        if self.enroll and self.client_key is None and getattr(self, "_pending_enroll_key", None):
+            creds.save_client_credential(self.device_id, self.client_id, self._pending_enroll_key)
+            self.client_key = bytes(self._pending_enroll_key)
+        self._pending_enroll_key = None
+        self._expect_session = None
+        self._auth_transcript = None
+        self._print_handshake_complete()
+
+    async def enroll(self, claim_key: bytes) -> None:
+        """Explicit enrollment: pairs (bond) then runs the v3 claim handshake."""
+        self.claim_key = bytes(claim_key)
+        self.enroll = True
+        if self.client is not None and hasattr(self.client, "pair"):
+            try:
+                await self.client.pair()
+            except Exception as e:
+                print(f"  enroll pair note: {e}")
+        await self.do_handshake()
+        self.enroll = False
 
     async def _wait_for_handshake_result(self):
         while not self.hello_acked.is_set() and not self.error_event.is_set():
+            await asyncio.sleep(0.05)
+
+    async def _wait_for_auth_result(self):
+        while not self.auth_ok_event.is_set() and not self.error_event.is_set():
+            await asyncio.sleep(0.05)
+
+    async def _wait_for_ready_ack(self):
+        while not self.ready_ack_event.is_set() and not self.error_event.is_set():
             await asyncio.sleep(0.05)
 
     def _on_ctrl_indicate(self, _handle, data: bytearray):
@@ -820,12 +907,24 @@ class CheckpointClient:
             self.error_event.set()
             detail = "pairing required (0x01)" if code == 0x01 else \
                 "version mismatch (0x02)" if code == 0x02 else \
+                "auth required (0x03)" if code == 0x03 else \
                 f"0x{code:02x}" if code is not None else "empty"
             print(f"  [!] Device PKT_ERROR: {detail} payload={pkt.payload!r}")
 
+        elif pkt.type == cfg.PKT_AUTH_OK:
+            if len(pkt.payload) < 32:
+                print("  [!] AUTH_OK payload too short")
+                self.error_event.set()
+            else:
+                self.server_proof = bytes(pkt.payload[:32])
+                self.auth_ok_event.set()
+
+        elif pkt.type == cfg.PKT_READY_ACK:
+            self.ready_ack_event.set()
+
     def _parse_hello_ack(self, payload: bytes) -> bool:
-        if len(payload) < 11:
-            print("  [!] HELLO_ACK payload too short")
+        if len(payload) < 44:
+            print("  [!] HELLO_ACK payload too short (want 44)")
             return False
         proto_ver = payload[0]
         if proto_ver != cfg.PROTO_VER:
@@ -834,26 +933,31 @@ class CheckpointClient:
         self.session_id = struct.unpack("<I", payload[1:5])[0]
         self.mtu = struct.unpack("<H", payload[5:7])[0]
         self.chunk_sec = struct.unpack("<I", payload[7:11])[0]
-        # Protocol v1: fragment size is fixed at 220 on both sides (firmware
-        # offsets by BLE_FRAG_SIZE). Deriving it from MTU corrupts offsets.
+        self.device_id = bytes(payload[11:27])
+        self.device_nonce = bytes(payload[27:43])
+        self.auth_mode = payload[43]
         self.frag_size = cfg.BLE_FRAG_SIZE_GUESS
         if (self.mtu or 0) < cfg.MIN_MTU_REQUIRED:
             print(f"  [!] Unsupported MTU {self.mtu} (<{cfg.MIN_MTU_REQUIRED}); refusing transfer")
             return False
         print(f"  proto_ver={proto_ver} mtu={self.mtu} chunk_sec={self.chunk_sec} "
-              f"frag_size={self.frag_size}")
-        if len(payload) >= 27:
-            self.master_key = payload[11:27]
-            print("  Received per-session AES key from device.")
-        else:
-            self.master_key = None
-            print("  No key in HELLO_ACK — transfer will be unencrypted or fail.")
+              f"frag_size={self.frag_size} mode={self.auth_mode} "
+              f"device={self.device_id.hex()[:8]}...")
+        # v3: no key in HELLO_ACK by design. Session key is derived locally
+        # after AUTH. Any key bytes here would be a protocol violation.
+        if len(payload) != 44:
+            print("  [!] HELLO_ACK wrong length — rejecting (possible v2 peer)")
             return False
+        self.session_key = None
+        self.master_key = None
         return True
 
     async def _send_ready(self) -> None:
+        if self.session_key is None or getattr(self, "_auth_transcript", None) is None:
+            raise RuntimeError("READY without session key")
+        client_finish = finish_proof(self.session_key, CLIENT_DOM, self._auth_transcript)
         await self.write_ctrl(cfg.PKT_READY, self.next_seq(),
-                              struct.pack("<I", self.session_id or 0))
+                              struct.pack("<I", self.session_id or 0) + bytes(client_finish))
 
     def _part_paths(self, file_id: int):
         hex8 = f"{file_id:016x}"
@@ -984,8 +1088,8 @@ class CheckpointClient:
               f"device_offered_resume={device_start_seq}")
 
         key = None
-        if self.master_key:
-            key = derive_file_key(self.master_key, self.session_id, file_id)
+        if self.session_key:
+            key = derive_file_key(self.session_key, self.session_id, file_id)
 
         self.current_file = IncomingFile(
             file_id=file_id, total_bytes=total, total_frags=total_frags,
@@ -1247,10 +1351,13 @@ async def supervise_link(client, *, log, is_stopped, on_ready=None,
             log(f"[ble] setup failed: {e}")
             if setup_fails >= 3:
                 setup_fails = 0
-                try:
-                    await client.clear_stale_bond(log)
-                except Exception:
-                    pass
+                if getattr(client, "enroll", False):
+                    try:
+                        await client.clear_stale_bond(log)
+                    except Exception:
+                        pass
+                else:
+                    log("[ble] not clearing bond in normal mode (use enroll or USB recovery)")
             if await _sleep_or_stopped(is_stopped, 2.0):
                 return
             continue
@@ -1361,6 +1468,20 @@ async def cli_async_main() -> None:
                 pass
     ingest_delete = cfg.INGEST_DELETE_AFTER_DEFAULT and ("--keep" not in flags)
     auto_rebond = cfg.BLE_AUTO_REBOND_DEFAULT and ("--no-rebond" not in flags)
+    enroll = "--enroll" in flags
+    claim_hex = None
+    for i, tok in enumerate(raw):
+        if tok == "--claim" and i + 1 < len(raw):
+            claim_hex = raw[i + 1]
+        elif tok.startswith("--claim="):
+            claim_hex = tok.split("=", 1)[1]
+    claim_key = None
+    if claim_hex:
+        try:
+            claim_key = bytes.fromhex(claim_hex.strip())
+            enroll = True
+        except ValueError:
+            raise RuntimeError("--claim must be 64 hex chars (32 bytes)")
     arg = args[0] if args else None
     bench_csv = None
     if bench_flag:
@@ -1380,6 +1501,8 @@ async def cli_async_main() -> None:
         print("[vad] ingestion disabled — VAD not loaded")
         vad_enabled = False
     address = await find_device(arg)
+    if enroll and claim_key is None:
+        raise RuntimeError("--enroll requires --claim <64-hex> from `auth export` over USB")
     client = CheckpointClient(
         address, bench_csv=bench_csv, ingest_enabled=ingest_enabled,
         ingest_base_url=ingest_url, ingest_user_id=ingest_user,
@@ -1387,7 +1510,7 @@ async def cli_async_main() -> None:
         ingest_poll_timeout=ingest_poll_timeout, ingest_poll_interval=ingest_poll_interval,
         vad_enabled=vad_enabled, vad_model=vad_model,
         vad_threshold=vad_threshold, vad_min_speech_s=vad_min_speech,
-        auto_rebond=auto_rebond)
+        auto_rebond=auto_rebond, claim_key=claim_key, enroll=enroll)
     async def _on_alive():
         print("\nListening for file transfers. Press Ctrl+C to stop.\n")
 

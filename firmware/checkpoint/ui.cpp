@@ -1,5 +1,6 @@
 #include "ui.h"
 #include "config.h"
+#include "auth.h"
 #include "recorder.h"
 #include "manifest.h"
 #include "log.h"
@@ -12,7 +13,7 @@ static volatile uint8_t s_brightness = HW_RGB_BRIGHTNESS;
 static volatile bool s_brightness_dirty = false;
 static volatile uint32_t s_remote_action_ms = 0;
 
-enum LedState : uint8_t { LED_OFF, LED_ON, LED_BOOKMARK, LED_ERROR, LED_FATAL, LED_VAD_IDLE };
+enum LedState : uint8_t { LED_OFF, LED_ON, LED_BOOKMARK, LED_ERROR, LED_FATAL, LED_VAD_IDLE, LED_ENROLL, LED_AUTH_OK };
 
 static Adafruit_NeoPixel s_rgb(1, HW_RGB_PIN, NEO_GRB + NEO_KHZ800);
 static uint32_t s_last_rgb = 0xFFFFFFFFu; // force first show
@@ -75,17 +76,31 @@ void ui_note_remote_action() {
   s_remote_action_ms = millis();
 }
 
+void ui_signal_enroll(bool on) {
+  if (on) {
+    s_state = LED_ENROLL;
+  } else if (s_state == LED_ENROLL) {
+    s_state = LED_OFF;
+  }
+}
+
+void ui_signal_auth_ok() { s_state = LED_AUTH_OK; }
+
 static inline bool ui_stealth_active() {
   return s_muted;
 }
 
 void ui_task(void *arg) {
   (void)arg;
+  // recorder_notify_bookmark() retained for test compat (bookmark removed) - not called
   uint32_t last_change = 0;
   bool last_level = HIGH;
-  bool armed = true;
+  bool pressed = false;
+  uint32_t press_start_ms = 0;
+  bool long_fired = false;
   uint32_t state_enter_ms = 0;
   static uint32_t last_toggle_ms = 0;
+  static uint32_t auth_ok_enter_ms = 0;
   while (true) {
     bool level = digitalRead(HW_BUTTON_GPIO);
     uint32_t now = millis();
@@ -93,32 +108,58 @@ void ui_task(void *arg) {
       last_level = level;
       last_change = now;
     }
-    if (armed && level == LOW && (now - last_change) > UI_DEBOUNCE_MS) {
-      armed = false;
-      // Toggle lockout 800ms to cover close_chunk settle (400+300) and avoid double-toggle.
-      // Also covers a recent remote (BLE) action so the button cannot instantly reverse it.
-      if ((now - last_toggle_ms < 800) || (now - s_remote_action_ms < 800)) {
-      } else {
-        last_toggle_ms = now;
-        if (recorder_is_recording()) {
-          recorder_stop();
-          ui_signal_recording(false);
+    bool debounced_low = (level == LOW && (now - last_change) > UI_DEBOUNCE_MS);
+    bool debounced_high = (level == HIGH && (now - last_change) > UI_DEBOUNCE_MS);
+    if (debounced_low && !pressed) {
+      pressed = true;
+      press_start_ms = now;
+      long_fired = false;
+    }
+    if (pressed && debounced_low && !long_fired && (now - press_start_ms) >= UI_LONG_PRESS_MS) {
+      long_fired = true;
+      if (auth_open_enrollment(AUTH_ENROLL_WINDOW_MS)) {
+        ui_signal_enroll(true);
+        state_enter_ms = now;
+      }
+    }
+    if (pressed && debounced_high) {
+      uint32_t held = now - press_start_ms;
+      pressed = false;
+      if (!long_fired && held < 1000) {
+        if ((now - last_toggle_ms < 800) || (now - s_remote_action_ms < 800)) {
         } else {
-          bool ok = recorder_start();
-          if (ok) {
-            ui_signal_recording(true);
+          last_toggle_ms = now;
+          if (recorder_is_recording()) {
+            recorder_stop();
+            ui_signal_recording(false);
           } else {
-            LOG_E("MIC start fail");
-            ui_signal_error();
+            bool ok = recorder_start();
+            if (ok) {
+              ui_signal_recording(true);
+            } else {
+              LOG_E("MIC start fail");
+              ui_signal_error();
+            }
           }
         }
+        state_enter_ms = now;
+      } else if (long_fired) {
+        state_enter_ms = now;
       }
-      // recorder_notify_bookmark() retained for test compat (bookmark removed) - not called
-      state_enter_ms = now;
     }
-    if (level == HIGH && (now - last_change) > UI_DEBOUNCE_MS) {
-      armed = true;
+    if (auth_enrollment_active()) {
+      if (s_state != LED_ENROLL && s_state != LED_AUTH_OK && s_state != LED_ERROR && s_state != LED_FATAL) {
+        s_state = LED_ENROLL;
+      }
+    } else if (s_state == LED_ENROLL) {
+      s_state = LED_OFF;
     }
+    if (s_state == LED_AUTH_OK && auth_ok_enter_ms == 0) auth_ok_enter_ms = now;
+    if (s_state == LED_AUTH_OK && (now - auth_ok_enter_ms) > 1000) {
+      auth_ok_enter_ms = 0;
+      s_state = LED_OFF;
+    }
+    if (s_state != LED_AUTH_OK) auth_ok_enter_ms = 0;
     // Track state entry for non-blocking blinks
     static uint8_t prev_state = 255;
     if (s_state != prev_state) {
@@ -175,6 +216,16 @@ void ui_task(void *arg) {
         }
         uint32_t t = (now - state_enter_ms) % 1000;
         ui_set_rgb(0, 0, (t < 100) ? 90 : 0);
+        break;
+      }
+      case LED_ENROLL: {
+        uint32_t t = (now - state_enter_ms) % 1000;
+        bool on = (t < 100) || (t >= 250 && t < 350);
+        ui_set_rgb(0, 0, on ? 120 : 0);
+        break;
+      }
+      case LED_AUTH_OK: {
+        ui_set_rgb(0, 180, 0);
         break;
       }
     }

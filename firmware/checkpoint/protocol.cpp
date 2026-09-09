@@ -89,6 +89,9 @@ const char *proto_type_name(uint8_t type) {
   switch (type) {
     case PKT_HELLO: return "HELLO";
     case PKT_HELLO_ACK: return "HELLO_ACK";
+    case PKT_AUTH: return "AUTH";
+    case PKT_AUTH_OK: return "AUTH_OK";
+    case PKT_READY_ACK: return "READY_ACK";
     case PKT_FILE_ANNOUNCE: return "FILE_ANNOUNCE";
     case PKT_FILE_ANNOUNCE_ACK: return "FILE_ANNOUNCE_ACK";
     case PKT_DATA: return "DATA";

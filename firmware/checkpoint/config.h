@@ -113,9 +113,10 @@
 #define BLE_KEEPALIVE_MS 5000
 
 // Protocol — DATA is frag(220)+CCM tag(8)=228, need header+crc
-// Protocol v2: READY handshake, session key, HKDF, W8 cumulative ACK,
-// disk-backed resume, stable file UID.
-#define PROTO_VER 2
+// Protocol v3: challenge-response auth, locally-derived session key,
+// per-file HKDF, W8 cumulative ACK, disk-backed resume, stable file UID.
+// v2 HELLO_ACK key transport is removed; old peers get ERROR 0x02.
+#define PROTO_VER 3
 #define PROTO_MAX_PAYLOAD (BLE_FRAG_SIZE + CRYPTO_TAG_BYTES)
 #define PROTO_HEADER 6
 #define PROTO_CRC 4
@@ -130,6 +131,8 @@
 #define UI_DEBOUNCE_MS 50
 #define UI_LED_ON_MS 120
 #define UI_LED_BOOKMARK_MS 250
+#define UI_LONG_PRESS_MS 5000
+#define AUTH_ENROLL_WINDOW_MS 60000
 
 // System
 // NOTE: libopus opus_encode() needs ~20-30KB call depth (SILK+CELT, incl. ROM

@@ -64,7 +64,7 @@ constexpr uint16_t kNoSeq = 0xFFFF;
 constexpr uint8_t kErrNotEncrypted = 0x01;
 
 bool control_gate_ok() {
-  return ble_is_connected() && ble_is_handshaked() && ble_is_encrypted();
+  return ble_is_connected() && ble_is_handshaked() && ble_is_encrypted() && ble_peer_authenticated();
 }
 
 void control_load_led() {
@@ -186,7 +186,7 @@ static bool status_event_changed(const uint8_t *current, const uint8_t *previous
 }
 
 void control_push_status_if_changed() {
-  if (!ble_is_connected() || !ble_is_handshaked()) {
+  if (!control_gate_ok()) {
     return;
   }
   uint8_t current[CTRL_STATUS_LEN];
@@ -619,7 +619,7 @@ void control_poll() {
   }
 
   if (status_req) {
-    if (ble_is_connected() && ble_is_handshaked()) {
+    if (control_gate_ok()) {
       uint8_t payload[CTRL_STATUS_LEN];
       control_build_status(payload);
       ble_send_packet(PKT_STATUS_RESP, status_seq, payload, CTRL_STATUS_LEN);
@@ -630,7 +630,7 @@ void control_poll() {
   }
 
   if (rec_cmd != 0) {
-    if (ble_is_connected() && ble_is_handshaked()) {
+    if (control_gate_ok()) {
       uint8_t status = CTRL_ERR_BAD_ARG;
       if (rec_cmd == CTRL_CMD_REC_START) {
         status = control_do_rec_start();
@@ -642,21 +642,21 @@ void control_poll() {
   }
 
   if (led_req) {
-    if (ble_is_connected() && ble_is_handshaked()) {
+    if (control_gate_ok()) {
       uint8_t status = control_do_led_set(led_muted_arg, led_bright_arg);
       control_send_cmd_resp(led_seq, CTRL_CMD_LED_SET, status, nullptr, 0);
     }
   }
 
   if (led_get) {
-    if (ble_is_connected() && ble_is_handshaked()) {
+    if (control_gate_ok()) {
       uint8_t extra[2] = {ui_is_muted() ? (uint8_t)1 : (uint8_t)0, ui_get_brightness()};
       control_send_cmd_resp(led_get_seq, CTRL_CMD_LED_GET, CTRL_OK, extra, 2);
     }
   }
 
   if (storage_req) {
-    if (ble_is_connected() && ble_is_handshaked()) {
+    if (control_gate_ok()) {
       uint8_t payload[CTRL_STORAGE_LEN];
       control_build_storage(payload);
       ble_send_packet(PKT_STORAGE_RESP, storage_seq, payload, CTRL_STORAGE_LEN);
@@ -664,7 +664,7 @@ void control_poll() {
   }
 
   if (list_req) {
-    if (ble_is_connected() && ble_is_handshaked()) {
+    if (control_gate_ok()) {
       uint8_t payload[PROTO_MAX_PAYLOAD];
       uint16_t total = 0;
       size_t used = control_pack_list(list_start, payload, sizeof(payload), &total);
@@ -674,7 +674,7 @@ void control_poll() {
   }
 
   if (del_req) {
-    if (ble_is_connected() && ble_is_handshaked()) {
+    if (control_gate_ok()) {
       uint8_t status = CTRL_ERR_BAD_ARG;
       if (del_len != 0xFFFF && del_len > 0) {
         status = control_do_file_delete(del_path, del_len);
@@ -684,7 +684,7 @@ void control_poll() {
   }
 
   if (erase_req) {
-    if (ble_is_connected() && ble_is_handshaked()) {
+    if (control_gate_ok()) {
       uint16_t removed = 0;
       uint8_t status = control_do_erase(erase_step, &removed);
       uint8_t extra[2] = {(uint8_t)(removed & 0xFF), (uint8_t)((removed >> 8) & 0xFF)};
@@ -693,14 +693,14 @@ void control_poll() {
   }
 
   if (sync_req) {
-    if (ble_is_connected() && ble_is_handshaked()) {
+    if (control_gate_ok()) {
       uint8_t status = control_do_sync_set(sync_enabled_arg);
       control_send_cmd_resp(sync_seq, CTRL_CMD_SYNC_SET, status, nullptr, 0);
     }
   }
 
   if (sync_get) {
-    if (ble_is_connected() && ble_is_handshaked()) {
+    if (control_gate_ok()) {
       uint8_t extra[1] = {s_sync_enabled ? (uint8_t)1 : (uint8_t)0};
       control_send_cmd_resp(sync_get_seq, CTRL_CMD_SYNC_GET, CTRL_OK, extra, 1);
     }

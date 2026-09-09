@@ -3,8 +3,11 @@
 #include "config.h"
 
 enum PacketType : uint8_t {
-  PKT_HELLO = 0x01,
-  PKT_HELLO_ACK = 0x02,
+  PKT_HELLO = 0x01,   // v3: client_id[16] + flags[1] (bit0 = enroll request)
+  PKT_HELLO_ACK = 0x02,  // v3: ver[1]+sess[4]+mtu[2]+chunk[4]+dev_id[16]+dev_nonce[16]+mode[1], no key
+  PKT_AUTH = 0x03,    // v3: client_nonce[16] + proof[32]
+  PKT_AUTH_OK = 0x04,  // v3: server_proof[32]
+  PKT_READY_ACK = 0x05,  // v3: server confirms READY finish proof
   PKT_FILE_ANNOUNCE = 0x10,
   PKT_FILE_ANNOUNCE_ACK = 0x11,
   PKT_DATA = 0x12,
@@ -23,7 +26,9 @@ enum PacketType : uint8_t {
   PKT_STORAGE_RESP = 0x25,
   PKT_LIST_REQ = 0x26,
   PKT_LIST_RESP = 0x27,
-  PKT_READY = 0x28 // host confirms HELLO_ACK processed; completes handshake
+  PKT_READY = 0x28,  // v3: session_id[4] + client_finish[32]
+  // Auth packets that may arrive before ble_peer_authenticated().
+  // Everything else requires authentication (see ble_service gate).
 };
 
 struct Packet {

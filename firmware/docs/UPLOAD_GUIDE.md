@@ -83,24 +83,37 @@ Recorder started, 1-min chunks
 3. Insert the card. The pendant continues. No reboot.
 4. Press the button. You get a `bookmark` blink on the LED.
 5. Open your BLE test app. Connect to `Checkpoint`. The pendant runs a handshake
-   (HELLO → HELLO_ACK → host READY, then transfers start). Then it sends one file
+    (HELLO → HELLO_ACK → AUTH → AUTH_OK → READY → READY_ACK, then transfers start). Then it sends one file
    at a time in `220`-byte fragments with sequence numbers. It waits for cumulative
    `ACK`s, retries with backoff, resumes real partial progress from the host's
    `.part` files, and deletes a file only after it gets `FILE_DONE_ACK`.
    Requires negotiated MTU ≥ 241; the app refuses smaller MTUs instead of corrupting.
-   This is protocol v2 (READY handshake, per-session key, HKDF, 64-bit file UID) —
-   firmware and host app must be updated together; old v1 peers cannot complete it.
+    This is protocol v3 (challenge-response auth, locally-derived session key,
+    HKDF, 64-bit file UID) —
+    firmware and host app must be updated together; old v2 peers cannot complete it.
 6. Pull power mid-record. Reboot. The pendant keeps old files. The open `.tmp` either promotes or drops if too small. It starts a fresh chunk.
 
 ## BLE pairing
 
-The pendant uses `NimBLE` Secure Connections with bonding and Just Works pairing
-(no passkey display; pendant has LED only) with MITM off — no display for
-numeric comparison; previously bonded phones need one re-pair after this change.
-On first boot it creates a 16-byte master key and stores it in `NVS`
-(`checkpoint/ccmmaster`). `HELLO_ACK` sends a per-session key derived from it
-(the master itself never leaves the device). App derives per-file keys with
-RFC 5869 HKDF-SHA256. Fragments use `AES-128-CCM` with `8-byte` tag. Nonce is `session || file || seq`. You do not need to configure keys. To rotate, erase NVS: hold `BOOT` on flash or call `Preferences.clear`.
+The pendant uses `NimBLE` Secure Connections with bonding (Just Works, no passkey display — pendant has LED only, MITM off) as transport encryption only.
+Ownership is proven at the application layer (protocol v3): each trusted
+phone/PC holds a unique 32-byte client key. `HELLO_ACK` carries only a random
+challenge — never a session key. Both sides derive the 16-byte session key
+locally with HKDF-SHA256, then per-file keys. Fragments use `AES-128-CCM`
+with `8-byte` tag. Nonce is `session || file || seq`.
+
+First boot generates a 16-byte `device_id` and a random 256-bit claim key in
+NVS (`ckauth`). Over USB run `auth export` once to get the
+`checkpoint://claim?device=...&key=...` payload (keep it secret). To enroll:
+hold the button 5s (blue double-pulse, 60s window), then connect with
+`--enroll --claim <64-hex>`. Maximum 2 trusted devices; a third is rejected
+even inside the window. Enrollment commits only after the READY finish proof.
+
+Normal connects never auto-pair: without a Windows bond the client refuses
+with instructions instead of calling `pair()`. If the OS loses its bond,
+recover over USB (`auth list`, `auth forget 0|1`, `auth reset`), then
+re-enroll physically. Protocol v2 peers are rejected with version error
+`0x02`; pre-auth packets get `0x03`.
 
 The recorder keeps a 96 kB PSRAM ring. Short SD stalls do not drop audio. The manifest keeps `next_seq` in `/rec/manifest.json` so resume survives reboot. Recovered `.tmp` files get a patched WAV header.
 

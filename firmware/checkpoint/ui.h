@@ -16,3 +16,5 @@ uint8_t ui_get_brightness();
 // Called after a remote (BLE) start/stop so the physical button does not
 // immediately reverse it inside the 800ms toggle lockout window.
 void ui_note_remote_action();
+void ui_signal_enroll(bool on);
+void ui_signal_auth_ok();

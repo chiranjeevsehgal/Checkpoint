@@ -143,26 +143,50 @@ void crypto_build_nonce(uint32_t session_id, uint64_t file_uid, uint16_t seq, ui
 
 static void hmac_sha256(const uint8_t *key, size_t key_len,
                         const uint8_t *msg, size_t msg_len, uint8_t out[32]) {
-  // Fixed small inputs only (HKDF below passes msg_len <= 65).
-  if (!msg || msg_len > 65) { memset(out, 0, 32); return; }
+  if (!out) return;
+  if (!msg && msg_len > 0) { memset(out, 0, 32); return; }
+  // v3 transcripts are ~90B; heap-allocate only what is needed.
+  // Callers pass bounded lengths (transcript <= 128, HKDF <= 65).
+  if (msg_len > 128) { memset(out, 0, 32); return; }
   uint8_t key_block[64] = {0};
   if (key_len > sizeof(key_block)) {
     mbedtls_sha256(key, key_len, key_block, 0);
   } else if (key && key_len > 0) {
     memcpy(key_block, key, key_len);
   }
-  uint8_t inner[64 + 65];
+  uint8_t inner[64 + 128];
   uint8_t outer[64 + 32];
   for (int i = 0; i < 64; i++) {
     inner[i] = key_block[i] ^ 0x36;
     outer[i] = key_block[i] ^ 0x5c;
   }
-  memcpy(inner + 64, msg, msg_len);
+  if (msg_len) memcpy(inner + 64, msg, msg_len);
   mbedtls_sha256(inner, 64 + msg_len, outer + 64, 0);
   mbedtls_sha256(outer, 64 + 32, out, 0);
   memset(key_block, 0, sizeof(key_block));
   memset(inner, 0, sizeof(inner));
   memset(outer, 0, sizeof(outer));
+}
+
+bool crypto_hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *msg, size_t msg_len, uint8_t out[32]) {
+  if (!out) return false;
+  if (msg_len > 0 && !msg) return false;
+  if (msg_len > 128) return false;
+  hmac_sha256(key, key_len, msg, msg_len, out);
+  return true;
+}
+
+bool crypto_verify_hmac_ct(const uint8_t a[32], const uint8_t b[32]) {
+  if (!a || !b) return false;
+  uint8_t diff = 0;
+  for (int i = 0; i < 32; i++) diff |= (uint8_t)(a[i] ^ b[i]);
+  return diff == 0;
+}
+
+bool crypto_random_bytes(uint8_t *out, size_t len) {
+  if (!out) return false;
+  for (size_t i = 0; i < len; i++) out[i] = (uint8_t)esp_random();
+  return len > 0;
 }
 
 bool crypto_hkdf_sha256(const uint8_t *salt, size_t salt_len,
@@ -186,9 +210,8 @@ bool crypto_hkdf_sha256(const uint8_t *salt, size_t salt_len,
 }
 
 bool crypto_derive_file_key(const uint8_t master_key[CRYPTO_KEY_BYTES], uint32_t session_id, uint64_t file_uid, uint8_t out[CRYPTO_KEY_BYTES]) {
-  // RFC 5869 HKDF-SHA256, domain-separated from the session key below.
-  // NOTE: callers pass the per-session key received in HELLO_ACK, whose own
-  // derivation uses a different info string, so domains never collide.
+  // RFC 5869 HKDF-SHA256. Callers pass the v3 per-session key derived
+  // locally via crypto_derive_session_key_v3 (never transmitted).
   static const char kInfo[] = "checkpoint-file-v1";
   uint8_t info[sizeof(kInfo) - 1 + 4 + 8];
   memcpy(info, kInfo, sizeof(kInfo) - 1);
@@ -206,20 +229,43 @@ bool crypto_derive_file_key(const uint8_t master_key[CRYPTO_KEY_BYTES], uint32_t
   return ok;
 }
 
-bool crypto_derive_session_key(const uint8_t master_key[CRYPTO_KEY_BYTES], uint32_t session_id, uint8_t out[CRYPTO_KEY_BYTES]) {
-  // Sent in HELLO_ACK instead of the permanent master key: a captured
-  // session key only compromises that session's files.
-  static const char kInfo[] = "checkpoint-session-v1";
-  uint8_t info[sizeof(kInfo) - 1 + 4];
+bool crypto_derive_session_key_v3(const uint8_t client_key[32], const uint8_t device_nonce[16], const uint8_t client_nonce[16], const uint8_t device_id[16], const uint8_t client_id[16], uint32_t session_id, uint8_t out[CRYPTO_KEY_BYTES]) {
+  if (!client_key || !device_nonce || !client_nonce || !device_id || !client_id || !out) return false;
+  static const char kInfo[] = "checkpoint-session-v3";
+  uint8_t salt[32];
+  uint8_t info[sizeof(kInfo) - 1 + 16 + 16 + 4];
+  memcpy(salt, device_nonce, 16);
+  memcpy(salt + 16, client_nonce, 16);
   memcpy(info, kInfo, sizeof(kInfo) - 1);
-  info[21] = session_id & 0xFF;
-  info[22] = (session_id >> 8) & 0xFF;
-  info[23] = (session_id >> 16) & 0xFF;
-  info[24] = (session_id >> 24) & 0xFF;
+  memcpy(info + sizeof(kInfo) - 1, device_id, 16);
+  memcpy(info + sizeof(kInfo) - 1 + 16, client_id, 16);
+  info[sizeof(info) - 4] = session_id & 0xFF;
+  info[sizeof(info) - 3] = (session_id >> 8) & 0xFF;
+  info[sizeof(info) - 2] = (session_id >> 16) & 0xFF;
+  info[sizeof(info) - 1] = (session_id >> 24) & 0xFF;
   uint8_t okm[CRYPTO_KEY_BYTES];
-  bool ok = crypto_hkdf_sha256(nullptr, 0, master_key, CRYPTO_KEY_BYTES,
-                               info, sizeof(info), okm, sizeof(okm));
+  bool ok = crypto_hkdf_sha256(salt, sizeof(salt), client_key, 32, info, sizeof(info), okm, sizeof(okm));
   if (ok) memcpy(out, okm, CRYPTO_KEY_BYTES);
+  memset(salt, 0, sizeof(salt));
+  memset(info, 0, sizeof(info));
+  memset(okm, 0, sizeof(okm));
+  return ok;
+}
+
+bool crypto_derive_client_key_v3(const uint8_t claim_key[32], const uint8_t device_nonce[16], const uint8_t client_nonce[16], const uint8_t device_id[16], const uint8_t client_id[16], uint8_t out[32]) {
+  if (!claim_key || !device_nonce || !client_nonce || !device_id || !client_id || !out) return false;
+  static const char kInfo[] = "checkpoint-client-v3";
+  uint8_t salt[32];
+  uint8_t info[sizeof(kInfo) - 1 + 16 + 16];
+  memcpy(salt, device_nonce, 16);
+  memcpy(salt + 16, client_nonce, 16);
+  memcpy(info, kInfo, sizeof(kInfo) - 1);
+  memcpy(info + sizeof(kInfo) - 1, device_id, 16);
+  memcpy(info + sizeof(kInfo) - 1 + 16, client_id, 16);
+  uint8_t okm[32];
+  bool ok = crypto_hkdf_sha256(salt, sizeof(salt), claim_key, 32, info, sizeof(info), okm, sizeof(okm));
+  if (ok) memcpy(out, okm, 32);
+  memset(salt, 0, sizeof(salt));
   memset(info, 0, sizeof(info));
   memset(okm, 0, sizeof(okm));
   return ok;
