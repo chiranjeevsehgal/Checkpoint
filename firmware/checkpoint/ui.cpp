@@ -177,7 +177,8 @@ void ui_task(void *arg) {
     if (s_overlay == OVERLAY_ENROLL) {
       uint32_t t = (now - s_overlay_enter_ms) % 1000;
       bool on = (t < 100) || (t >= 250 && t < 350);
-      ui_set_rgb(0, 0, on ? 120 : 0);
+      uint8_t w = on ? 120 : 0;
+      ui_set_rgb(w, w, w);
     } else if (s_overlay == OVERLAY_AUTH_OK) {
       ui_set_rgb(0, 180, 0);
     } else switch (s_state) {
@@ -210,15 +211,9 @@ void ui_task(void *arg) {
         break;
       }
       case LED_VAD_IDLE: {
-        // Slow 1Hz pulse, 10% duty: proves "mic ON, listening, silence"
-        // vs LED_OFF (muted) and LED_ON solid (utterance capturing).
-        // Suppressed when stealth-muted so listening stays dark.
-        if (stealth) {
-          ui_set_rgb(0, 0, 0);
-          break;
-        }
-        uint32_t t = (now - state_enter_ms) % 1000;
-        ui_set_rgb(0, 0, (t < 100) ? 90 : 0);
+        // Listening-idle stays dark: no idle blink. Solid green (LED_ON)
+        // still shows while an utterance is being captured.
+        ui_set_rgb(0, 0, 0);
         break;
       }
     }

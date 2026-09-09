@@ -156,3 +156,19 @@ def test_ready_idempotent_and_session_zeroized():
     assert "memset(s_session_key, 0, sizeof(s_session_key))" in auth, \
         "disconnect must zero the session key"
     assert "s_has_session_key = false" in auth
+
+
+def test_enrollment_transaction_and_cli():
+    import sys
+    sys.path.insert(0, str(HOST))
+    from client_app.ble_client import parse_cli_args
+    key = "ab" * 32
+    assert parse_cli_args(["--enroll", "--claim", key])["device"] is None
+    assert parse_cli_args(["Checkpoint", "--enroll", "--claim", key])["device"] == "Checkpoint"
+    ble_src = (HOST / "client_app" / "ble_client.py").read_text(encoding="utf-8")
+    assert "Enrollment window is not active" in ble_src
+    assert "pending=True" in ble_src, "enrollment must persist before READY"
+    assert "mark_active" in ble_src and "delete_credential" in ble_src
+    cred_src = (HOST / "client_app" / "credentials.py").read_text(encoding="utf-8")
+    for token in ("pending", "mark_active", "delete_credential", "is_pending", "0o600"):
+        assert token in cred_src, f"credentials.py missing {token}"

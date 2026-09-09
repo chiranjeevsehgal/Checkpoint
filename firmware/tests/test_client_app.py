@@ -314,8 +314,11 @@ def test_ready_error_does_not_save_credentials(monkeypatch):
     from client_app.ble_client import CheckpointClient
 
     saved = []
+    deleted = []
     monkeypatch.setattr(credsmod, "save_client_credential",
-                        lambda dev, cid, ckey: saved.append((bytes(dev), bytes(cid), bytes(ckey))))
+                        lambda dev, cid, ckey, pending=False: saved.append((bytes(dev), bytes(cid), bytes(ckey))))
+    monkeypatch.setattr(credsmod, "delete_credential",
+                        lambda dev: deleted.append(bytes(dev)))
     client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
     client.enroll = True
 
@@ -323,6 +326,7 @@ def test_ready_error_does_not_save_credentials(monkeypatch):
         client.session_id = 0x1234ABCD
         client.device_id = bytes(16)
         client.device_nonce = bytes(16)
+        client.auth_mode = 1
         client.hello_acked.set()
         return "acked"
 
@@ -342,6 +346,7 @@ def test_ready_error_does_not_save_credentials(monkeypatch):
     with pytest.raises(RuntimeError, match="READY rejected"):
         asyncio.run(client.do_handshake())
     assert saved == [], "rejected READY must not persist an enrollment"
+    assert deleted == [bytes(16)], "rejected READY must drop the pending enrollment"
 
 
 @needs_deps
@@ -401,8 +406,11 @@ def test_enroll_clears_enroll_mode(monkeypatch):
     from client_app.protocol import proto_build, proto_parse
 
     saved = []
+    marked = []
     monkeypatch.setattr(credsmod, "save_client_credential",
-                        lambda dev, cid, ckey: saved.append((bytes(dev), bytes(cid), bytes(ckey))))
+                        lambda dev, cid, ckey, pending=False: saved.append((bytes(dev), bytes(cid), bytes(ckey))))
+    monkeypatch.setattr(credsmod, "mark_active",
+                        lambda dev: marked.append(bytes(dev)))
     client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False,
                               claim_key=bytes(32), enroll=True)
 
@@ -410,6 +418,7 @@ def test_enroll_clears_enroll_mode(monkeypatch):
         client.session_id = 0x1234ABCD
         client.device_id = bytes(16)
         client.device_nonce = bytes(16)
+        client.auth_mode = 1
         client.hello_acked.set()
         return "acked"
 
@@ -428,7 +437,8 @@ def test_enroll_clears_enroll_mode(monkeypatch):
     client._auth_exchange = fake_auth_exchange
     client.write_ctrl = fake_write_ctrl
     asyncio.run(client.do_handshake())
-    assert len(saved) == 1
+    assert saved == [], "activation must not re-save"
+    assert marked == [bytes(16)]
     assert client.client_key == b"E" * 32
     assert client.enroll is False
     assert client.claim_key is None
@@ -438,6 +448,10 @@ def test_enroll_clears_enroll_mode(monkeypatch):
 def test_parse_claim_hex_rejects_bad_lengths():
     from client_app.ble_client import parse_claim_hex
     assert parse_claim_hex("ab" * 32) == bytes.fromhex("ab" * 32)
+    uri = "checkpoint://claim?device=" + "cd" * 16 + "&key=" + "ab" * 32
+    assert parse_claim_hex(uri) == bytes.fromhex("ab" * 32)
+    assert parse_claim_hex("uri " + uri) == bytes.fromhex("ab" * 32)
+    assert parse_claim_hex("  " + "ab" * 32 + "\n") == bytes.fromhex("ab" * 32)
     for bad in ["00", "ab" * 16, "ab" * 31, "ab" * 33, "zz" * 32, "", "  "]:
         try:
             parse_claim_hex(bad)
@@ -445,6 +459,12 @@ def test_parse_claim_hex_rejects_bad_lengths():
         except RuntimeError as e:
             raised = e
         assert raised is not None, f"claim {bad!r} must be rejected"
+    try:
+        parse_claim_hex("ab" * 16)
+        device_hint = None
+    except RuntimeError as e:
+        device_hint = e
+    assert device_hint is not None and "device id" in str(device_hint)
 
 
 @needs_deps
@@ -527,6 +547,241 @@ def test_v3_auth_transcript_and_proofs():
     # Different nonces give different session keys.
     ksess2 = derive_session_key_v3(ckey, bytes(16), cn, dev, cli, sess)
     assert ksess2 != ksess
+
+
+def _make_fake_cred_store(monkeypatch):
+    import client_app.credentials as credsmod
+    store = {}
+
+    def fake_save(dev, cid, ckey, pending=False):
+        store[bytes(dev)] = (bytes(cid), bytes(ckey), bool(pending))
+
+    def fake_load(dev):
+        rec = store.get(bytes(dev))
+        return (rec[0], rec[1]) if rec else None
+
+    def fake_pending(dev):
+        rec = store.get(bytes(dev))
+        return bool(rec and rec[2])
+
+    def fake_active(dev):
+        rec = store.get(bytes(dev))
+        if rec:
+            store[bytes(dev)] = (rec[0], rec[1], False)
+
+    def fake_delete(dev):
+        store.pop(bytes(dev), None)
+
+    monkeypatch.setattr(credsmod, "save_client_credential", fake_save)
+    monkeypatch.setattr(credsmod, "load_client_credential", fake_load)
+    monkeypatch.setattr(credsmod, "is_pending", fake_pending)
+    monkeypatch.setattr(credsmod, "mark_active", fake_active)
+    monkeypatch.setattr(credsmod, "delete_credential", fake_delete)
+    return store
+
+
+def _canned_hello_ack(session=0xAABBCCDD, mtu=247, mode=0, device=None, nonce=None):
+    import struct
+    return (struct.pack("<B", 3) + struct.pack("<I", session)
+            + struct.pack("<H", mtu) + struct.pack("<I", 50)
+            + (device or bytes(16)) + (nonce or bytes(range(16))) + bytes([mode]))
+
+
+@needs_deps
+def test_cli_device_arg_not_swallowed_by_claim():
+    from client_app.ble_client import parse_cli_args
+    key = "ab" * 32
+    cli = parse_cli_args(["--enroll", "--claim", key])
+    assert cli["device"] is None
+    assert cli["enroll"] is True and cli["claim_hex"] == key
+    cli = parse_cli_args(["Checkpoint", "--enroll", "--claim", key])
+    assert cli["device"] == "Checkpoint"
+    addr = "AA:BB:CC:DD:EE:FF"
+    cli = parse_cli_args([addr, "--enroll", "--claim", key])
+    assert cli["device"] == addr
+    cli = parse_cli_args([f"--claim={key}", "--enroll", "MyDev"])
+    assert cli["device"] == "MyDev" and cli["claim_hex"] == key
+    cli = parse_cli_args([])
+    assert cli["device"] is None and cli["enroll"] is False
+    # --cli belongs to __main__ dispatch; the client parser must ignore it.
+    cli = parse_cli_args(["--cli", "--enroll", "--claim", key])
+    assert cli["device"] is None and cli["enroll"] is True
+
+
+@needs_deps
+def test_enroll_saves_pending_before_ready(monkeypatch):
+    """Reliability: once AUTH_OK verifies, the credential is durable."""
+    import asyncio
+    import struct
+
+    from client_app import config as cfg
+    from client_app.ble_client import CheckpointClient
+    from client_app.crypto import (
+        SERVER_DOM,
+        build_transcript,
+        derive_client_key_v3,
+        derive_session_key_v3,
+        finish_proof,
+    )
+    from client_app.protocol import proto_build, proto_parse
+
+    store = _make_fake_cred_store(monkeypatch)
+    device_id = bytes(range(16))
+    device_nonce = bytes(range(64, 80))
+    session = 0xAABBCCDD
+    claim = bytes(range(32, 64))
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False,
+                              claim_key=claim, enroll=True)
+    writes = []
+
+    async def fake_write(ptype, seq, payload=b""):
+        writes.append((ptype, bytes(payload)))
+
+    client.write_ctrl = fake_write
+    assert client._parse_hello_ack(
+        _canned_hello_ack(session, 247, 1, device_id, device_nonce)) is True
+
+    async def run():
+        await client._auth_exchange()
+
+    async def driver():
+        for _ in range(500):
+            await asyncio.sleep(0.01)
+            if any(w[0] == cfg.PKT_AUTH for w in writes):
+                break
+        auth_payload = next(w[1] for w in writes if w[0] == cfg.PKT_AUTH)
+        client_nonce = auth_payload[16:32]
+        enroll_key = derive_client_key_v3(claim, device_nonce, client_nonce,
+                                          device_id, auth_payload[:16])
+        transcript = build_transcript(device_id, auth_payload[:16], session,
+                                      device_nonce, client_nonce, 1)
+        expect_session = derive_session_key_v3(enroll_key, device_nonce, client_nonce,
+                                               device_id, auth_payload[:16], session)
+        server_proof = finish_proof(expect_session, SERVER_DOM, transcript)
+        await client._handle_ctrl_packet(
+            proto_parse(proto_build(cfg.PKT_AUTH_OK, 1, server_proof)))
+
+    async def both():
+        await asyncio.gather(run(), driver())
+
+    asyncio.run(both())
+    rec = store.get(device_id)
+    assert rec is not None, "credential must be durable before READY is sent"
+    assert rec[2] is True, "pre-READY credential must be marked pending"
+
+
+@needs_deps
+def test_ready_timeout_keeps_pending_then_reuses_it(monkeypatch):
+    """Disconnect in the commit window: pending survives, next link reuses it."""
+    import asyncio
+    import struct
+
+    import client_app.credentials as credsmod
+    from client_app import config as cfg
+    from client_app.ble_client import CheckpointClient
+    from client_app.protocol import proto_build, proto_parse
+
+    store = _make_fake_cred_store(monkeypatch)
+    monkeypatch.setattr(cfg, "ACK_TIMEOUT_S", 0.2)
+    device_id = bytes(range(16))
+    try:
+        first = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False,
+                                 claim_key=bytes(32), enroll=True)
+
+        async def fake_hello_exchange(label):
+            first.session_id = 0x1234ABCD
+            first.device_id = device_id
+            first.device_nonce = bytes(16)
+            first.auth_mode = 1
+            first.hello_acked.set()
+            return "acked"
+
+        async def fake_auth_exchange():
+            first.session_key = b"S" * 16
+            first._auth_transcript = b"T" * 88
+            first._pending_enroll_key = b"E" * 32
+            credsmod.save_client_credential(
+                first.device_id, first.client_id, first._pending_enroll_key, pending=True)
+
+        async def dropping_write(ptype, seq, payload=b""):
+            pass  # every READY_ACK lost
+
+        first._hello_exchange = fake_hello_exchange
+        first._auth_exchange = fake_auth_exchange
+        first.write_ctrl = dropping_write
+        try:
+            asyncio.run(first.do_handshake())
+            raised = None
+        except ConnectionError as e:
+            raised = e
+        assert raised is not None and "READY timed out" in str(raised)
+        rec = store.get(device_id)
+        assert rec is not None and rec[2] is True, "ambiguous commit must keep pending"
+
+        second = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
+        marked = []
+        monkeypatch.setattr(credsmod, "mark_active",
+                            lambda dev: (marked.append(bytes(dev))),
+                            raising=False)
+
+        async def fake_hello2(label):
+            second.session_id = 0x1234ABCD
+            second.device_id = device_id
+            second.device_nonce = bytes(16)
+            second.hello_acked.set()
+            return "acked"
+
+        async def fake_auth2():
+            found = credsmod.load_client_credential(device_id)
+            assert found is not None, "pending credential must be tried as normal K_client"
+            second.client_id, second.client_key = found[0], found[1]
+            second.session_key = b"S" * 16
+            second._auth_transcript = b"T" * 88
+            second._was_pending = credsmod.is_pending(device_id)
+
+        async def ok_write(ptype, seq, payload=b""):
+            if ptype == cfg.PKT_READY:
+                pkt = proto_parse(proto_build(
+                    cfg.PKT_READY_ACK, 1, struct.pack("<I", 0x1234ABCD)))
+                await second._handle_ctrl_packet(pkt)
+
+        second._hello_exchange = fake_hello2
+        second._auth_exchange = fake_auth2
+        second.write_ctrl = ok_write
+        asyncio.run(second.do_handshake())
+        assert marked == [device_id], "working pending credential must be marked active"
+        assert second.enroll is False
+    finally:
+        monkeypatch.undo()
+
+
+@needs_deps
+def test_enroll_requires_active_window(monkeypatch):
+    import asyncio
+
+    import client_app.credentials as credsmod
+    from client_app.ble_client import CheckpointClient
+
+    monkeypatch.setattr(credsmod, "save_client_credential",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not save")))
+    client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False,
+                              claim_key=bytes(32), enroll=True)
+
+    async def fake_hello_exchange(label):
+        client.session_id = 0x1234ABCD
+        client.device_id = bytes(16)
+        client.device_nonce = bytes(16)
+        client.auth_mode = 0  # device reports: not in enrollment
+        client.hello_acked.set()
+        return "acked"
+
+    client._hello_exchange = fake_hello_exchange
+    try:
+        asyncio.run(client.do_handshake())
+        raised = None
+    except RuntimeError as e:
+        raised = e
+    assert raised is not None and "Enrollment window is not active" in str(raised)
 
 
 @needs_deps
@@ -1055,6 +1310,7 @@ def test_handshake_sends_ready():
 
     from client_app import config as cfg
     from client_app.ble_client import CheckpointClient
+    from client_app.protocol import proto_build, proto_parse
     client = CheckpointClient("00:00:00:00:00:00", ingest_enabled=False, vad_enabled=False)
     writes = []
 
@@ -1075,14 +1331,14 @@ def test_handshake_sends_ready():
 
     async def fake_write_ctrl(ptype, seq, payload=b""):
         writes.append((ptype, seq, payload))
-
-    async def fake_wait_ready():
-        client.ready_ack_event.set()
+        if ptype == cfg.PKT_READY:
+            pkt = proto_parse(proto_build(
+                cfg.PKT_READY_ACK, 1, struct.pack("<I", 0x1234ABCD)))
+            await client._handle_ctrl_packet(pkt)
 
     client._hello_exchange = fake_hello_exchange
     client._auth_exchange = fake_auth_exchange
     client.write_ctrl = fake_write_ctrl
-    client._wait_for_ready_ack = fake_wait_ready
     asyncio.run(client.do_handshake())
     assert writes, "READY must be sent after AUTH validation"
     assert writes[0][0] == cfg.PKT_READY

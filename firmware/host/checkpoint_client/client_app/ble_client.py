@@ -93,6 +93,7 @@ class CheckpointClient:
         self.client_key: bytes | None = None
         self.claim_key: bytes | None = bytes(claim_key) if claim_key else None
         self.enroll: bool = bool(enroll or (claim_key is not None))
+        self._was_pending: bool = False
         self.mtu: int | None = None
         self.chunk_sec: int | None = None
         self.frag_size: int = cfg.BLE_FRAG_SIZE_GUESS
@@ -443,6 +444,7 @@ class CheckpointClient:
         self._pending_enroll_key = None
         self._expect_session = None
         self._auth_transcript = None
+        self._was_pending = False
         self.mtu = None
         self.chunk_sec = None
         self.current_file = None
@@ -772,6 +774,11 @@ class CheckpointClient:
             raise RuntimeError("Server proof mismatch — possible MITM")
         self.session_key = bytes(self._expect_session)
         self.master_key = bytes(self.session_key)
+        if self.enroll:
+            creds.save_client_credential(
+                self.device_id, self.client_id, self._pending_enroll_key, pending=True)
+        else:
+            self._was_pending = creds.is_pending(self.device_id)
 
     async def do_handshake(self):
         outcome = await self._hello_exchange("attempt 1/1")
@@ -784,6 +791,10 @@ class CheckpointClient:
                                    "pair/bond first, then retry (enroll mode only)")
             raise RuntimeError(f"HELLO rejected with error 0x{self.last_error:02x}"
                                if self.last_error is not None else "HELLO rejected")
+        if self.enroll and self.auth_mode != 1:
+            raise RuntimeError(
+                "Enrollment window is not active. "
+                "Hold the Checkpoint button for 5 seconds and retry.")
         await self._auth_exchange()
         for attempt in range(1, 4):
             self.ready_ack_event.clear()
@@ -799,6 +810,8 @@ class CheckpointClient:
                 continue
             if self.ready_ack_event.is_set():
                 break
+            if self.enroll:
+                creds.delete_credential(self.device_id)
             if self.last_error is not None:
                 raise RuntimeError(f"READY rejected with error 0x{self.last_error:02x}")
             raise RuntimeError("READY rejected")
@@ -806,10 +819,13 @@ class CheckpointClient:
             pending = getattr(self, "_pending_enroll_key", None)
             if pending is None:
                 raise RuntimeError("Enrollment completed without pending key")
-            creds.save_client_credential(self.device_id, self.client_id, pending)
+            creds.mark_active(self.device_id)
             self.client_key = bytes(pending)
             self.enroll = False
             self.claim_key = None
+        elif getattr(self, "_was_pending", False):
+            creds.mark_active(self.device_id)
+            self._was_pending = False
         self._pending_enroll_key = None
         self._expect_session = None
         self._auth_transcript = None
@@ -1435,90 +1451,98 @@ async def find_device(name_or_addr: str | None) -> str:
 
 
 def parse_claim_hex(claim_hex: str) -> bytes:
+    text = claim_hex.strip()
+    idx = text.lower().find("checkpoint://claim?")
+    if idx >= 0:
+        query = text[idx:].split("?", 1)[1]
+        fields = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+        text = fields.get("key", "")
     try:
-        claim_key = bytes.fromhex(claim_hex.strip())
+        claim_key = bytes.fromhex(text.strip())
     except ValueError:
         raise RuntimeError("--claim must be 64 hex chars (32 bytes)")
+    if len(claim_key) == 16:
+        raise RuntimeError(
+            "That looks like the device id (16 bytes), not the claim key. "
+            "Paste the `claim` line (64 hex chars) or the full checkpoint://claim?... URI.")
     if len(claim_key) != 32:
         raise RuntimeError("--claim must be 64 hex chars (32 bytes)")
     return claim_key
 
 
+def build_cli_parser():
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="client.py", description="Checkpoint BLE sync client (protocol v3)")
+    parser.add_argument("device", nargs="?",
+                        help="BLE address or advertised name (scanned when omitted)")
+    parser.add_argument("--bench", action="store_true")
+    parser.add_argument("--csv", action="store_true")
+    parser.add_argument("--ingest", dest="ingest", action="store_true", default=None)
+    parser.add_argument("--no-ingest", dest="ingest", action="store_false")
+    parser.add_argument("--ingest-url", default=cfg.INGEST_BASE_URL)
+    parser.add_argument("--user-id", default=cfg.INGEST_USER_ID)
+    parser.add_argument("--no-queue-wait", action="store_true")
+    parser.add_argument("--queue-wait-timeout", type=float, default=cfg.INGEST_POLL_TIMEOUT_S)
+    parser.add_argument("--vad", dest="vad", action="store_true", default=None)
+    parser.add_argument("--no-vad", dest="vad", action="store_false")
+    parser.add_argument("--vad-threshold", type=float, default=cfg.VAD_THRESHOLD)
+    parser.add_argument("--min-speech", type=float, default=cfg.VAD_MIN_SPEECH_S)
+    parser.add_argument("--keep", action="store_true")
+    parser.add_argument("--no-rebond", action="store_true")
+    parser.add_argument("--enroll", action="store_true")
+    parser.add_argument("--claim", default=None,
+                        help="64-hex claim key from USB `auth export` (prompted securely if omitted)")
+    return parser
+
+
+def parse_cli_args(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    # --cli is consumed by __main__ dispatch; never a client option.
+    argv = [a for a in argv if a != "--cli"]
+    opts = build_cli_parser().parse_args(argv)
+    ingest_enabled = cfg.INGEST_ENABLED_DEFAULT if opts.ingest is None else opts.ingest
+    vad_enabled = cfg.VAD_ENABLED_DEFAULT if opts.vad is None else opts.vad
+    return {
+        "device": opts.device,
+        "bench": bool(opts.bench or opts.csv),
+        "ingest_enabled": ingest_enabled,
+        "ingest_url": opts.ingest_url.rstrip("/"),
+        "ingest_user": opts.user_id,
+        "ingest_poll_enabled": cfg.INGEST_POLL_ENABLED_DEFAULT and not opts.no_queue_wait,
+        "ingest_poll_timeout": opts.queue_wait_timeout,
+        "ingest_poll_interval": cfg.INGEST_POLL_INTERVAL_S,
+        "vad_enabled": vad_enabled,
+        "vad_threshold": opts.vad_threshold,
+        "vad_min_speech": opts.min_speech,
+        "ingest_delete": cfg.INGEST_DELETE_AFTER_DEFAULT and not opts.keep,
+        "auto_rebond": cfg.BLE_AUTO_REBOND_DEFAULT and not opts.no_rebond,
+        "enroll": bool(opts.enroll or opts.claim),
+        "claim_hex": opts.claim,
+    }
+
+
 async def cli_async_main() -> None:
-    raw = sys.argv[1:]
-    args = [a for a in raw if not a.startswith("-")]
-    flags = [a for a in raw if a.startswith("-")]
-    bench_flag = "--bench" in flags or "--csv" in flags
-    ingest_enabled = cfg.INGEST_ENABLED_DEFAULT
-    if "--no-ingest" in flags:
-        ingest_enabled = False
-    if "--ingest" in flags:
-        ingest_enabled = True
-    ingest_url = cfg.INGEST_BASE_URL
-    ingest_user = cfg.INGEST_USER_ID
-    ingest_poll_enabled = cfg.INGEST_POLL_ENABLED_DEFAULT and ("--no-queue-wait" not in flags)
-    ingest_poll_timeout = cfg.INGEST_POLL_TIMEOUT_S
-    ingest_poll_interval = cfg.INGEST_POLL_INTERVAL_S
-    vad_enabled = cfg.VAD_ENABLED_DEFAULT
-    if "--no-vad" in flags:
-        vad_enabled = False
-    if "--vad" in flags:
-        vad_enabled = True
-    vad_threshold = cfg.VAD_THRESHOLD
-    vad_min_speech = cfg.VAD_MIN_SPEECH_S
-    for i, tok in enumerate(raw):
-        if tok == "--ingest-url" and i + 1 < len(raw):
-            ingest_url = raw[i + 1].rstrip("/")
-        elif tok.startswith("--ingest-url="):
-            ingest_url = tok.split("=", 1)[1].rstrip("/")
-        elif tok == "--user-id" and i + 1 < len(raw):
-            ingest_user = raw[i + 1]
-        elif tok.startswith("--user-id="):
-            ingest_user = tok.split("=", 1)[1]
-        elif tok == "--vad-threshold" and i + 1 < len(raw):
-            try:
-                vad_threshold = float(raw[i + 1])
-            except ValueError:
-                pass
-        elif tok.startswith("--vad-threshold="):
-            try:
-                vad_threshold = float(tok.split("=", 1)[1])
-            except ValueError:
-                pass
-        elif tok == "--min-speech" and i + 1 < len(raw):
-            try:
-                vad_min_speech = float(raw[i + 1])
-            except ValueError:
-                pass
-        elif tok.startswith("--min-speech="):
-            try:
-                vad_min_speech = float(tok.split("=", 1)[1])
-            except ValueError:
-                pass
-        elif tok == "--queue-wait-timeout" and i + 1 < len(raw):
-            try:
-                ingest_poll_timeout = float(raw[i + 1])
-            except ValueError:
-                pass
-        elif tok.startswith("--queue-wait-timeout="):
-            try:
-                ingest_poll_timeout = float(tok.split("=", 1)[1])
-            except ValueError:
-                pass
-    ingest_delete = cfg.INGEST_DELETE_AFTER_DEFAULT and ("--keep" not in flags)
-    auto_rebond = cfg.BLE_AUTO_REBOND_DEFAULT and ("--no-rebond" not in flags)
-    enroll = "--enroll" in flags
-    claim_hex = None
-    for i, tok in enumerate(raw):
-        if tok == "--claim" and i + 1 < len(raw):
-            claim_hex = raw[i + 1]
-        elif tok.startswith("--claim="):
-            claim_hex = tok.split("=", 1)[1]
+    cli = parse_cli_args()
+    bench_flag = cli["bench"]
+    ingest_enabled = cli["ingest_enabled"]
+    ingest_url = cli["ingest_url"]
+    ingest_user = cli["ingest_user"]
+    ingest_poll_enabled = cli["ingest_poll_enabled"]
+    ingest_poll_timeout = cli["ingest_poll_timeout"]
+    ingest_poll_interval = cli["ingest_poll_interval"]
+    vad_enabled = cli["vad_enabled"]
+    vad_threshold = cli["vad_threshold"]
+    vad_min_speech = cli["vad_min_speech"]
+    ingest_delete = cli["ingest_delete"]
+    auto_rebond = cli["auto_rebond"]
+    enroll = cli["enroll"]
     claim_key = None
-    if claim_hex:
-        claim_key = parse_claim_hex(claim_hex)
+    if cli["claim_hex"]:
+        claim_key = parse_claim_hex(cli["claim_hex"])
         enroll = True
-    arg = args[0] if args else None
+    arg = cli["device"]
     bench_csv = None
     if bench_flag:
         bench_csv = cfg.BENCH_DIR / f"benchmark_{time.strftime('%Y%m%d_%H%M%S')}.csv"
@@ -1538,7 +1562,14 @@ async def cli_async_main() -> None:
         vad_enabled = False
     address = await find_device(arg)
     if enroll and claim_key is None:
-        raise RuntimeError("--enroll requires --claim <64-hex> from `auth export` over USB")
+        import getpass
+        try:
+            entered = getpass.getpass("Claim key (from USB `auth export`, input hidden): ")
+        except (EOFError, KeyboardInterrupt):
+            raise RuntimeError("Enrollment cancelled — no claim key given")
+        if not entered.strip():
+            raise RuntimeError("--enroll requires a claim key from `auth export` over USB")
+        claim_key = parse_claim_hex(entered)
     client = CheckpointClient(
         address, bench_csv=bench_csv, ingest_enabled=ingest_enabled,
         ingest_base_url=ingest_url, ingest_user_id=ingest_user,

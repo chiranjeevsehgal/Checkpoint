@@ -105,9 +105,12 @@ with `8-byte` tag. Nonce is `session || file || seq`.
 First boot generates a 16-byte `device_id` and a random 256-bit claim key in
 NVS (`ckauth`). Over USB run `auth export` once to get the
 `checkpoint://claim?device=...&key=...` payload (keep it secret). To enroll:
-hold the button 5s (blue double-pulse, 60s window), then connect with
-`--enroll --claim <64-hex>`. Maximum 2 trusted devices; a third is rejected
-even inside the window. Enrollment commits only after the READY finish proof.
+hold the button 5s (white double-pulse, 60s window), then connect with
+`--enroll` (prompts for the key with hidden input) or
+`--enroll --claim <64-hex>` for scripts. Maximum 2 trusted devices; a third
+is rejected even inside the window. Enrollment commits only after the READY
+finish proof; the host keeps the new credential as pending until READY_ACK,
+so a disconnect in that window is recovered on the next connect.
 
 Normal connects never auto-pair: without a Windows bond the client refuses
 with instructions instead of calling `pair()`. If the OS loses its bond,
