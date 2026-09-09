@@ -107,6 +107,25 @@ bool persist_slot(int slot) {
   return true;
 }
 
+void clear_slot_ram(int slot) {
+  s_slot_valid[slot] = false;
+  memset(s_client_id[slot], 0, AUTH_CLIENT_ID_BYTES);
+  memset(s_client_key[slot], 0, AUTH_CLIENT_KEY_BYTES);
+}
+
+bool remove_slot_nvs(int slot) {
+  Preferences pref;
+  if (!pref.begin("ckauth", false)) return false;
+  char id_key[8];
+  char key_key[8];
+  snprintf(id_key, sizeof(id_key), "c%d_id", slot);
+  snprintf(key_key, sizeof(key_key), "c%d_key", slot);
+  pref.remove(id_key);
+  pref.remove(key_key);
+  pref.end();
+  return true;
+}
+
 }  // namespace
 
 bool auth_init() {
@@ -332,18 +351,23 @@ bool auth_get_slot(int slot, uint8_t id_out[AUTH_CLIENT_ID_BYTES]) {
 
 bool auth_forget_client(int slot) {
   if (slot < 0 || slot >= AUTH_MAX_CLIENTS) return false;
-  Preferences pref;
-  if (!pref.begin("ckauth", false)) return false;
-  char id_key[8];
-  char key_key[8];
-  snprintf(id_key, sizeof(id_key), "c%d_id", slot);
-  snprintf(key_key, sizeof(key_key), "c%d_key", slot);
-  pref.remove(id_key);
-  pref.remove(key_key);
-  pref.end();
-  s_slot_valid[slot] = false;
-  memset(s_client_id[slot], 0, AUTH_CLIENT_ID_BYTES);
-  memset(s_client_key[slot], 0, AUTH_CLIENT_KEY_BYTES);
+  if (!remove_slot_nvs(slot)) return false;
+  clear_slot_ram(slot);
+  return true;
+}
+
+bool auth_drop_first_slot() {
+  if (!s_slot_valid[0] && !s_slot_valid[1]) return false;
+  if (s_slot_valid[1]) {
+    memcpy(s_client_id[0], s_client_id[1], AUTH_CLIENT_ID_BYTES);
+    memcpy(s_client_key[0], s_client_key[1], AUTH_CLIENT_KEY_BYTES);
+    s_slot_valid[0] = true;
+    persist_slot(0);
+  } else {
+    remove_slot_nvs(0);
+    clear_slot_ram(0);
+  }
+  auth_forget_client(1);
   return true;
 }
 

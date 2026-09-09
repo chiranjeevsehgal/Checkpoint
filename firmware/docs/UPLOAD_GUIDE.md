@@ -118,6 +118,13 @@ recover over USB (`auth list`, `auth forget 0|1`, `auth reset`), then
 re-enroll physically. Protocol v2 peers are rejected with version error
 `0x02`; pre-auth packets get `0x03`.
 
+Lost a phone with no computer handy? Hold the button 15s: the LED flashes
+red 3 times and the first trusted slot is dropped (a second device slides
+into its place), then a fresh 60s enrollment window opens so you can enroll
+the replacement right away. Sync first if you can — recordings still waiting
+on the device that were encrypted for a dropped slot can never be decrypted
+again by anyone.
+
 The recorder keeps a 96 kB PSRAM ring. Short SD stalls do not drop audio. The manifest keeps `next_seq` in `/rec/manifest.json` so resume survives reboot. Recovered `.tmp` files get a patched WAV header.
 
 ## Common fixes

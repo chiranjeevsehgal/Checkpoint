@@ -32,5 +32,6 @@ void auth_clear_session();
 
 bool auth_get_slot(int slot, uint8_t id_out[AUTH_CLIENT_ID_BYTES]);
 bool auth_forget_client(int slot);
+bool auth_drop_first_slot();
 void auth_factory_reset();
 void auth_usb_poll();

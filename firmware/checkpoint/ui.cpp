@@ -7,7 +7,7 @@
 #include <Adafruit_NeoPixel.h>
 
 enum LedState : uint8_t { LED_OFF, LED_ON, LED_BOOKMARK, LED_ERROR, LED_FATAL, LED_VAD_IDLE };
-enum LedOverlay : uint8_t { OVERLAY_NONE, OVERLAY_ENROLL, OVERLAY_AUTH_OK };
+enum LedOverlay : uint8_t { OVERLAY_NONE, OVERLAY_ENROLL, OVERLAY_AUTH_OK, OVERLAY_SLOT_DROP };
 
 static TaskHandle_t s_task = nullptr;
 static volatile uint8_t s_state = 0;
@@ -107,6 +107,8 @@ void ui_task(void *arg) {
   bool pressed = false;
   uint32_t press_start_ms = 0;
   bool long_fired = false;
+  bool drop_fired = false;
+  bool drop_removed = false;
   uint32_t state_enter_ms = 0;
   static uint32_t last_toggle_ms = 0;
   while (true) {
@@ -122,6 +124,8 @@ void ui_task(void *arg) {
       pressed = true;
       press_start_ms = now;
       long_fired = false;
+      drop_fired = false;
+      drop_removed = false;
     }
     if (pressed && debounced_low && !long_fired && (now - press_start_ms) >= UI_LONG_PRESS_MS) {
       long_fired = true;
@@ -130,10 +134,20 @@ void ui_task(void *arg) {
         state_enter_ms = now;
       }
     }
+    if (pressed && debounced_low && !drop_fired && (now - press_start_ms) >= UI_SLOT_DROP_MS) {
+      drop_fired = true;
+      drop_removed = auth_drop_first_slot();
+      if (drop_removed) {
+        auth_open_enrollment(AUTH_ENROLL_WINDOW_MS);
+      }
+      s_overlay = OVERLAY_SLOT_DROP;
+      s_overlay_enter_ms = now;
+      state_enter_ms = now;
+    }
     if (pressed && debounced_high) {
       uint32_t held = now - press_start_ms;
       pressed = false;
-      if (!long_fired && held < 1000) {
+      if (!long_fired && !drop_fired && held < 1000) {
         if ((now - last_toggle_ms < 800) || (now - s_remote_action_ms < 800)) {
         } else {
           last_toggle_ms = now;
@@ -157,6 +171,7 @@ void ui_task(void *arg) {
     }
     if (s_overlay == OVERLAY_ENROLL && !auth_enrollment_active()) s_overlay = OVERLAY_NONE;
     if (s_overlay == OVERLAY_AUTH_OK && (now - s_overlay_enter_ms) > 1000) s_overlay = OVERLAY_NONE;
+    if (s_overlay == OVERLAY_SLOT_DROP && (now - s_overlay_enter_ms) > 720) s_overlay = OVERLAY_NONE;
     // Track state entry for non-blocking blinks
     static uint8_t prev_state = 255;
     if (s_state != prev_state) {
@@ -181,6 +196,10 @@ void ui_task(void *arg) {
       ui_set_rgb(w, w, w);
     } else if (s_overlay == OVERLAY_AUTH_OK) {
       ui_set_rgb(0, 180, 0);
+    } else if (s_overlay == OVERLAY_SLOT_DROP) {
+      bool on = drop_removed ? ((now - s_overlay_enter_ms) % 240 < 120)
+                             : ((now - s_overlay_enter_ms) < 120);
+      ui_set_rgb(on ? 255 : 0, 0, 0);
     } else switch (s_state) {
       case LED_OFF: ui_set_rgb(0, 0, 0); break;
       case LED_ON:

@@ -61,6 +61,20 @@ def test_two_slot_limit_and_commit_after_ready():
     print("PASS slots + commit-after-ready")
 
 
+def test_drop_first_slot_compacts():
+    auth = read("auth.cpp")
+    assert "auth_drop_first_slot" in auth
+    assert "auth_drop_first_slot" in read("auth.h")
+    drop = auth.split("bool auth_drop_first_slot()")[1].split("\n}\n")[0]
+    # Empty table is a no-op that reports nothing removed.
+    assert "return false" in drop
+    # Slot 1 slides into slot 0 and is persisted before its old keys go.
+    assert "s_client_id[0]" in drop and "s_client_id[1]" in drop
+    assert "persist_slot(0)" in drop
+    assert "auth_forget_client(1)" in drop
+    print("PASS drop-first-slot compacts")
+
+
 def test_central_auth_gate():
     ble = read("ble_service.cpp")
     assert "if (!auth_is_authenticated())" in ble
@@ -84,12 +98,22 @@ def test_gatt_hardened():
 def test_button_and_led_and_usb():
     ui = read("ui.cpp")
     assert "UI_LONG_PRESS_MS" in ui
+    assert "UI_SLOT_DROP_MS" in ui
     assert "auth_open_enrollment" in ui
+    assert "auth_drop_first_slot" in ui
     assert "OVERLAY_ENROLL" in ui and "OVERLAY_AUTH_OK" in ui
+    assert "OVERLAY_SLOT_DROP" in ui
     assert "LED_ENROLL" not in ui and "LED_AUTH_OK" not in ui, \
         "enrollment must be an overlay, not a base LED state"
+    # The 15s tier fires once per press and never touches the recorder.
+    assert "drop_fired" in ui
+    assert "!drop_fired && held < 1000" in ui, "release after a drop must not toggle recording"
+    drop_block = ui.split("UI_SLOT_DROP_MS", 1)[1].split("s_overlay = OVERLAY_SLOT_DROP")[0]
+    assert "recorder_start" not in drop_block and "recorder_stop" not in drop_block, \
+        "slot drop must not alter recording state"
     cfg = read("config.h")
     assert "UI_LONG_PRESS_MS 5000" in cfg
+    assert "UI_SLOT_DROP_MS 15000" in cfg
     assert "AUTH_ENROLL_WINDOW_MS 60000" in cfg
     assert "PROTO_VER 3" in cfg
     auth = read("auth.cpp")
