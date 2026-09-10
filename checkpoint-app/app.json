@@ -56,7 +56,9 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "onnxruntime-react-native",
+      "react-native-audio-api"
     ],
     "experiments": {
       "typedRoutes": true,

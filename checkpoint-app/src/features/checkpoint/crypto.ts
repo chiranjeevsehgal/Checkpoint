@@ -1,6 +1,5 @@
 import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { randomBytes } from "@noble/hashes/utils.js";
 
 import {
   CRYPTO_KEY_BYTES,
@@ -38,7 +37,16 @@ export function hexToBytes(hex: string): Uint8Array {
 }
 
 export function newId(): Uint8Array {
-  return randomBytes(16);
+  const webCrypto = (globalThis as { crypto?: Crypto }).crypto;
+  if (typeof webCrypto?.getRandomValues === "function") {
+    return webCrypto.getRandomValues(new Uint8Array(16));
+  }
+  // Hermes builds without WebCrypto fall back to the native module.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const expoCrypto = require("expo-crypto") as {
+    getRandomBytes(byteCount: number): Uint8Array;
+  };
+  return expoCrypto.getRandomBytes(16);
 }
 
 export function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
