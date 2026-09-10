@@ -9,6 +9,7 @@ import {
   INGEST_TIMEOUT_S,
 } from "./config.ts";
 import { bytesToHex } from "./crypto.ts";
+import { isValidUserId } from "./parsers.ts";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -89,6 +90,9 @@ export class IngestionUploader {
   ): Promise<CompletedUpload> {
     if (data.length > INGEST_MAX_BYTES) {
       throw new Error(`too-large: ${data.length} > ${INGEST_MAX_BYTES}`);
+    }
+    if (!isValidUserId(this.userId)) {
+      throw new Error("ingest user ID is not a valid UUID — check Settings > User ID");
     }
     const headers: Record<string, string> = {};
     if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey.slice(0, 128);

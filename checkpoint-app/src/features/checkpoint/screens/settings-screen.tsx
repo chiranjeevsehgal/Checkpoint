@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Text } from "@/components/ui/text";
 
 import { useCheckpoint } from "../hooks/useCheckpoint.tsx";
+import { isValidUserId } from "../parsers.ts";
 import type { CheckpointSettings } from "../settings.ts";
 
 function numberField(raw: string, fallback: number): number {
@@ -20,9 +21,11 @@ export function CheckpointSettingsScreen() {
   const { settings, updateSettings } = useCheckpoint();
   const [draft, setDraft] = useState<CheckpointSettings>(settings);
   const [saved, setSaved] = useState(false);
+  const [userIdError, setUserIdError] = useState<string | null>(null);
 
   const set = <K extends keyof CheckpointSettings>(key: K, value: CheckpointSettings[K]) => {
     setSaved(false);
+    if (key === "userId") setUserIdError(null);
     setDraft((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -49,6 +52,7 @@ export function CheckpointSettingsScreen() {
               autoCapitalize="none"
               autoCorrect={false}
             />
+            {userIdError ? <Text className="text-destructive">{userIdError}</Text> : null}
           </CardContent>
         </Card>
         <Card>
@@ -76,7 +80,18 @@ export function CheckpointSettingsScreen() {
         </Card>
         <Button
           onPress={() => {
-            void updateSettings(draft).then(() => setSaved(true));
+            if (!isValidUserId(draft.userId)) {
+              setUserIdError("Enter a valid user ID (UUID like aaaaaaaa-…).");
+              setSaved(false);
+              return;
+            }
+            setUserIdError(null);
+            void updateSettings(draft)
+              .then(() => setSaved(true))
+              .catch(() => {
+                setSaved(false);
+                setUserIdError("Save failed — try again.");
+              });
           }}
         >
           <Text>Save settings</Text>

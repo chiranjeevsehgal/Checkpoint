@@ -11,6 +11,7 @@ import {
   ctrlStatusText,
   fileStateLabel,
   formatBytes,
+  isValidUserId,
   parseCmdResp,
   parseFileList,
   parseStatus,
@@ -169,5 +170,29 @@ describe("labels", () => {
     assert.equal(formatBytes(512), "512B");
     assert.equal(formatBytes(2048), "2KB");
     assert.equal(formatBytes(3 * 1024 * 1024), "3.0MB");
+  });
+});
+
+describe("isValidUserId", () => {
+  it("accepts the dev identity", () => {
+    assert.equal(isValidUserId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), true);
+  });
+
+  it("accepts uppercase and padded input", () => {
+    assert.equal(isValidUserId("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"), true);
+    assert.equal(isValidUserId("  aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa  "), true);
+  });
+
+  it("rejects empty and non-UUID values", () => {
+    assert.equal(isValidUserId(""), false);
+    assert.equal(isValidUserId("null"), false);
+    assert.equal(isValidUserId("Bearer aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), false);
+    assert.equal(isValidUserId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa"), false);
+    assert.equal(
+      isValidUserId("checkpoint://claim?key=" + "ab".repeat(32)),
+      false,
+    );
+    assert.equal(isValidUserId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" + "\u200B"), false);
+    assert.equal(isValidUserId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" + "\u00A0"), true);
   });
 });

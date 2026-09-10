@@ -176,3 +176,11 @@ export function formatBytes(value: number): string {
   if (value >= 1 << 10) return `${(value / (1 << 10)).toFixed(0)}KB`;
   return `${value}B`;
 }
+
+const UUID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/** Canonical UUID check for the ingestion user identity (server parses the same form). */
+export function isValidUserId(raw: string): boolean {
+  return UUID_PATTERN.test(raw.trim());
+}
