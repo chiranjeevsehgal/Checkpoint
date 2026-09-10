@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { House, Search, Settings } from 'lucide-react-native';
+import { ArrowDownUp, Bluetooth, HardDrive, Mic, Settings } from 'lucide-react-native';
 
 import { Icon } from '@/components/ui/icon';
 
@@ -7,17 +7,31 @@ export default function TabsLayout() {
   return (
     <Tabs screenOptions={{ headerShown: false }}>
       <Tabs.Screen
-        name="index"
+        name="connect"
         options={{
-          title: 'Home',
-          tabBarIcon: ({ color, size }) => <Icon as={House} color={color} size={size} />,
+          title: 'Connect',
+          tabBarIcon: ({ color, size }) => <Icon as={Bluetooth} color={color} size={size} />,
         }}
       />
       <Tabs.Screen
-        name="search"
+        name="transfers"
         options={{
-          title: 'Search',
-          tabBarIcon: ({ color, size }) => <Icon as={Search} color={color} size={size} />,
+          title: 'Transfers',
+          tabBarIcon: ({ color, size }) => <Icon as={ArrowDownUp} color={color} size={size} />,
+        }}
+      />
+      <Tabs.Screen
+        name="device"
+        options={{
+          title: 'Device',
+          tabBarIcon: ({ color, size }) => <Icon as={Mic} color={color} size={size} />,
+        }}
+      />
+      <Tabs.Screen
+        name="storage"
+        options={{
+          title: 'Storage',
+          tabBarIcon: ({ color, size }) => <Icon as={HardDrive} color={color} size={size} />,
         }}
       />
       <Tabs.Screen

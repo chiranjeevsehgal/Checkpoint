@@ -1,6 +1,8 @@
 export const routes = {
-  home: '/(app)/(tabs)/',
-  search: '/(app)/(tabs)/search',
+  connect: '/(app)/(tabs)/connect',
+  transfers: '/(app)/(tabs)/transfers',
+  device: '/(app)/(tabs)/device',
+  storage: '/(app)/(tabs)/storage',
   settings: '/(app)/(tabs)/settings',
   signIn: '/(public)/sign-in',
   signUp: '/(public)/sign-up',

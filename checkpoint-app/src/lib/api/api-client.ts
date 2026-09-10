@@ -14,7 +14,8 @@ export async function apiFetch<T>(
   init?: RequestInit,
   token?: string
 ): Promise<T> {
-  const res = await fetch(`${env.apiUrl}${path}`, {
+  const url = path.startsWith('http') ? path : `${env.apiUrl}${path}`;
+  const res = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),

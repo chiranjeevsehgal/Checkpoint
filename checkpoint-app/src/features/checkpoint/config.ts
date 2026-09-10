@@ -34,6 +34,7 @@ export const VAD_MIN_SPEECH_S_DEFAULT = 1.5;
 
 export const STATUS_POLL_INTERVAL_S = 5;
 export const STATUS_PUSH_SEQ = 0;
+export const KAFKA_TOPIC_HINT = "transcription.jobs.v1";
 
 export const BENCH_FIELDNAMES = [
   "ts",
