@@ -363,14 +363,22 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
         return;
       }
     }
-    const client = new CheckpointClient(manager, deviceName.trim() || DEVICE_NAME, {
-      onEvent: applyEvent,
-      log: appendLog,
-      onFile: (file) => {
-        const active = clientRef.current;
-        if (active) void handleCompletedFile(active, file);
-      },
-    });
+    let client: CheckpointClient;
+    try {
+      client = new CheckpointClient(manager, deviceName.trim() || DEVICE_NAME, {
+        onEvent: applyEvent,
+        log: appendLog,
+        onFile: (file) => {
+          const active = clientRef.current;
+          if (active) void handleCompletedFile(active, file);
+        },
+      });
+    } catch (error) {
+      appendLog(`[ui] client init failed: ${error instanceof Error ? error.message : "unknown"}`);
+      setBusy(false);
+      setLinkState("idle");
+      return;
+    }
     clientRef.current = client;
     stoppedRef.current = false;
     const target = deviceName.trim() || DEVICE_NAME;
