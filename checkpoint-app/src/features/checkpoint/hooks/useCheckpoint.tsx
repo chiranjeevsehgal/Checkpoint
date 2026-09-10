@@ -184,6 +184,8 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
   }, [settings]);
 
   const appendLog = useCallback((line: string) => {
+    // Mirrored to logcat so field issues can be diagnosed over adb.
+    console.log(line);
     setLogs((prev) => pushLog(prev, line));
   }, []);
 
