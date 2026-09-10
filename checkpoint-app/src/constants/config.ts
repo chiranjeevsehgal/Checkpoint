@@ -1,4 +1,6 @@
+import { env } from '@/lib/env';
+
 export const config = {
-  apiUrl: process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8080',
-  env: process.env.EXPO_PUBLIC_ENV ?? 'development',
+  apiUrl: env.apiUrl,
+  env: env.appEnv,
 } as const;

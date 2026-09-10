@@ -8,9 +8,18 @@
     "scheme": "checkpointapp",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "Checkpoint syncs recordings from your pendant over Bluetooth.",
+        "NSBluetoothPeripheralUsageDescription": "Checkpoint syncs recordings from your pendant over Bluetooth."
+      }
     },
     "android": {
+      "permissions": [
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -34,7 +43,9 @@
           "imageWidth": 76
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-sharing",
+      "react-native-ble-plx"
     ],
     "experiments": {
       "typedRoutes": true,
