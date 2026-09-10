@@ -205,6 +205,7 @@ export class CheckpointClient {
     return new Promise<Device>((resolve, reject) => {
       let settled = false;
       const seenIds = new Set<string>();
+      let seenCount = 0;
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
@@ -213,7 +214,7 @@ export class CheckpointClient {
         } catch {
           /* ignore */
         }
-        reject(new Error(`Device '${want}' not found`));
+        reject(new Error(`Device '${want}' not found (saw ${seenCount} BLE device(s))`));
       }, timeoutMs);
       const finish = (action: () => void) => {
         if (settled) return;
@@ -236,6 +237,7 @@ export class CheckpointClient {
               return;
             }
             if (!scanned) return;
+            seenCount += 1;
             const id = scanned.id ?? "";
             const name = scanned.name ?? "";
             const localName = scanned.localName ?? "";
@@ -1042,7 +1044,7 @@ export class CheckpointClient {
     while (!hooks.stopped()) {
       let device: Device | null = null;
       try {
-        device = await this.scanForDevice(target, 3000);
+        device = await this.scanForDevice(target, 8000);
       } catch (error) {
         this.log(
           `[ble] scan error: ${error instanceof Error ? error.message : "unknown"}`,
