@@ -15,6 +15,7 @@
       }
     },
     "android": {
+      "package": "com.boredom1234.checkpointapp",
       "permissions": [
         "android.permission.BLUETOOTH_SCAN",
         "android.permission.BLUETOOTH_CONNECT",
