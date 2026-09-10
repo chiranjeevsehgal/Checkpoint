@@ -1,0 +1,17 @@
+diff --git a/node_modules/onnxruntime-react-native/android/build.gradle b/node_modules/onnxruntime-react-native/android/build.gradle
+index 41b4359..2530cbe 100644
+--- a/node_modules/onnxruntime-react-native/android/build.gradle
++++ b/node_modules/onnxruntime-react-native/android/build.gradle
+@@ -247,7 +247,11 @@ dependencies {
+     extractLibs "com.microsoft.onnxruntime:onnxruntime-android:latest.integration@aar"
+   }
+ 
+-  if (VersionNumber.parse(REACT_NATIVE_VERSION) < VersionNumber.parse("0.71")) {
++  // org.gradle.util.VersionNumber was removed in Gradle 9; compare manually.
++  // (Patched via patch-package: patches/onnxruntime-react-native+1.24.3.patch)
++  def rnVersionParts = REACT_NATIVE_VERSION.tokenize('.')
++  def rnMinor = rnVersionParts.size() > 1 ? rnVersionParts[1].toInteger() : 0
++  if (rnVersionParts[0].toInteger() == 0 && rnMinor < 71) {
+     extractLibs "com.facebook.fbjni:fbjni:+:headers"
+     extractLibs "com.facebook.fbjni:fbjni:+"
+   }
