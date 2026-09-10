@@ -311,23 +311,25 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     if (connected || busy) return;
     setBusy(true);
     setLinkState("connecting");
-    const current = await loadSettings();
-    setSettings(current);
-    settingsRef.current = current;
-    if (!managerRef.current) managerRef.current = new BleManager();
-    const manager = managerRef.current;
     setNeedsSettings(false);
+    let manager: BleManager;
     try {
+      const current = await loadSettings();
+      setSettings(current);
+      settingsRef.current = current;
+      if (!managerRef.current) managerRef.current = new BleManager();
+      manager = managerRef.current;
       const gate = await ensureBlePermissions();
       if (gate !== "granted") {
-      appendLog(
-        `[ui] missing Bluetooth permission (${gate}) — grant Nearby devices + Location and retry`,
-      );
+        appendLog(
+          `[ui] missing Bluetooth permission (${gate}) — grant Nearby devices + Location and retry`,
+        );
         setNeedsSettings(gate === "needs-settings");
         setBusy(false);
         setLinkState(gate === "needs-settings" ? "needs permission" : "permission denied");
         return;
       }
+      appendLog("[ui] permissions granted");
       const adapter = await manager.state();
       if (adapter !== "PoweredOn") {
         appendLog(
@@ -340,6 +342,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
         setLinkState(adapter === "PoweredOff" ? "bluetooth off" : "bluetooth unavailable");
         return;
       }
+      appendLog(`[ble] adapter ${adapter} — scanning...`);
     } catch (error) {
       appendLog(`[ui] pre-connect check failed: ${error instanceof Error ? error.message : "unknown"}`);
       setBusy(false);
