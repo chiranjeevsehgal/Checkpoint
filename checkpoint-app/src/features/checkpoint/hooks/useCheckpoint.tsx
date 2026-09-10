@@ -2,11 +2,13 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { PropsWithChildren } from "react";
 import { Alert } from "react-native";
 import { BleManager } from "react-native-ble-plx";
+import { openSettings } from "expo-linking";
 import { Directory, File, Paths } from "expo-file-system";
 import { isAvailableAsync, shareAsync } from "expo-sharing";
 
 import { CheckpointClient, type CompletedFile } from "../client.ts";
 import { parseClaimHex } from "../claim.ts";
+import { ensureBlePermissions } from "../permissions.ts";
 import {
   CTRL_ERASE_ARM,
   CTRL_ERASE_CONFIRM,
@@ -145,6 +147,8 @@ interface CheckpointContextValue {
   updateSettings: (settings: CheckpointSettings) => Promise<void>;
   shareBench: () => Promise<void>;
   clearLogs: () => void;
+  needsSettings: boolean;
+  openAppSettings: () => Promise<void>;
 }
 
 const CheckpointContext = createContext<CheckpointContextValue | null>(null);
@@ -168,6 +172,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
   const [transfers, setTransfers] = useState<TransferInfo[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
   const [settings, setSettings] = useState<CheckpointSettings>(defaultSettings);
+  const [needsSettings, setNeedsSettings] = useState(false);
 
   const managerRef = useRef<BleManager | null>(null);
   const clientRef = useRef<CheckpointClient | null>(null);
@@ -311,6 +316,36 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     settingsRef.current = current;
     if (!managerRef.current) managerRef.current = new BleManager();
     const manager = managerRef.current;
+    setNeedsSettings(false);
+    try {
+      const gate = await ensureBlePermissions();
+      if (gate !== "granted") {
+        appendLog(
+          `[ui] missing Bluetooth permission (${gate}) — grant Nearby devices and retry`,
+        );
+        setNeedsSettings(gate === "needs-settings");
+        setBusy(false);
+        setLinkState(gate === "needs-settings" ? "needs permission" : "permission denied");
+        return;
+      }
+      const adapter = await manager.state();
+      if (adapter !== "PoweredOn") {
+        appendLog(
+          adapter === "PoweredOff"
+            ? "[ui] Bluetooth is off — turn it on and retry"
+            : `[ui] Bluetooth unavailable (${adapter}) — check system settings and retry`,
+        );
+        setNeedsSettings(adapter === "Unauthorized");
+        setBusy(false);
+        setLinkState(adapter === "PoweredOff" ? "bluetooth off" : "bluetooth unavailable");
+        return;
+      }
+    } catch (error) {
+      appendLog(`[ui] pre-connect check failed: ${error instanceof Error ? error.message : "unknown"}`);
+      setBusy(false);
+      setLinkState("idle");
+      return;
+    }
     let claimKey: Uint8Array | null = null;
     const trimmedClaim = claimText.trim();
     if (trimmedClaim !== "") {
@@ -479,6 +514,14 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
 
   const clearLogs = useCallback(() => setLogs([]), []);
 
+  const openAppSettings = useCallback(async () => {
+    try {
+      await openSettings();
+    } catch (error) {
+      appendLog(`[ui] open settings failed: ${error instanceof Error ? error.message : "unknown"}`);
+    }
+  }, [appendLog]);
+
   const shareBench = useCallback(async () => {
     const client = clientRef.current;
     if (!client || client.bench.rows.length === 0) {
@@ -553,6 +596,8 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       updateSettings,
       shareBench,
       clearLogs,
+      needsSettings,
+      openAppSettings,
     }),
     [
       applyLed,
@@ -572,6 +617,8 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       listPage,
       listPrev,
       logs,
+      needsSettings,
+      openAppSettings,
       refreshStatus,
       refreshStorage,
       settings,

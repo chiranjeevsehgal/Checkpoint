@@ -26,6 +26,8 @@ export function ConnectScreen() {
     disconnect,
     updateSettings,
     clearLogs,
+    needsSettings,
+    openAppSettings,
   } = useCheckpoint();
 
   return (
@@ -71,6 +73,11 @@ export function ConnectScreen() {
                 <Text>Disconnect</Text>
               </Button>
             </View>
+            {needsSettings ? (
+              <Button variant="outline" onPress={() => void openAppSettings()}>
+                <Text>Open Settings</Text>
+              </Button>
+            ) : null}
           </CardContent>
         </Card>
         <Card>

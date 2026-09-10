@@ -52,6 +52,7 @@ import {
   markCredentialActive,
   saveCredential,
 } from "./credentials.ts";
+import { describeScanError } from "./permissionPolicy.ts";
 import {
   CLIENT_DOMAIN,
   SERVER_DOMAIN,
@@ -229,7 +230,11 @@ export class CheckpointClient {
           [SERVICE_UUID],
           { allowDuplicates: false },
           (error, scanned) => {
-            if (error || !scanned) return;
+            if (error) {
+              this.log(`[ble] scan failed: ${describeScanError(error.errorCode, error.message)}`);
+              return;
+            }
+            if (!scanned) return;
             const id = scanned.id ?? "";
             if (
               id.toUpperCase() === want.toUpperCase() ||
