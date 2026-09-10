@@ -13,7 +13,10 @@ const SCAN_LOCATION_DISABLED = 601;
 /** Runtime permissions needed for BLE scanning. Empty outside Android. */
 export function requiredPermissions(platform: string, apiLevel: number): string[] {
   if (platform !== "android") return [];
-  if (apiLevel >= 31) return [BLUETOOTH_SCAN, BLUETOOTH_CONNECT];
+  // NOTE: our manifest declares BLUETOOTH_SCAN *without* neverForLocation,
+  // so on API 31+ the OS treats scanning as location-deriving and also
+  // requires FINE_LOCATION (enforced strictly on Samsung devices).
+  if (apiLevel >= 31) return [BLUETOOTH_SCAN, BLUETOOTH_CONNECT, FINE_LOCATION];
   return [FINE_LOCATION];
 }
 

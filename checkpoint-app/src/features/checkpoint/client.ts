@@ -204,6 +204,7 @@ export class CheckpointClient {
     const want = target || DEVICE_NAME;
     return new Promise<Device>((resolve, reject) => {
       let settled = false;
+      const seenIds = new Set<string>();
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
@@ -236,13 +237,21 @@ export class CheckpointClient {
             }
             if (!scanned) return;
             const id = scanned.id ?? "";
-            if (
+            const name = scanned.name ?? "";
+            const localName = scanned.localName ?? "";
+            const named =
               id.toUpperCase() === want.toUpperCase() ||
-              (scanned.name ?? "") === want ||
-              (scanned.localName ?? "") === want
-            ) {
-              this.log(`Found: ${scanned.name ?? "?"} [${scanned.id}]`);
+              name === want ||
+              localName === want;
+            // Scan is already filtered by SERVICE_UUID, so any hit advertises
+            // our service; a missing name (common on some stacks when the
+            // scan response is absent) must not veto the match.
+            if (named || (name === "" && localName === "")) {
+              this.log(`Found: ${name || "?"} [${scanned.id}]`);
               finish(() => resolve(scanned));
+            } else if (!seenIds.has(id)) {
+              seenIds.add(id);
+              this.log(`[ble] ignoring non-target device: ${name || "?"} [${id}]`);
             }
           },
         );

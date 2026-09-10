@@ -8,15 +8,16 @@ import {
 } from "../permissionPolicy.ts";
 
 describe("requiredPermissions", () => {
-  it("requests scan+connect on Android 12+ (API 31)", () => {
+  it("requests scan+connect+location on Android 12+ (API 31)", () => {
     assert.deepEqual(requiredPermissions("android", 31), [
       "android.permission.BLUETOOTH_SCAN",
       "android.permission.BLUETOOTH_CONNECT",
+      "android.permission.ACCESS_FINE_LOCATION",
     ]);
   });
 
-  it("requests scan+connect on newer APIs too", () => {
-    assert.equal(requiredPermissions("android", 36).length, 2);
+  it("requests scan+connect+location on newer APIs too", () => {
+    assert.equal(requiredPermissions("android", 36).length, 3);
   });
 
   it("requests fine location below API 31", () => {
@@ -33,15 +34,15 @@ describe("requiredPermissions", () => {
 
 describe("summarizeGrants", () => {
   it("grants when every permission is granted", () => {
-    assert.equal(summarizeGrants([true, true], [false, false]), "granted");
+    assert.equal(summarizeGrants([true, true, true], [false, false, false]), "granted");
   });
 
   it("denies on a plain denial", () => {
-    assert.equal(summarizeGrants([true, false], [false, false]), "denied");
+    assert.equal(summarizeGrants([true, true, false], [false, false, false]), "denied");
   });
 
   it("prefers needs-settings when permanently blocked", () => {
-    assert.equal(summarizeGrants([true, false], [false, true]), "needs-settings");
+    assert.equal(summarizeGrants([true, true, false], [false, false, true]), "needs-settings");
   });
 
   it("grants vacuously with no permissions wanted", () => {
