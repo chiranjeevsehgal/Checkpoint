@@ -15,13 +15,14 @@ export async function apiFetch<T>(
   token?: string
 ): Promise<T> {
   const url = path.startsWith('http') ? path : `${env.apiUrl}${path}`;
+  const { headers: initHeaders, ...restInit } = init ?? {};
   const res = await fetch(url, {
+    ...restInit,
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...init?.headers,
+      ...(initHeaders as Record<string, string> | undefined),
     },
-    ...init,
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
