@@ -79,7 +79,15 @@ import {
   parseStorage,
   type CmdResponse,
 } from "./parsers.ts";
-import { buildPacket, crc32, packetName, parsePacket } from "./protocol.ts";
+import {
+  buildAnnounceAckPayload,
+  buildFileDoneAckPayload,
+  buildFragAckPayload,
+  buildPacket,
+  crc32,
+  packetName,
+  parsePacket,
+} from "./protocol.ts";
 import {
   IncomingFile,
   contigOf,
@@ -743,10 +751,11 @@ export class CheckpointClient {
       this.partWriter = openPart(idHex, total);
     }
     this.bench.resetFile(fileId, total, totalFrags, resume);
-    const ack = new Uint8Array(4);
-    new DataView(ack.buffer).setUint16(0, pktSeq & 0xffff, true);
-    new DataView(ack.buffer).setUint16(2, resume, true);
-    const sent = await this.writeAck(PKT_FILE_ANNOUNCE_ACK, this.nextSeq(), ack);
+    const sent = await this.writeAck(
+      PKT_FILE_ANNOUNCE_ACK,
+      this.nextSeq(),
+      buildAnnounceAckPayload(pktSeq, resume),
+    );
     if (!sent) {
       this.log("  [!] ANNOUNCE_ACK write failed — keeping state for firmware retry");
       return;
@@ -794,10 +803,7 @@ export class CheckpointClient {
       }
     }
     if (ackSeq !== null) {
-      const ack = new Uint8Array(3);
-      new DataView(ack.buffer).setUint16(0, ackSeq & 0xffff, true);
-      ack[2] = 0;
-      await this.writeAck(PKT_ACK, this.nextSeq(), ack);
+      await this.writeAck(PKT_ACK, this.nextSeq(), buildFragAckPayload(ackSeq));
     }
     this.bench.noteDataArrival();
   }
@@ -886,10 +892,11 @@ export class CheckpointClient {
         }
       }
     }
-    const ack = new Uint8Array(4);
-    new DataView(ack.buffer).setUint16(0, pktSeq & 0xffff, true);
-    ack[2] = ok ? 1 : 0;
-    const sent = await this.writeAck(PKT_FILE_DONE_ACK, this.nextSeq(), ack);
+    const sent = await this.writeAck(
+      PKT_FILE_DONE_ACK,
+      this.nextSeq(),
+      buildFileDoneAckPayload(pktSeq, ok),
+    );
     if (!sent) {
       this.log("  [!] FILE_DONE_ACK write failed — keeping state for firmware retry");
       return;

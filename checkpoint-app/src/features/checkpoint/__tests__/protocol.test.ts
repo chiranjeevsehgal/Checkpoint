@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 
 import { PKT_CMD, PKT_STATUS_REQ } from "../config.ts";
 import {
+  buildAnnounceAckPayload,
+  buildFileDoneAckPayload,
+  buildFragAckPayload,
   buildPacket,
   crc32,
   packetName,
@@ -83,5 +86,26 @@ describe("packetName", () => {
 
   it("falls back to hex", () => {
     assert.equal(packetName(0xff), "0xff");
+  });
+});
+
+describe("ack payloads", () => {
+  it("announce ack matches Python <HH layout", () => {
+    assert.deepEqual(Array.from(buildAnnounceAckPayload(0x1234, 7)), [0x34, 0x12, 7, 0]);
+  });
+
+  it("frag ack matches Python <HB layout", () => {
+    assert.deepEqual(Array.from(buildFragAckPayload(0x1234)), [0x34, 0x12, 0]);
+  });
+
+  it("file-done ack matches Python <HBBB layout", () => {
+    assert.deepEqual(Array.from(buildFileDoneAckPayload(0x1234, true)), [0x34, 0x12, 1, 0, 0]);
+    assert.deepEqual(Array.from(buildFileDoneAckPayload(7, false)), [7, 0, 0, 0, 0]);
+  });
+
+  it("lengths satisfy the firmware minimums", () => {
+    assert.equal(buildAnnounceAckPayload(1, 0).length, 4);
+    assert.equal(buildFragAckPayload(1).length, 3);
+    assert.equal(buildFileDoneAckPayload(1, true).length, 5);
   });
 });

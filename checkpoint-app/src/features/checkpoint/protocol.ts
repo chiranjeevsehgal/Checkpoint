@@ -89,3 +89,36 @@ export function packetName(type: number): string {
     PACKET_NAMES[type] ?? `0x${(type & 0xff).toString(16).padStart(2, "0")}`
   );
 }
+
+function u16le(value: number): Uint8Array {
+  const out = new Uint8Array(2);
+  new DataView(out.buffer).setUint16(0, value & 0xffff, true);
+  return out;
+}
+
+/** 4 bytes: firmware drops ANNOUNCE_ACK below 4 (transfer.cpp:114). */
+export function buildAnnounceAckPayload(pktSeq: number, resumeFrom: number): Uint8Array {
+  const ack = new Uint8Array(4);
+  ack.set(u16le(pktSeq), 0);
+  ack.set(u16le(resumeFrom), 2);
+  return ack;
+}
+
+/** 3 bytes: firmware drops frag ACK below 3 (transfer.cpp:109). */
+export function buildFragAckPayload(ackSeq: number): Uint8Array {
+  const ack = new Uint8Array(3);
+  ack.set(u16le(ackSeq), 0);
+  ack[2] = 0;
+  return ack;
+}
+
+/**
+ * 5 bytes: firmware drops DONE_ACK below 5 (transfer.cpp:119).
+ * Matches Python struct.pack("<HBBB", seq, ok, 0, 0).
+ */
+export function buildFileDoneAckPayload(pktSeq: number, ok: boolean): Uint8Array {
+  const ack = new Uint8Array(5);
+  ack.set(u16le(pktSeq), 0);
+  ack[2] = ok ? 1 : 0;
+  return ack;
+}
