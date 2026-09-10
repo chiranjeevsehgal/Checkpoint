@@ -1,4 +1,5 @@
 import { storage } from '@/lib/storage';
+import { credentialKey } from '@/lib/storage/keys';
 
 import { bytesToHex, hexToBytes } from './crypto.ts';
 
@@ -6,10 +7,6 @@ export interface DeviceCredential {
   clientId: string;
   clientKey: string;
   pending: boolean;
-}
-
-function credentialKey(deviceIdHex: string): string {
-  return `Checkpoint/${deviceIdHex}`;
 }
 
 function encodeCredential(

@@ -1,4 +1,5 @@
 import { storage } from "@/lib/storage";
+import { settingsKey } from "@/lib/storage/keys";
 import { env } from "@/lib/env";
 
 import {
@@ -18,13 +19,13 @@ export interface CheckpointSettings {
 }
 
 const KEYS = {
-  serverUrl: "checkpoint/settings/serverUrl",
-  userId: "checkpoint/settings/userId",
-  vadThreshold: "checkpoint/settings/vadThreshold",
-  minSpeechS: "checkpoint/settings/minSpeechS",
-  keepFiles: "checkpoint/settings/keepFiles",
-  ingestEnabled: "checkpoint/settings/ingestEnabled",
-  vadEnabled: "checkpoint/settings/vadEnabled",
+  serverUrl: settingsKey("serverUrl"),
+  userId: settingsKey("userId"),
+  vadThreshold: settingsKey("vadThreshold"),
+  minSpeechS: settingsKey("minSpeechS"),
+  keepFiles: settingsKey("keepFiles"),
+  ingestEnabled: settingsKey("ingestEnabled"),
+  vadEnabled: settingsKey("vadEnabled"),
 } as const;
 
 export function defaultSettings(): CheckpointSettings {
