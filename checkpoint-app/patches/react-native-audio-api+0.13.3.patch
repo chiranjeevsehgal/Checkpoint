@@ -1,0 +1,21 @@
+diff --git a/node_modules/react-native-audio-api/android/build.gradle b/node_modules/react-native-audio-api/android/build.gradle
+index 0033a2b..b71d9df 100644
+--- a/node_modules/react-native-audio-api/android/build.gradle
++++ b/node_modules/react-native-audio-api/android/build.gradle
+@@ -321,6 +321,16 @@ task downloadPrebuiltBinaries(type: Exec) {
+   def isWindows = Os.isFamily(Os.FAMILY_WINDOWS)
+   if (isWindows) {
+     commandLine 'C:\\Program Files\\Git\\usr\\bin\\bash.exe', '../scripts/download-prebuilt-binaries.sh', 'android', isFFmpegDisabled() ? 'skipffmpeg' : ''
++    // Patched via patch-package: the script needs MSYS mkdir/rm and MSYS curl
++    // (Windows System32 curl cannot write to the POSIX -o paths). Pin both
++    // explicitly so the task works regardless of the caller's PATH or stale
++    // Gradle daemon environment. See patches/react-native-audio-api+*.patch
++    def msysDirs = ['C:\\Program Files\\Git\\mingw64\\bin', 'C:\\Program Files\\Git\\usr\\bin'].findAll {
++      new File(it).exists()
++    }
++    if (!msysDirs.isEmpty()) {
++      environment 'PATH', (msysDirs + [System.getenv('PATH')]).join(';')
++    }
+   } else {
+     commandLine 'chmod', '+x', '../scripts/download-prebuilt-binaries.sh'
+     commandLine 'bash', '../scripts/download-prebuilt-binaries.sh', 'android', isFFmpegDisabled() ? 'skipffmpeg' : ''
