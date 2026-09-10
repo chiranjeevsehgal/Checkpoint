@@ -1,21 +1,21 @@
 diff --git a/node_modules/react-native-audio-api/android/build.gradle b/node_modules/react-native-audio-api/android/build.gradle
-index 0033a2b..b71d9df 100644
+index 0033a2b..8001a86 100644
 --- a/node_modules/react-native-audio-api/android/build.gradle
 +++ b/node_modules/react-native-audio-api/android/build.gradle
-@@ -321,6 +321,16 @@ task downloadPrebuiltBinaries(type: Exec) {
+@@ -320,7 +320,15 @@ def assertMinimalReactNativeVersion = task assertMinimalReactNativeVersionTask {
+ task downloadPrebuiltBinaries(type: Exec) {
    def isWindows = Os.isFamily(Os.FAMILY_WINDOWS)
    if (isWindows) {
-     commandLine 'C:\\Program Files\\Git\\usr\\bin\\bash.exe', '../scripts/download-prebuilt-binaries.sh', 'android', isFFmpegDisabled() ? 'skipffmpeg' : ''
-+    // Patched via patch-package: the script needs MSYS mkdir/rm and MSYS curl
-+    // (Windows System32 curl cannot write to the POSIX -o paths). Pin both
-+    // explicitly so the task works regardless of the caller's PATH or stale
-+    // Gradle daemon environment. See patches/react-native-audio-api+*.patch
-+    def msysDirs = ['C:\\Program Files\\Git\\mingw64\\bin', 'C:\\Program Files\\Git\\usr\\bin'].findAll {
-+      new File(it).exists()
+-    commandLine 'C:\\Program Files\\Git\\usr\\bin\\bash.exe', '../scripts/download-prebuilt-binaries.sh', 'android', isFFmpegDisabled() ? 'skipffmpeg' : ''
++    // Patched via patch-package (patches/react-native-audio-api+*.patch):
++    // drive the script with MSYS paths exported in-shell. Passing PATH through
++    // the Gradle/Windows environment proved unreliable on this machine, while
++    // /mingw64/bin and /usr/bin always resolve inside MSYS itself.
++    def scriptArgs = ['android']
++    if (isFFmpegDisabled()) {
++      scriptArgs.add('skipffmpeg')
 +    }
-+    if (!msysDirs.isEmpty()) {
-+      environment 'PATH', (msysDirs + [System.getenv('PATH')]).join(';')
-+    }
++    commandLine 'C:\\Program Files\\Git\\usr\\bin\\bash.exe', '-c', 'export PATH=/mingw64/bin:/usr/bin:$PATH; exec ../scripts/download-prebuilt-binaries.sh "$@"', 'bash', *scriptArgs
    } else {
      commandLine 'chmod', '+x', '../scripts/download-prebuilt-binaries.sh'
      commandLine 'bash', '../scripts/download-prebuilt-binaries.sh', 'android', isFFmpegDisabled() ? 'skipffmpeg' : ''
