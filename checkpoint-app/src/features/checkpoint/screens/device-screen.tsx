@@ -9,8 +9,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { ProgressBar } from '@/components/ui/progress-bar';
+import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { RangeSlider } from '@/components/ui/slider';
 import { Text } from '@/components/ui/text';
+import { useRefresh } from '@/lib/use-refresh';
 
 import { Toggle } from '../components/toggle.tsx';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
@@ -35,6 +37,7 @@ function StatCell({ value, label }: { value: number; label: string }) {
 export function DeviceScreen() {
   const { connected, status, toggleRec, refreshStatus, applyLed, applySync } = useCheckpoint();
   const [controls, setControls] = useState<DeviceControls>({ session: connected });
+  const { refreshing, onRefresh } = useRefresh(refreshStatus);
   const active = controls.session === connected ? controls : { session: connected };
   const muted = active.muted ?? status?.muted ?? false;
   const brightness = active.brightness ?? status?.brightness ?? 30;
@@ -55,6 +58,7 @@ export function DeviceScreen() {
       ) : (
         <ScrollView
           className="flex-1"
+          refreshControl={<AppRefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           contentContainerStyle={{ gap: 14, paddingBottom: 24 }}
           showsVerticalScrollIndicator={false}
         >

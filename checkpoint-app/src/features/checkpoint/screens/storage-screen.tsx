@@ -8,8 +8,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { ProgressBar } from '@/components/ui/progress-bar';
+import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { Text } from '@/components/ui/text';
 import { cn } from '@/lib/utils';
+import { useRefresh } from '@/lib/use-refresh';
 
 import { fileStateLabel, formatBytes } from '../parsers.ts';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
@@ -72,6 +74,7 @@ export function StorageScreen() {
     storage && storage.total > 0
       ? Math.min(100, Math.round((100 * storage.used) / storage.total))
       : 0;
+  const { refreshing, onRefresh } = useRefresh(refreshStorage);
   const pageLabel =
     listPage.total > 0
       ? `${listPage.start + 1}–${listPage.start + listPage.count} of ${listPage.total}`
@@ -87,6 +90,7 @@ export function StorageScreen() {
         className="flex-1"
         data={files}
         keyExtractor={(item) => item.name}
+        refreshControl={<AppRefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         contentContainerStyle={{ gap: 14, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
         ItemSeparatorComponent={() => <View className="bg-divider h-px" />}
@@ -97,7 +101,12 @@ export function StorageScreen() {
                 <Text className="font-display text-[15px]">
                   {storage ? `SD: ${formatBytes(storage.used)} / ${formatBytes(storage.total)}` : 'SD: —'}
                 </Text>
-                <Pressable onPress={() => void refreshStorage()} disabled={!connected} accessibilityRole="button">
+                <Pressable
+                  onPress={() => void refreshStorage()}
+                  disabled={!connected}
+                  accessibilityRole="button"
+                  className="active:opacity-60"
+                >
                   <Text variant="muted" className="text-[11px]">
                     Refresh
                   </Text>

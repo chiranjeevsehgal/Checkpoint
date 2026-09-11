@@ -5,7 +5,7 @@ import { Platform, Pressable } from 'react-native';
 
 const buttonVariants = cva(
   cn(
-    'group font-display shrink-0 flex-row items-center justify-start gap-1.5 rounded-none',
+    'group font-display active:scale-[0.97] active:opacity-90 shrink-0 flex-row items-center justify-start gap-1.5 rounded-none',
     Platform.select({
       web: 'outline-none transition-colors',
     })

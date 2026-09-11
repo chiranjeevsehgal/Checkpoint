@@ -9,8 +9,10 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { ProgressBar } from '@/components/ui/progress-bar';
+import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { Text } from '@/components/ui/text';
 import { cn } from '@/lib/utils';
+import { useRefresh } from '@/lib/use-refresh';
 
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { isTerminal, type TransferRecord } from '../transferStore.ts';
@@ -82,8 +84,9 @@ function TransferRow({ item, expanded, onToggle }: { item: TransferRecord; expan
 }
 
 export function TransfersScreen() {
-  const { transfers, shareBench } = useCheckpoint();
+  const { transfers, shareBench, refreshTransfers } = useCheckpoint();
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const { refreshing, onRefresh } = useRefresh(refreshTransfers);
 
   const views = transfers.map(transferView);
   const uploaded = views.filter((view) => view.outcome === 'uploaded').length;
@@ -98,6 +101,7 @@ export function TransfersScreen() {
         className="flex-1"
         data={transfers}
         keyExtractor={(item) => item.fileId}
+        refreshControl={<AppRefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         contentContainerStyle={{ gap: 12, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={

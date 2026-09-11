@@ -23,6 +23,7 @@ interface CheckpointContextValue {
   connected: boolean;
   busy: boolean;
   linkState: string;
+  deviceId: string | null;
   deviceName: string;
   setDeviceName: (name: string) => void;
   claimText: string;
@@ -38,6 +39,7 @@ interface CheckpointContextValue {
   disconnect: () => Promise<void>;
   refreshStatus: () => Promise<void>;
   refreshStorage: () => Promise<void>;
+  refreshTransfers: () => Promise<void>;
   listPrev: () => Promise<void>;
   listNext: () => Promise<void>;
   toggleRec: () => Promise<void>;
@@ -164,6 +166,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       connected: snapshot.connected,
       busy: snapshot.busy,
       linkState: snapshot.linkState,
+      deviceId: snapshot.deviceId,
       deviceName,
       setDeviceName,
       claimText,
@@ -179,6 +182,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       disconnect,
       refreshStatus: syncEngine.refreshStatus,
       refreshStorage: syncEngine.refreshStorage,
+      refreshTransfers: syncEngine.refreshTransfers,
       listPrev: syncEngine.listPrev,
       listNext: syncEngine.listNext,
       toggleRec: syncEngine.toggleRec,

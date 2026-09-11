@@ -8,8 +8,10 @@ import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { RangeSlider } from '@/components/ui/slider';
 import { Text } from '@/components/ui/text';
+import { useRefresh } from '@/lib/use-refresh';
 
 import { Toggle } from '../components/toggle.tsx';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
@@ -26,6 +28,7 @@ export function CheckpointSettingsScreen() {
   const { settings, updateSettings, testConnection } = useCheckpoint();
   const [draft, setDraft] = useState<CheckpointSettings>(settings);
   const [userIdError, setUserIdError] = useState<string | null>(null);
+  const { refreshing, onRefresh } = useRefresh(testConnection);
 
   const set = <K extends keyof CheckpointSettings>(key: K, value: CheckpointSettings[K]) => {
     if (key === 'userId') setUserIdError(null);
@@ -46,6 +49,7 @@ export function CheckpointSettingsScreen() {
       <AppHeader title="Settings" subtitle="Server, identity and VAD" />
       <ScrollView
         className="flex-1"
+        refreshControl={<AppRefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         contentContainerStyle={{ gap: 14, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
       >

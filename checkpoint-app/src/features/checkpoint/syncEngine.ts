@@ -65,6 +65,7 @@ export interface EngineSnapshot {
   logs: string[];
   needsSettings: boolean;
   bluetooth: BluetoothStatus;
+  deviceId: string | null;
 }
 
 const INITIAL_SNAPSHOT: EngineSnapshot = {
@@ -79,6 +80,7 @@ const INITIAL_SNAPSHOT: EngineSnapshot = {
   logs: [],
   needsSettings: false,
   bluetooth: null,
+  deviceId: null,
 };
 
 function mapBluetoothState(state: State): BluetoothStatus {
@@ -546,6 +548,7 @@ class SyncEngine {
           stopped: () => this.stopped,
           onReady: async () => {
             this.setState({ connected: true, busy: false });
+            this.setState({ deviceId: await getEnrolledDeviceId() });
             this.appendLog("[ui] listening for file transfers …");
             await this.applyDesiredSync(client);
             try {
@@ -602,6 +605,16 @@ class SyncEngine {
       await client.reqStorage();
       await client.reqList(0);
     });
+  };
+
+  refreshTransfers = async (): Promise<void> => {
+    this.setState({
+      transfers: this.snapshot.transfers.map((record) =>
+        isTerminal(record) ? record : { ...record, nextAttemptAt: undefined },
+      ),
+    });
+    this.appendLog("[ui] retry: backoff reset, draining queue");
+    await this.drainQueue();
   };
 
   toggleRec = async (): Promise<void> => {
