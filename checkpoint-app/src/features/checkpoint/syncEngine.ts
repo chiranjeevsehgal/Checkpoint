@@ -115,6 +115,7 @@ class SyncEngine {
     this.started = true;
     this.appendLog("[sync] engine started");
     const stored = await loadTransfers();
+    if (!this.started) return;
     if (stored.length > 0) this.setState({ transfers: sortTransfers(stored) });
     this.cleanup();
     this.appStateSubscription = AppState.addEventListener("change", (state) => {

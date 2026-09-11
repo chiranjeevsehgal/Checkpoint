@@ -57,6 +57,7 @@ class NetworkMonitor {
     } catch {
       this.reachability = {};
     }
+    if (!this.started) return;
     this.subscription = Network.addNetworkStateListener((state) => {
       this.reachability = state;
       if (state.isInternetReachable === false || state.isConnected === false) {
