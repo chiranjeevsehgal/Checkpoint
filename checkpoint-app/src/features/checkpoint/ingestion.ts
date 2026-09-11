@@ -25,6 +25,14 @@ function describeError(error: unknown): string {
   return error.message;
 }
 
+function safeHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "unknown-host";
+  }
+}
+
 export interface CompletedUpload {
   uploadId: string;
   status: string;
@@ -131,7 +139,7 @@ export class IngestionUploader {
     try {
       await apiPutBytes(created.upload.url, data, contentType);
     } catch (error) {
-      throw new Error(`put failed: ${describeError(error)}`);
+      throw new Error(`put failed (${safeHost(created.upload.url)}): ${describeError(error)}`);
     }
     const checksum = bytesToHex(sha256(data));
     let completed: StatusResponse;
