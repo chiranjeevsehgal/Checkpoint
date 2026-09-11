@@ -201,6 +201,33 @@ export class CheckpointClient {
     }
   }
 
+  reportResult(result: {
+    fileId: string;
+    uploadId?: string;
+    ingestStatus: string;
+    ingestError?: string;
+    vadStatus: string;
+    vadSpeechS?: string;
+  }): void {
+    this.bench.updateIngest(
+      result.fileId,
+      result.uploadId ?? "",
+      result.ingestStatus,
+      result.ingestError ?? "",
+      result.vadStatus,
+      result.vadSpeechS,
+    );
+    this.emit({
+      type: "ingest",
+      fileId: result.fileId,
+      uploadId: result.uploadId ?? "",
+      ingestStatus: result.ingestStatus,
+      ingestError: result.ingestError ?? "",
+      vadStatus: result.vadStatus,
+      vadSpeechS: result.vadSpeechS,
+    });
+  }
+
   private nextSeq(): number {
     const seq = this.seqGen;
     this.seqGen = (this.seqGen + 1) & 0xffff;

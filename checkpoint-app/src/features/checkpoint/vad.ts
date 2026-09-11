@@ -10,13 +10,14 @@ import {
   VAD_WINDOW_SAMPLES,
 } from "./config.ts";
 import { repairOpusOgg } from "./ogg.ts";
-import { groupSpeechProbs, totalSpeechSeconds } from "./vadTimestamps.ts";
+import { buildVadWindows, groupSpeechProbs, totalSpeechSeconds } from "./vadTimestamps.ts";
 
 export type VadStatus = "speech" | "no-speech" | "disabled" | "unavailable";
 
 export interface VadVerdict {
   status: VadStatus;
   speechS: number;
+  error?: string;
 }
 
 export interface VadOptions {
@@ -77,12 +78,9 @@ async function speechProbs(
   let state = new Float32Array(2 * 1 * 128);
   const sr = new Tensor("int64", BigInt64Array.of(BigInt(VAD_SAMPLE_RATE)), []);
   const probs: number[] = [];
-  for (let offset = 0; offset < pcm.length; offset += VAD_WINDOW_SAMPLES) {
-    const chunk = new Float32Array(VAD_WINDOW_SAMPLES);
-    const rest = Math.min(VAD_WINDOW_SAMPLES, pcm.length - offset);
-    chunk.set(pcm.subarray(offset, offset + rest), 0);
+  for (const window of buildVadWindows(pcm)) {
     const feeds = {
-      input: new Tensor("float32", chunk, [1, VAD_WINDOW_SAMPLES]),
+      input: new Tensor("float32", window, [1, window.length]),
       state: new Tensor("float32", state, [2, 1, 128]),
       sr,
     };
@@ -117,7 +115,12 @@ export async function checkSpeech(
     const total = totalSpeechSeconds(spans);
     if (total >= options.minSpeechS) return { status: "speech", speechS: total };
     return { status: "no-speech", speechS: total };
-  } catch {
-    return { status: "unavailable", speechS: 0 };
+  } catch (error) {
+    // Fail-open by design, but keep the reason visible to the caller.
+    return {
+      status: "unavailable",
+      speechS: 0,
+      error: error instanceof Error ? error.message : "unknown",
+    };
   }
 }

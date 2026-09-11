@@ -1,7 +1,9 @@
 import {
+  VAD_CONTEXT_SAMPLES,
   VAD_MIN_SILENCE_MS,
   VAD_MIN_SPEECH_MS,
   VAD_PAD_MS,
+  VAD_WINDOW_SAMPLES,
 } from "./config.ts";
 
 export interface SpeechSpan {
@@ -17,6 +19,28 @@ export interface GroupingOptions {
   minSilenceMs?: number;
   padMs?: number;
   audioLengthSamples?: number;
+}
+
+/**
+ * Frames PCM into Silero v5 model inputs: each window is the previous window's
+ * trailing context followed by the next window of samples. The final short
+ * window is zero-padded, matching the Silero reference.
+ */
+export function buildVadWindows(
+  pcm: Float32Array,
+  windowSamples = VAD_WINDOW_SAMPLES,
+  contextSamples = VAD_CONTEXT_SAMPLES,
+): Float32Array[] {
+  const windows: Float32Array[] = [];
+  let context = new Float32Array(contextSamples);
+  for (let offset = 0; offset < pcm.length; offset += windowSamples) {
+    const combined = new Float32Array(windowSamples + contextSamples);
+    combined.set(context, 0);
+    combined.set(pcm.subarray(offset, offset + windowSamples), contextSamples);
+    windows.push(combined);
+    context = combined.slice(windowSamples);
+  }
+  return windows;
 }
 
 /**

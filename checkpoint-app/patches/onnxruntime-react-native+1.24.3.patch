@@ -15,3 +15,30 @@ index 41b4359..2530cbe 100644
      extractLibs "com.facebook.fbjni:fbjni:+:headers"
      extractLibs "com.facebook.fbjni:fbjni:+"
    }
+diff --git a/node_modules/onnxruntime-react-native/react-native.config.js b/node_modules/onnxruntime-react-native/react-native.config.js
+new file mode 100644
+index 0000000..87759a6
+--- /dev/null
++++ b/node_modules/onnxruntime-react-native/react-native.config.js
+@@ -0,0 +1,11 @@
++module.exports = {
++  dependency: {
++    platforms: {
++      android: {
++        packageImportPath: 'import ai.onnxruntime.reactnative.OnnxruntimePackage;',
++        packageInstance: 'new OnnxruntimePackage()',
++      },
++      ios: {},
++    },
++  },
++};
+diff --git a/node_modules/onnxruntime-react-native/unimodule.json b/node_modules/onnxruntime-react-native/unimodule.json
+deleted file mode 100644
+index c2bd3c0..0000000
+--- a/node_modules/onnxruntime-react-native/unimodule.json
++++ /dev/null
+@@ -1,4 +0,0 @@
+-{
+-  "name": "onnxruntime-react-native",
+-  "platforms": ["ios", "android"]
+-}

@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildVadWindows,
   groupSpeechProbs,
   totalSpeechSeconds,
 } from "../vadTimestamps.ts";
@@ -54,5 +55,27 @@ describe("totalSpeechSeconds", () => {
       { start: 3.0, end: 6.4 },
     ]);
     assert.ok(Math.abs(total - 5.2) < 1e-9, `got ${total}`);
+  });
+});
+
+describe("buildVadWindows", () => {
+  it("prepends zero context and carries the trailing 64 samples", () => {
+    const pcm = Float32Array.from({ length: 512 * 3 }, (_, i) => i + 1);
+    const windows = buildVadWindows(pcm);
+    assert.equal(windows.length, 3);
+    assert.equal(windows[0]!.length, 576);
+    assert.deepEqual([...windows[0]!.slice(0, 64)], new Array(64).fill(0));
+    assert.deepEqual([...windows[1]!.slice(0, 64)], [...windows[0]!.slice(512)]);
+    assert.deepEqual([...windows[2]!.slice(0, 64)], [...windows[1]!.slice(512)]);
+  });
+
+  it("zero-pads a short final window", () => {
+    const windows = buildVadWindows(Float32Array.from({ length: 512 + 10 }, () => 1));
+    assert.equal(windows.length, 2);
+    assert.deepEqual([...windows[1]!.slice(64 + 10)], new Array(502).fill(0));
+  });
+
+  it("returns no windows for empty input", () => {
+    assert.deepEqual(buildVadWindows(new Float32Array(0)), []);
   });
 });

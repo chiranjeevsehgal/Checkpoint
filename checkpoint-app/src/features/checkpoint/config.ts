@@ -36,6 +36,9 @@ export const VAD_MIN_SILENCE_MS = 500;
 export const VAD_PAD_MS = 200;
 export const VAD_SAMPLE_RATE = 16000;
 export const VAD_WINDOW_SAMPLES = 512;
+// Silero v5 feeds each window with the trailing (window / 8) samples of the
+// previous window prepended; the ONNX graph expects window + context samples.
+export const VAD_CONTEXT_SAMPLES = VAD_WINDOW_SAMPLES / 8;
 
 export const STATUS_POLL_INTERVAL_S = 5;
 export const STATUS_PUSH_SEQ = 0;

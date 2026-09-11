@@ -226,24 +226,31 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
             minSpeechS: current.minSpeechS,
           })
         : { status: "disabled" as const, speechS: 0 };
+      if (verdict.status === "unavailable") {
+        appendLog(`  [vad] unavailable: ${verdict.error ?? "unknown"} — uploading anyway`);
+      }
       if (!shouldUpload(verdict)) {
         const reason = vadSkipReason(verdict, current.minSpeechS);
         appendLog(`  [vad] filtered ${file.fileIdHex}: ${reason} — skipping upload`);
-        client.bench.updateIngest(
-          file.fileIdHex,
-          "",
-          "skipped-no-speech",
-          reason,
-          verdict.status,
-          verdict.speechS.toFixed(2),
-        );
+        client.reportResult({
+          fileId: file.fileIdHex,
+          ingestStatus: "skipped-no-speech",
+          ingestError: reason,
+          vadStatus: verdict.status,
+          vadSpeechS: verdict.speechS.toFixed(2),
+        });
         if (!current.keepFiles) {
           await CheckpointClient.deleteLocalCopy(file.fileIdHex);
         }
         return;
       }
       if (!current.ingestEnabled) {
-        client.bench.updateIngest(file.fileIdHex, "", "disabled", "", "disabled", "0.00");
+        client.reportResult({
+          fileId: file.fileIdHex,
+          ingestStatus: "disabled",
+          vadStatus: "disabled",
+          vadSpeechS: "0.00",
+        });
         return;
       }
       appendLog(`  [ingest] uploading file_${file.fileIdHex}.ogg (${file.bytes.length}B) ...`);
@@ -256,25 +263,23 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
           file.fileIdHex,
         );
         appendLog(`  [ingest] OK upload_id=${result.uploadId} status=${result.status}`);
-        client.bench.updateIngest(
-          file.fileIdHex,
-          result.uploadId,
-          result.status,
-          "",
-          verdict.status,
-          verdict.speechS.toFixed(2),
-        );
+        client.reportResult({
+          fileId: file.fileIdHex,
+          uploadId: result.uploadId,
+          ingestStatus: result.status,
+          vadStatus: verdict.status,
+          vadSpeechS: verdict.speechS.toFixed(2),
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message.slice(0, 200) : "unknown";
         appendLog(`  [!] ingest failed: ${message}`);
-        client.bench.updateIngest(
-          file.fileIdHex,
-          "",
-          "failed",
-          message,
-          verdict.status,
-          verdict.speechS.toFixed(2),
-        );
+        client.reportResult({
+          fileId: file.fileIdHex,
+          ingestStatus: "failed",
+          ingestError: message,
+          vadStatus: verdict.status,
+          vadSpeechS: verdict.speechS.toFixed(2),
+        });
         return;
       }
       if (!current.keepFiles) {
