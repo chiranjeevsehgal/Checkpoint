@@ -1,4 +1,10 @@
-import { Pressable, ScrollView } from 'react-native';
+import { useCallback, useRef } from 'react';
+import {
+  Pressable,
+  ScrollView,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+} from 'react-native';
 
 import { Collapsible } from '@/components/shared/collapsible';
 import { Text } from '@/components/ui/text';
@@ -8,10 +14,33 @@ interface LogViewProps {
   onClear: () => void;
 }
 
+const NEAR_BOTTOM_PX = 24;
+
 export function LogView({ logs, onClear }: LogViewProps) {
+  const scrollRef = useRef<ScrollView>(null);
+  const nearBottom = useRef(true);
+
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const distanceFromBottom =
+      contentSize.height - (contentOffset.y + layoutMeasurement.height);
+    nearBottom.current = distanceFromBottom <= NEAR_BOTTOM_PX;
+  }, []);
+
+  const handleContentSizeChange = useCallback(() => {
+    if (nearBottom.current) scrollRef.current?.scrollToEnd({ animated: false });
+  }, []);
+
   return (
     <Collapsible title="Debug log">
-      <ScrollView className="bg-input-bg max-h-40 p-2">
+      <ScrollView
+        ref={scrollRef}
+        nestedScrollEnabled
+        className="bg-input-bg h-40 p-2"
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
+        onContentSizeChange={handleContentSizeChange}
+      >
         {logs.length === 0 ? (
           <Text variant="muted" className="text-[11px]">
             No logs yet.
