@@ -44,6 +44,27 @@ export const STATUS_POLL_INTERVAL_S = 5;
 export const STATUS_PUSH_SEQ = 0;
 export const KAFKA_TOPIC_HINT = "transcription.jobs.v1";
 
+export const MAX_LOG_LINES = 500;
+
+export const TRANSFER_RETENTION_HOURS = 24;
+export const TRANSFER_TICK_MS = 60000;
+export const TRANSFER_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+export const UPLOAD_RETRY_DELAYS_MS = [
+  5_000,
+  30_000,
+  120_000,
+  600_000,
+  1_800_000,
+] as const;
+
+export const HEALTH_PATH = "/health/ready";
+export const HEALTH_TIMEOUT_MS = 4000;
+export const HEALTH_POLL_OK_MS = 15000;
+export const HEALTH_POLL_DOWN_MS = 60000;
+export const HEALTH_UNSTABLE_FAILS = 2;
+export const HEALTH_UNSTABLE_WINDOW_MS = 60000;
+export const HEALTH_SLOW_MS = 3000;
+
 export const BENCH_FIELDNAMES = [
   "ts",
   "file_id",

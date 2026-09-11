@@ -2,6 +2,7 @@ import { Directory, File, Paths } from "expo-file-system";
 
 import { partFileName } from "./transfer.ts";
 import type { SidecarState } from "./transfer.ts";
+import type { TransferRecord } from "./transferStore.ts";
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -34,6 +35,33 @@ export function receivedFile(fileIdHex: string, ext: string): File {
 
 export function receivedMetaFile(fileIdHex: string): File {
   return new File(receivedDir(), `file_${fileIdHex}.json`);
+}
+
+export function transfersFile(): File {
+  return new File(checkpointDir(), "transfers.json");
+}
+
+export async function loadTransfers(): Promise<TransferRecord[]> {
+  try {
+    const file = transfersFile();
+    if (!file.exists) return [];
+    const parsed = JSON.parse(await file.text()) as unknown;
+    return Array.isArray(parsed) ? (parsed as TransferRecord[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveTransfers(records: TransferRecord[]): void {
+  try {
+    ensureDirs();
+    const file = transfersFile();
+    if (file.exists) file.delete();
+    file.create();
+    file.write(textEncoder.encode(JSON.stringify(records)));
+  } catch {
+    /* transfer history is best-effort */
+  }
 }
 
 export interface PartWriter {

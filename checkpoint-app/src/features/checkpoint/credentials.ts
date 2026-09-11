@@ -3,6 +3,8 @@ import { credentialKey } from '@/lib/storage/keys';
 
 import { bytesToHex, hexToBytes } from './crypto.ts';
 
+const ENROLLED_DEVICE_KEY = "checkpoint.enrolledDeviceId";
+
 export interface DeviceCredential {
   clientId: string;
   clientKey: string;
@@ -97,4 +99,16 @@ export async function deleteCredential(
   deviceId: Uint8Array,
 ): Promise<void> {
   await storage.remove(credentialKey(bytesToHex(deviceId)));
+}
+
+export async function setEnrolledDeviceId(deviceIdHex: string): Promise<void> {
+  await storage.set(ENROLLED_DEVICE_KEY, deviceIdHex);
+}
+
+export async function getEnrolledDeviceId(): Promise<string | null> {
+  return storage.get(ENROLLED_DEVICE_KEY);
+}
+
+export async function clearEnrolledDeviceId(): Promise<void> {
+  await storage.remove(ENROLLED_DEVICE_KEY);
 }

@@ -51,6 +51,7 @@ import {
   loadCredential,
   markCredentialActive,
   saveCredential,
+  setEnrolledDeviceId,
 } from "./credentials.ts";
 import { describeScanError } from "./permissionPolicy.ts";
 import {
@@ -592,6 +593,7 @@ export class CheckpointClient {
       }
     }
     if (this.deviceId && wasPending) await markCredentialActive(this.deviceId);
+    if (this.deviceId) await setEnrolledDeviceId(bytesToHex(this.deviceId));
     this.clientKey = enroll ? authKey : this.clientKey;
     this.authTranscript = null;
     this.linkState = "up";

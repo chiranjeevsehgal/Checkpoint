@@ -30,8 +30,8 @@ export interface TransferView {
   failed: boolean;
 }
 
-function outcomeOf(stage: TransferStage, ingest: string): TransferOutcome {
-  if (stage !== "done") return "pending";
+export function classifyOutcome(complete: boolean, ingest: string): TransferOutcome {
+  if (!complete) return "pending";
   if (ingest === "skipped-no-speech") return "filtered";
   if (ingest.startsWith("skipped")) return "skipped";
   if (ingest === "disabled") return "disabled";
@@ -39,10 +39,10 @@ function outcomeOf(stage: TransferStage, ingest: string): TransferOutcome {
   return "uploaded";
 }
 
-const PENDING = new Set(["", "—", "pending"]);
+const PENDING_VALUES = new Set(["", "—", "pending"]);
 
-function isPending(value: string): boolean {
-  return PENDING.has(value);
+export function isPendingValue(value: string): boolean {
+  return PENDING_VALUES.has(value);
 }
 
 function speechSeconds(vad: string): string {
@@ -66,7 +66,7 @@ function describeVad(vad: string, stage: TransferStage): string {
 
 function describeIngest(ingest: string, stage: TransferStage): string {
   if (stage === "receiving" || stage === "analyzing") return "Waiting…";
-  if (isPending(ingest)) return "Uploading…";
+  if (isPendingValue(ingest)) return "Uploading…";
   if (ingest === "skipped-no-speech") return "Filtered — silence";
   if (ingest === "skipped-wav") return "Skipped — not Ogg";
   if (ingest === "skipped-too-large") return "Skipped — too large";
@@ -83,8 +83,8 @@ export function transferView(input: TransferInput): TransferView {
   const pct = input.totalFrags > 0 ? input.received / input.totalFrags : 0;
   let stage: TransferStage = "receiving";
   if (pct >= 1) {
-    if (isPending(input.vad)) stage = "analyzing";
-    else if (isPending(input.ingest)) stage = "uploading";
+    if (isPendingValue(input.vad)) stage = "analyzing";
+    else if (isPendingValue(input.ingest)) stage = "uploading";
     else stage = "done";
   }
 
@@ -93,7 +93,7 @@ export function transferView(input: TransferInput): TransferView {
     sizeLabel: formatBytes(input.totalBytes),
     pct,
     stage,
-    outcome: outcomeOf(stage, input.ingest),
+    outcome: classifyOutcome(pct >= 1 && !isPendingValue(input.ingest), input.ingest),
     vadLabel: describeVad(input.vad, stage),
     ingestLabel: describeIngest(input.ingest, stage),
     failed: input.ingest.startsWith("failed"),
