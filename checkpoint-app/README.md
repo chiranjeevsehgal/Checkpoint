@@ -25,6 +25,22 @@ In the output, you'll find options to open the app in a
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
+## Release build (Android)
+
+Build the release APK. This sets `NODE_ENV=production` so Expo config resolution does not warn about a missing environment:
+
+```bash
+npm run build:android
+```
+
+Target a single ABI for a faster build (omit for a universal APK):
+
+```bash
+npm run build:android -- -PreactNativeArchitectures=arm64-v8a
+```
+
+The APK is written to `android/app/build/outputs/apk/release/app-release.apk`. The `react-native-gesture-handler` CMake "object path" warning is expected on Windows and does not affect the build.
+
 ## Get a fresh project
 
 When you're ready, run:
