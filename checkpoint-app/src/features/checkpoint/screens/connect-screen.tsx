@@ -67,7 +67,13 @@ export function ConnectScreen() {
     },
     [setClaimText, showToast]
   );
-  const { available: scannerAvailable, start: startScanner } = useClaimScanner(handleScannedClaim);
+  const handleScanError = useCallback(() => {
+    showToast('Could not open the scanner.');
+  }, [showToast]);
+  const { available: scannerAvailable, start: startScanner } = useClaimScanner(
+    handleScannedClaim,
+    handleScanError
+  );
 
   const refresh = useCallback(async () => {
     if (!connected) return;
