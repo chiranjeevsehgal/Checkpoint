@@ -1,6 +1,6 @@
 import { Bluetooth, ScanLine } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo } from 'react';
-import { Animated, ScrollView, View } from 'react-native';
+import { Animated, Pressable, ScrollView, View } from 'react-native';
 
 import { AppHeader } from '@/components/shared/app-header';
 import { BatteryOptimizationCard } from '@/components/shared/battery-optimization-card';
@@ -31,6 +31,7 @@ export function ConnectScreen() {
     busy,
     linkState,
     deviceId,
+    autoConnecting,
     deviceName,
     setDeviceName,
     claimText,
@@ -41,6 +42,7 @@ export function ConnectScreen() {
     settings,
     connect,
     disconnect,
+    stopAutoConnect,
     updateSettings,
     clearLogs,
     refreshStatus,
@@ -178,11 +180,29 @@ export function ConnectScreen() {
 
           <View className="bg-divider h-0.5" />
 
+          {autoConnecting ? (
+            <View className="flex-row items-center justify-between gap-2">
+              <Text variant="muted" className="text-[12px]">
+                Auto-connecting…
+              </Text>
+              <Pressable
+                onPress={() => void stopAutoConnect()}
+                accessibilityRole="button"
+                className="active:opacity-60"
+              >
+                <Text className="font-display text-primary text-[12px]">Stop</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
           <View className="gap-1">
             <Text className="text-[11px] opacity-65">Device name or address</Text>
             <Input
               value={deviceName}
-              onChangeText={setDeviceName}
+              onChangeText={(text) => {
+                void stopAutoConnect();
+                setDeviceName(text);
+              }}
               editable={!connected && !busy}
               autoCapitalize="none"
               placeholder="Checkpoint"
@@ -194,7 +214,10 @@ export function ConnectScreen() {
               <Input
                 className="flex-1"
                 value={claimText}
-                onChangeText={setClaimText}
+                onChangeText={(text) => {
+                  void stopAutoConnect();
+                  setClaimText(text);
+                }}
                 editable={!connected && !busy}
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -207,7 +230,10 @@ export function ConnectScreen() {
                   size="icon"
                   className="h-9 w-9"
                   disabled={connected || busy}
-                  onPress={startScanner}
+                  onPress={() => {
+                    void stopAutoConnect();
+                    startScanner();
+                  }}
                   accessibilityLabel="Scan claim QR"
                 >
                   <Icon as={ScanLine} size={16} />

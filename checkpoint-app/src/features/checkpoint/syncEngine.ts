@@ -66,6 +66,7 @@ export interface EngineSnapshot {
   needsSettings: boolean;
   bluetooth: BluetoothStatus;
   deviceId: string | null;
+  autoConnecting: boolean;
 }
 
 const INITIAL_SNAPSHOT: EngineSnapshot = {
@@ -81,6 +82,7 @@ const INITIAL_SNAPSHOT: EngineSnapshot = {
   needsSettings: false,
   bluetooth: null,
   deviceId: null,
+  autoConnecting: false,
 };
 
 function mapBluetoothState(state: State): BluetoothStatus {
@@ -118,6 +120,9 @@ class SyncEngine {
   private networkUnsubscribe: (() => void) | null = null;
   private bluetoothSubscription: { remove: () => void } | null = null;
   private inFlight = new Set<string>();
+  private autoConnectGaveUp = false;
+  private connectTask: Promise<void> | null = null;
+  private connectOrigin: "user" | "auto" | null = null;
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -153,6 +158,7 @@ class SyncEngine {
       this.cleanup();
       void this.drainQueue();
     }, TRANSFER_TICK_MS);
+    this.autoConnectGaveUp = false;
     await this.maybeAutoConnect();
   }
 
@@ -211,7 +217,7 @@ class SyncEngine {
       this.appendLog("[sync] auto-connect skipped: auto-sync is off");
       return;
     }
-    if (this.snapshot.connected || this.snapshot.busy) return;
+    if (this.snapshot.connected || this.snapshot.busy || this.snapshot.autoConnecting) return;
     const enrolled = await getEnrolledDeviceId();
     if (!enrolled) {
       this.appendLog("[sync] auto-connect skipped: no enrolled pendant");
@@ -233,7 +239,7 @@ class SyncEngine {
       return;
     }
     this.appendLog("[sync] auto-connecting to enrolled pendant");
-    await this.connect(DEVICE_NAME, "");
+    await this.connect(DEVICE_NAME, "", "auto");
   }
 
   private async applyDesiredSync(client: CheckpointClient): Promise<void> {
@@ -260,7 +266,7 @@ class SyncEngine {
       await this.applyAutoSyncIfConnected();
       return;
     }
-    await this.maybeAutoConnect();
+    if (!this.autoConnectGaveUp) await this.maybeAutoConnect();
   }
 
   private patchRecord(fileId: string, patch: Partial<TransferRecord>): void {
@@ -475,9 +481,19 @@ class SyncEngine {
     }
   }
 
-  async connect(deviceName: string, claimText: string): Promise<void> {
-    if (this.snapshot.connected || this.snapshot.busy) return;
-    this.setState({ busy: true, linkState: "connecting", needsSettings: false });
+  async connect(
+    deviceName: string,
+    claimText: string,
+    origin: "user" | "auto" = "user",
+  ): Promise<void> {
+    if (origin === "user") await this.stopAutoConnect();
+    if (this.connectTask || this.snapshot.connected || this.snapshot.busy) return;
+    this.connectOrigin = origin;
+    this.setState(
+      origin === "user"
+        ? { busy: true, autoConnecting: false, linkState: "connecting", needsSettings: false }
+        : { busy: false, autoConnecting: true, linkState: "idle", needsSettings: false },
+    );
     let manager: BleManager;
     try {
       manager = this.ensureManager();
@@ -486,8 +502,10 @@ class SyncEngine {
         this.appendLog(
           `[ui] missing Bluetooth permission (${gate}) — grant Nearby devices + Location and retry`,
         );
+        this.connectOrigin = null;
         this.setState({
           busy: false,
+          autoConnecting: false,
           needsSettings: gate === "needs-settings",
           linkState: gate === "needs-settings" ? "needs permission" : "permission denied",
         });
@@ -501,8 +519,10 @@ class SyncEngine {
             ? "[ui] Bluetooth is off — turn it on and retry"
             : `[ui] Bluetooth unavailable (${adapter}) — check system settings and retry`,
         );
+        this.connectOrigin = null;
         this.setState({
           busy: false,
+          autoConnecting: false,
           needsSettings: adapter === "Unauthorized",
           linkState: adapter === "PoweredOff" ? "bluetooth off" : "bluetooth unavailable",
         });
@@ -511,7 +531,8 @@ class SyncEngine {
       this.appendLog(`[ble] adapter ${adapter} — scanning...`);
     } catch (error) {
       this.appendLog(`[ui] pre-connect check failed: ${error instanceof Error ? error.message : "unknown"}`);
-      this.setState({ busy: false, linkState: "idle" });
+      this.connectOrigin = null;
+      this.setState({ busy: false, autoConnecting: false, linkState: "idle" });
       return;
     }
     let claimKey: Uint8Array | null = null;
@@ -521,7 +542,8 @@ class SyncEngine {
         claimKey = parseClaimHex(trimmedClaim);
       } catch (error) {
         this.appendLog(`[ui] bad claim key: ${error instanceof Error ? error.message : "unknown"}`);
-        this.setState({ busy: false, linkState: "idle" });
+        this.connectOrigin = null;
+        this.setState({ busy: false, autoConnecting: false, linkState: "idle" });
         return;
       }
     }
@@ -536,20 +558,24 @@ class SyncEngine {
       });
     } catch (error) {
       this.appendLog(`[ui] client init failed: ${error instanceof Error ? error.message : "unknown"}`);
-      this.setState({ busy: false, linkState: "idle" });
+      this.connectOrigin = null;
+      this.setState({ busy: false, autoConnecting: false, linkState: "idle" });
       return;
     }
     this.client = client;
     this.stopped = false;
     const target = deviceName.trim() || DEVICE_NAME;
     const enrollKey = claimKey;
-    void (async () => {
+    this.connectTask = (async () => {
       let lastPoll = 0;
+      let reachedReady = false;
       try {
         await client.supervise(target, enrollKey, {
           stopped: () => this.stopped,
           onReady: async () => {
-            this.setState({ connected: true, busy: false });
+            reachedReady = true;
+            this.autoConnectGaveUp = false;
+            this.setState({ connected: true, busy: false, autoConnecting: false });
             this.setState({ deviceId: await getEnrolledDeviceId() });
             this.appendLog("[ui] listening for file transfers …");
             await this.applyDesiredSync(client);
@@ -579,13 +605,25 @@ class SyncEngine {
       } catch (error) {
         this.appendLog(`[ui] connect failed: ${error instanceof Error ? error.message : "unknown"}`);
       }
-      this.setState({ connected: false, busy: false, linkState: "idle", deviceId: null });
+      if (!reachedReady) this.autoConnectGaveUp = true;
+      this.setState({ connected: false, busy: false, autoConnecting: false, linkState: "idle", deviceId: null });
       this.client = null;
+      this.connectTask = null;
+      this.connectOrigin = null;
     })();
   }
 
+  stopAutoConnect = async (): Promise<void> => {
+    if (this.connectOrigin !== "auto") return;
+    this.appendLog("[ui] auto-connect cancelled");
+    this.stopped = true;
+    this.client?.requestStop();
+    await this.connectTask;
+  };
+
   async disconnect(): Promise<void> {
     this.stopped = true;
+    this.autoConnectGaveUp = true;
     const client = this.client;
     if (client) {
       try {
@@ -595,7 +633,7 @@ class SyncEngine {
         this.appendLog(`[ui] disconnect failed: ${error instanceof Error ? error.message : "unknown"}`);
       }
     }
-    this.setState({ connected: false, linkState: "idle", deviceId: null });
+    this.setState({ connected: false, autoConnecting: false, linkState: "idle", deviceId: null });
   }
 
   refreshStatus = async (): Promise<void> => {

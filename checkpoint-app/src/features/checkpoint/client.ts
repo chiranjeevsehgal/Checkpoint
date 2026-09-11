@@ -240,29 +240,37 @@ export class CheckpointClient {
     const want = target || DEVICE_NAME;
     return new Promise<Device>((resolve, reject) => {
       let settled = false;
+      let cancelPoll: ReturnType<typeof setInterval> | null = null;
       const seenIds = new Set<string>();
       let seenCount = 0;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
+      const cleanup = () => {
+        if (cancelPoll !== null) clearInterval(cancelPoll);
         try {
           this.manager.stopDeviceScan();
         } catch {
           /* ignore */
         }
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
         reject(new Error(`Device '${want}' not found (saw ${seenCount} BLE device(s))`));
       }, timeoutMs);
       const finish = (action: () => void) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        try {
-          this.manager.stopDeviceScan();
-        } catch {
-          /* ignore */
-        }
+        cleanup();
         action();
       };
+      cancelPoll = setInterval(() => {
+        if (settled || !this.stopRequested) return;
+        settled = true;
+        clearTimeout(timer);
+        cleanup();
+        reject(new Error("Scan cancelled"));
+      }, 200);
       try {
         this.manager.startDeviceScan(
           [SERVICE_UUID],
@@ -1095,6 +1103,7 @@ export class CheckpointClient {
       try {
         device = await this.scanForDevice(target, 8000);
       } catch (error) {
+        if (hooks.stopped() || this.stopRequested) return;
         const reason = error instanceof Error ? error.message : "unknown";
         if (await retryOrGiveUp(`[ble] scan error: ${reason}`)) return;
         continue;
@@ -1121,6 +1130,7 @@ export class CheckpointClient {
         } catch {
           /* ignore */
         }
+        if (hooks.stopped() || this.stopRequested) return;
         const reason = error instanceof Error ? error.message : "unknown";
         if (await retryOrGiveUp(`[ble] setup failed: ${reason}`)) return;
         continue;

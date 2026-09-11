@@ -93,7 +93,7 @@ export function CheckpointSettingsScreen() {
           <CardKicker>Synchronization</CardKicker>
           <Toggle
             label="Sync automatically"
-            description="Connect and sync recordings without opening the app."
+            description="Look for your pendant automatically when the app opens."
             value={draft.autoSyncEnabled}
             onChange={(next) => set('autoSyncEnabled', next)}
           />
