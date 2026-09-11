@@ -19,7 +19,7 @@ export const BLE_WINDOW = 8;
 
 export const ACK_TIMEOUT_MS = 5000;
 export const READY_RETRIES = 3;
-export const SETUP_FAIL_LIMIT = 3;
+export const CONNECT_ATTEMPT_LIMIT = 3;
 export const RECONNECT_DELAY_MS = 2000;
 export const COMPLETED_CACHE_SIZE = 16;
 

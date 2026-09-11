@@ -11,6 +11,7 @@ import {
   ACK_UUID,
   BLE_FRAG_SIZE,
   COMPLETED_CACHE_SIZE,
+  CONNECT_ATTEMPT_LIMIT,
   CRYPTO_TAG_BYTES,
   CTRL_ERR_NOT_READY,
   CTRL_UUID,
@@ -43,7 +44,6 @@ import {
   READY_RETRIES,
   RECONNECT_DELAY_MS,
   SERVICE_UUID,
-  SETUP_FAIL_LIMIT,
 } from "./config.ts";
 import {
   deleteCredential,
@@ -178,7 +178,7 @@ export class CheckpointClient {
   private seqGen = 1;
   private pending = new Map<number, PendingRoundtrip>();
   private stopRequested = false;
-  private setupFails = 0;
+  private failedAttempts = 0;
 
   constructor(
     private readonly manager: BleManager,
@@ -1075,22 +1075,37 @@ export class CheckpointClient {
     },
   ): Promise<void> {
     this.stopRequested = false;
-    this.setupFails = 0;
+    this.failedAttempts = 0;
     let readyOnce = false;
+    const retryOrGiveUp = async (message: string): Promise<boolean> => {
+      this.log(message);
+      if (!readyOnce) {
+        this.failedAttempts += 1;
+        if (this.failedAttempts >= CONNECT_ATTEMPT_LIMIT) {
+          this.log(
+            `[ble] giving up after ${CONNECT_ATTEMPT_LIMIT} attempts — tap Connect to retry`,
+          );
+          return true;
+        }
+      }
+      return this.sleepOrStopped(RECONNECT_DELAY_MS, hooks.stopped);
+    };
     while (!hooks.stopped()) {
       let device: Device | null = null;
       try {
         device = await this.scanForDevice(target, 8000);
       } catch (error) {
-        this.log(
-          `[ble] scan error: ${error instanceof Error ? error.message : "unknown"}`,
-        );
-        if (await this.sleepOrStopped(RECONNECT_DELAY_MS, hooks.stopped)) return;
+        const reason = error instanceof Error ? error.message : "unknown";
+        if (await retryOrGiveUp(`[ble] scan error: ${reason}`)) return;
         continue;
       }
       if (!device) {
-        this.log("[ble] Checkpoint offline — waiting for power/advertising...");
-        if (await this.sleepOrStopped(RECONNECT_DELAY_MS, hooks.stopped)) return;
+        if (
+          await retryOrGiveUp(
+            "[ble] Checkpoint offline — waiting for power/advertising...",
+          )
+        )
+          return;
         continue;
       }
       try {
@@ -1106,20 +1121,10 @@ export class CheckpointClient {
         } catch {
           /* ignore */
         }
-        this.setupFails += 1;
-        this.log(
-          `[ble] setup failed: ${error instanceof Error ? error.message : "unknown"}`,
-        );
-        if (this.setupFails >= SETUP_FAIL_LIMIT) {
-          this.setupFails = 0;
-          this.log(
-            "[ble] not clearing bond in normal mode (use enroll or USB recovery)",
-          );
-        }
-        if (await this.sleepOrStopped(RECONNECT_DELAY_MS, hooks.stopped)) return;
+        const reason = error instanceof Error ? error.message : "unknown";
+        if (await retryOrGiveUp(`[ble] setup failed: ${reason}`)) return;
         continue;
       }
-      this.setupFails = 0;
       if (!readyOnce) {
         readyOnce = true;
         await hooks.onReady?.();
