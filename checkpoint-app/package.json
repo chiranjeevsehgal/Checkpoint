@@ -3,8 +3,10 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "dependencies": {
+    "@expo-google-fonts/archivo": "^0.4.2",
     "@expo/ui": "~57.0.17",
     "@noble/hashes": "^2.4.0",
+    "@react-native-community/slider": "5.2.0",
     "@rn-primitives/portal": "^1.5.3",
     "@rn-primitives/slot": "^1.5.2",
     "class-variance-authority": "^0.7.1",

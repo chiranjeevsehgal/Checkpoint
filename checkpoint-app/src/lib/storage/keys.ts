@@ -20,6 +20,10 @@ export function settingsKey(name: string): string {
   return `checkpoint.settings.${name}`;
 }
 
+export function prefKey(name: string): string {
+  return `checkpoint.pref.${name}`;
+}
+
 export function credentialKey(deviceIdHex: string): string {
   return `Checkpoint.${deviceIdHex}`;
 }

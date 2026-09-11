@@ -1,59 +1,79 @@
 import { DarkTheme, DefaultTheme, type Theme } from 'expo-router';
 
-export const THEME = {
+export interface Palette {
+  background: string;
+  foreground: string;
+  card: string;
+  cardForeground: string;
+  popover: string;
+  popoverForeground: string;
+  surface: string;
+  inputBg: string;
+  primary: string;
+  primaryForeground: string;
+  secondary: string;
+  secondaryForeground: string;
+  muted: string;
+  mutedForeground: string;
+  accent: string;
+  accentForeground: string;
+  destructive: string;
+  destructiveForeground: string;
+  border: string;
+  divider: string;
+  ring: string;
+}
+
+export const THEME: Record<'light' | 'dark', Palette> = {
   light: {
-    background: 'hsl(0 0% 100%)',
-    foreground: 'hsl(0 0% 3.9%)',
-    card: 'hsl(0 0% 100%)',
-    cardForeground: 'hsl(0 0% 3.9%)',
-    popover: 'hsl(0 0% 100%)',
-    popoverForeground: 'hsl(0 0% 3.9%)',
-    primary: 'hsl(0 0% 9%)',
-    primaryForeground: 'hsl(0 0% 98%)',
-    secondary: 'hsl(0 0% 96.1%)',
-    secondaryForeground: 'hsl(0 0% 9%)',
-    muted: 'hsl(0 0% 96.1%)',
-    mutedForeground: 'hsl(0 0% 45.1%)',
-    accent: 'hsl(0 0% 96.1%)',
-    accentForeground: 'hsl(0 0% 9%)',
-    destructive: 'hsl(0 84.2% 60.2%)',
-    border: 'hsl(0 0% 89.8%)',
-    input: 'hsl(0 0% 89.8%)',
-    ring: 'hsl(0 0% 63%)',
-    radius: '0.625rem',
-    chart1: 'hsl(12 76% 61%)',
-    chart2: 'hsl(173 58% 39%)',
-    chart3: 'hsl(197 37% 24%)',
-    chart4: 'hsl(43 74% 66%)',
-    chart5: 'hsl(27 87% 67%)',
+    background: '#f3f2f2',
+    foreground: '#201e1d',
+    card: '#eae9e9',
+    cardForeground: '#201e1d',
+    popover: '#eae9e9',
+    popoverForeground: '#201e1d',
+    surface: '#eae9e9',
+    inputBg: '#eae9e9',
+    primary: '#ec3013',
+    primaryForeground: '#f3f2f2',
+    secondary: '#eae9e9',
+    secondaryForeground: '#201e1d',
+    muted: '#eae9e9',
+    mutedForeground: '#7f7d7d',
+    accent: '#eae9e9',
+    accentForeground: '#201e1d',
+    destructive: '#ae1800',
+    destructiveForeground: '#f3f2f2',
+    border: '#9f9d9d',
+    divider: '#9f9d9d',
+    ring: '#ec3013',
   },
   dark: {
-    background: 'hsl(0 0% 3.9%)',
-    foreground: 'hsl(0 0% 98%)',
-    card: 'hsl(0 0% 3.9%)',
-    cardForeground: 'hsl(0 0% 98%)',
-    popover: 'hsl(0 0% 3.9%)',
-    popoverForeground: 'hsl(0 0% 98%)',
-    primary: 'hsl(0 0% 98%)',
-    primaryForeground: 'hsl(0 0% 9%)',
-    secondary: 'hsl(0 0% 14.9%)',
-    secondaryForeground: 'hsl(0 0% 98%)',
-    muted: 'hsl(0 0% 14.9%)',
-    mutedForeground: 'hsl(0 0% 63.9%)',
-    accent: 'hsl(0 0% 14.9%)',
-    accentForeground: 'hsl(0 0% 98%)',
-    destructive: 'hsl(0 70.9% 59.4%)',
-    border: 'hsl(0 0% 14.9%)',
-    input: 'hsl(0 0% 14.9%)',
-    ring: 'hsl(300 0% 45%)',
-    radius: '0.625rem',
-    chart1: 'hsl(220 70% 50%)',
-    chart2: 'hsl(160 60% 45%)',
-    chart3: 'hsl(30 80% 55%)',
-    chart4: 'hsl(280 65% 60%)',
-    chart5: 'hsl(340 75% 55%)',
+    background: '#1b1918',
+    foreground: '#f3f2f2',
+    card: '#262322',
+    cardForeground: '#f3f2f2',
+    popover: '#262322',
+    popoverForeground: '#f3f2f2',
+    surface: '#262322',
+    inputBg: '#2f2c2b',
+    primary: '#ff6b52',
+    primaryForeground: '#1b1918',
+    secondary: '#2f2c2b',
+    secondaryForeground: '#f3f2f2',
+    muted: '#2f2c2b',
+    mutedForeground: '#929090',
+    accent: '#2f2c2b',
+    accentForeground: '#f3f2f2',
+    destructive: '#ff6b52',
+    destructiveForeground: '#1b1918',
+    border: '#575655',
+    divider: '#575655',
+    ring: '#ff6b52',
   },
 };
+
+export const PALETTE = THEME;
 
 export const NAV_THEME: Record<'light' | 'dark', Theme> = {
   light: {
