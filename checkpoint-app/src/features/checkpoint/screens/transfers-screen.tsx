@@ -12,7 +12,8 @@ import { ProgressBar } from '@/components/ui/progress-bar';
 import { Text } from '@/components/ui/text';
 import { cn } from '@/lib/utils';
 
-import { useCheckpoint, type TransferInfo } from '../hooks/useCheckpoint.tsx';
+import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
+import type { TransferRecord } from '../transferStore.ts';
 import { transferView, type TransferStage } from '../transferView.ts';
 
 const STEPS = ['Receive', 'Analyze', 'Upload'] as const;
@@ -44,7 +45,7 @@ function Chip({ label, className, textClassName }: { label: string; className?: 
   );
 }
 
-function TransferRow({ item, expanded, onToggle }: { item: TransferInfo; expanded: boolean; onToggle: () => void }) {
+function TransferRow({ item, expanded, onToggle }: { item: TransferRecord; expanded: boolean; onToggle: () => void }) {
   const view = transferView(item);
   const stageIndex = STAGE_INDEX[view.stage];
 
