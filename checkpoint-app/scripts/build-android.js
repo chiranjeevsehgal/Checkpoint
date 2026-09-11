@@ -20,4 +20,9 @@ const result = spawnSync(gradlew, args, {
   env: { ...process.env, NODE_ENV: "production" },
 });
 
+if (result.error) {
+  console.error(result.error.message);
+  process.exit(1);
+}
+
 process.exit(result.status ?? 1);

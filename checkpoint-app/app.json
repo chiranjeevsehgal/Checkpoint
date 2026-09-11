@@ -51,7 +51,6 @@
       [
         "expo-camera",
         {
-          "barcodeScannerEnabled": true,
           "recordAudioAndroid": false,
           "cameraPermission": "Allow Checkpoint to scan the pendant enrollment QR code."
         }
