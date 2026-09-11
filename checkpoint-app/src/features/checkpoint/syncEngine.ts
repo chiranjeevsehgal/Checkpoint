@@ -15,13 +15,29 @@ import {
   KAFKA_TOPIC_HINT,
   MAX_LOG_LINES,
   STATUS_POLL_INTERVAL_S,
+  TRANSFER_TICK_MS,
 } from "./config.ts";
 import { IngestionUploader } from "./ingestion.ts";
 import { networkMonitor } from "./networkMonitor.ts";
 import { ctrlStatusText } from "./parsers.ts";
+import { nextRetryDelayMs } from "./retry.ts";
 import { defaultSettings, type CheckpointSettings } from "./settings.ts";
+import {
+  deleteSaved,
+  loadTransfers,
+  readSavedBytes,
+  receivedFile,
+  saveTransfers,
+} from "./store.ts";
 import { checkSpeech, shouldUpload, vadSkipReason } from "./vad.ts";
-import { applyEventToRecords, type TransferRecord } from "./transferStore.ts";
+import {
+  applyEventToRecords,
+  isTerminal,
+  patchTransfer,
+  pruneExpired,
+  sortTransfers,
+  type TransferRecord,
+} from "./transferStore.ts";
 import type {
   CheckpointEvent,
   DeviceFileList,
@@ -75,6 +91,11 @@ class SyncEngine {
   private snapshot: EngineSnapshot = INITIAL_SNAPSHOT;
   private started = false;
   private appStateSubscription: ReturnType<typeof AppState.addEventListener> | null = null;
+  private draining = false;
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private tickTimer: ReturnType<typeof setInterval> | null = null;
+  private networkUnsubscribe: (() => void) | null = null;
+  private inFlight = new Set<string>();
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -93,11 +114,21 @@ class SyncEngine {
     if (this.started) return;
     this.started = true;
     this.appendLog("[sync] engine started");
+    const stored = await loadTransfers();
+    if (stored.length > 0) this.setState({ transfers: sortTransfers(stored) });
+    this.cleanup();
     this.appStateSubscription = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         void this.onForeground();
       }
     });
+    this.networkUnsubscribe = networkMonitor.subscribe(() => {
+      if (networkMonitor.getSnapshot().state === "online") void this.drainQueue();
+    });
+    this.tickTimer = setInterval(() => {
+      this.cleanup();
+      void this.drainQueue();
+    }, TRANSFER_TICK_MS);
     await this.maybeAutoConnect();
   }
 
@@ -106,6 +137,13 @@ class SyncEngine {
     this.started = false;
     this.appStateSubscription?.remove();
     this.appStateSubscription = null;
+    this.networkUnsubscribe?.();
+    this.networkUnsubscribe = null;
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
+    }
+    this.flushPersist();
     await this.disconnect();
   }
 
@@ -173,11 +211,128 @@ class SyncEngine {
   }
 
   private async onForeground(): Promise<void> {
+    this.cleanup();
+    void this.drainQueue();
     if (this.snapshot.connected) {
       await this.applyAutoSyncIfConnected();
       return;
     }
     await this.maybeAutoConnect();
+  }
+
+  private patchRecord(fileId: string, patch: Partial<TransferRecord>): void {
+    const transfers = sortTransfers(
+      patchTransfer(this.snapshot.transfers, fileId, Date.now(), patch),
+    );
+    this.setState({ transfers });
+    this.schedulePersist();
+  }
+
+  private reportIngest(
+    fileId: string,
+    uploadId: string,
+    ingestStatus: string,
+    ingestError: string,
+    vadStatus?: string,
+    vadSpeechS?: string,
+  ): void {
+    this.client?.bench.updateIngest(fileId, uploadId, ingestStatus, ingestError, vadStatus, vadSpeechS);
+    this.handleEvent({
+      type: "ingest",
+      fileId,
+      uploadId,
+      ingestStatus,
+      ingestError,
+      vadStatus,
+      vadSpeechS,
+    });
+  }
+
+  private schedulePersist(): void {
+    if (this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      saveTransfers(this.snapshot.transfers);
+    }, 500);
+  }
+
+  private flushPersist(): void {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    saveTransfers(this.snapshot.transfers);
+  }
+
+  private cleanup(): void {
+    const retentionMs = Math.max(0, this.settings.retentionHours) * 60 * 60 * 1000;
+    const before = this.snapshot.transfers;
+    const after = pruneExpired(before, Date.now(), retentionMs);
+    if (after.length === before.length) return;
+    const removed = before.filter((record) => !after.includes(record));
+    for (const record of removed) void deleteSaved(record.fileId);
+    this.setState({ transfers: sortTransfers(after) });
+    this.flushPersist();
+    this.appendLog(`[sync] cleaned ${removed.length} old transfer(s)`);
+  }
+
+  private async drainQueue(): Promise<void> {
+    if (this.draining) return;
+    this.draining = true;
+    try {
+      const now = Date.now();
+      const queue = this.snapshot.transfers.filter(
+        (record) =>
+          !isTerminal(record) &&
+          record.localUri !== undefined &&
+          (record.nextAttemptAt === undefined || record.nextAttemptAt <= now),
+      );
+      for (const record of queue) {
+        if (networkMonitor.getSnapshot().state !== "online") break;
+        await this.uploadRecord(record);
+      }
+    } finally {
+      this.draining = false;
+    }
+  }
+
+  private async uploadRecord(record: TransferRecord): Promise<void> {
+    if (!record.localUri || isTerminal(record) || this.inFlight.has(record.fileId)) return;
+    this.inFlight.add(record.fileId);
+    try {
+      const bytes = await readSavedBytes(record.localUri);
+      if (!bytes) {
+        this.appendLog(`[sync] local audio missing for ${record.fileId}`);
+        return;
+      }
+      this.appendLog(`  [ingest] uploading file_${record.fileId}.ogg (${bytes.length}B) ...`);
+      const uploader = new IngestionUploader(this.settings.serverUrl, this.settings.userId);
+      try {
+        const result = await uploader.upload(
+          bytes,
+          `file_${record.fileId}.ogg`,
+          "audio/ogg",
+          record.fileId,
+        );
+        this.appendLog(`  [ingest] OK upload_id=${result.uploadId} status=${result.status}`);
+        this.reportIngest(record.fileId, result.uploadId, result.status, "");
+        this.patchRecord(record.fileId, { attempts: 0, nextAttemptAt: undefined });
+        if (!this.settings.keepFiles) {
+          await CheckpointClient.deleteLocalCopy(record.fileId);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "unknown";
+        this.appendLog(`  [!] ingest failed: ${message}`);
+        const attempts = record.attempts + 1;
+        this.reportIngest(record.fileId, "", "failed", message);
+        this.patchRecord(record.fileId, {
+          attempts,
+          nextAttemptAt: Date.now() + nextRetryDelayMs(attempts),
+        });
+      }
+    } finally {
+      this.inFlight.delete(record.fileId);
+    }
   }
 
   private setState(patch: Partial<EngineSnapshot>): void {
@@ -214,12 +369,14 @@ class SyncEngine {
       });
       return;
     }
-    this.setState({
-      transfers: applyEventToRecords(this.snapshot.transfers, event, Date.now()),
-    });
+    const transfers = sortTransfers(
+      applyEventToRecords(this.snapshot.transfers, event, Date.now()),
+    );
+    this.setState({ transfers });
+    if (event.type !== "progress") this.schedulePersist();
   }
 
-  private async handleCompletedFile(client: CheckpointClient, file: CompletedFile): Promise<void> {
+  private async handleCompletedFile(file: CompletedFile): Promise<void> {
     const current = this.settings;
     const verdict = current.vadEnabled
       ? await checkSpeech(file.bytes, {
@@ -230,62 +387,33 @@ class SyncEngine {
     if (verdict.status === "unavailable") {
       this.appendLog(`  [vad] unavailable: ${verdict.error ?? "unknown"} — uploading anyway`);
     }
+    const vad = `${verdict.status} ${verdict.speechS.toFixed(2)}s`.trim();
     if (!shouldUpload(verdict)) {
       const reason = vadSkipReason(verdict, current.minSpeechS);
       this.appendLog(`  [vad] filtered ${file.fileIdHex}: ${reason} — skipping upload`);
-      client.reportResult({
-        fileId: file.fileIdHex,
-        ingestStatus: "skipped-no-speech",
-        ingestError: reason,
-        vadStatus: verdict.status,
-        vadSpeechS: verdict.speechS.toFixed(2),
-      });
+      this.reportIngest(
+        file.fileIdHex,
+        "",
+        "skipped-no-speech",
+        reason,
+        verdict.status,
+        verdict.speechS.toFixed(2),
+      );
       if (!current.keepFiles) {
         await CheckpointClient.deleteLocalCopy(file.fileIdHex);
       }
       return;
     }
     if (!current.ingestEnabled) {
-      client.reportResult({
-        fileId: file.fileIdHex,
-        ingestStatus: "disabled",
-        vadStatus: "disabled",
-        vadSpeechS: "0.00",
-      });
+      this.reportIngest(file.fileIdHex, "", "disabled", "", "disabled", "0.00");
       return;
     }
-    this.appendLog(`  [ingest] uploading file_${file.fileIdHex}.ogg (${file.bytes.length}B) ...`);
-    const uploader = new IngestionUploader(current.serverUrl, current.userId);
-    try {
-      const result = await uploader.upload(
-        file.bytes,
-        `file_${file.fileIdHex}.ogg`,
-        "audio/ogg",
-        file.fileIdHex,
-      );
-      this.appendLog(`  [ingest] OK upload_id=${result.uploadId} status=${result.status}`);
-      client.reportResult({
-        fileId: file.fileIdHex,
-        uploadId: result.uploadId,
-        ingestStatus: result.status,
-        vadStatus: verdict.status,
-        vadSpeechS: verdict.speechS.toFixed(2),
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "unknown";
-      this.appendLog(`  [!] ingest failed: ${message}`);
-      client.reportResult({
-        fileId: file.fileIdHex,
-        ingestStatus: "failed",
-        ingestError: message,
-        vadStatus: verdict.status,
-        vadSpeechS: verdict.speechS.toFixed(2),
-      });
-      return;
-    }
-    if (!current.keepFiles) {
-      await CheckpointClient.deleteLocalCopy(file.fileIdHex);
-    }
+    this.patchRecord(file.fileIdHex, {
+      localUri: receivedFile(file.fileIdHex, ".ogg").uri,
+      vad,
+    });
+    const record = this.snapshot.transfers.find((item) => item.fileId === file.fileIdHex);
+    if (record) await this.uploadRecord(record);
   }
 
   private async withClient<T>(
@@ -359,8 +487,7 @@ class SyncEngine {
         onEvent: (event) => this.handleEvent(event),
         log: (line) => this.appendLog(line),
         onFile: (file) => {
-          const active = this.client;
-          if (active) void this.handleCompletedFile(active, file);
+          void this.handleCompletedFile(file);
         },
       });
     } catch (error) {
@@ -388,6 +515,7 @@ class SyncEngine {
               this.appendLog(`[ui] initial storage load failed: ${error instanceof Error ? error.message : "unknown"}`);
             }
             this.appendLog(`[ui] queue-wait until SUBMITTED (Kafka ${KAFKA_TOPIC_HINT})`);
+            void this.drainQueue();
           },
           onAlive: async () => {
             this.setState({ linkState: "listening" });

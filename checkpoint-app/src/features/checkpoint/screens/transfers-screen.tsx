@@ -13,7 +13,7 @@ import { Text } from '@/components/ui/text';
 import { cn } from '@/lib/utils';
 
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
-import type { TransferRecord } from '../transferStore.ts';
+import { isTerminal, type TransferRecord } from '../transferStore.ts';
 import { transferView, type TransferStage } from '../transferView.ts';
 
 const STEPS = ['Receive', 'Analyze', 'Upload'] as const;
@@ -89,6 +89,7 @@ export function TransfersScreen() {
   const uploaded = views.filter((view) => view.outcome === 'uploaded').length;
   const filtered = views.filter((view) => view.outcome === 'filtered').length;
   const failed = views.filter((view) => view.outcome === 'failed').length;
+  const queued = transfers.filter((item) => !isTerminal(item) && item.localUri).length;
 
   return (
     <Screen>
@@ -105,7 +106,7 @@ export function TransfersScreen() {
               <Text>Share bench CSV</Text>
             </Button>
             {transfers.length > 0 ? (
-              <View className="flex-row gap-2">
+              <View className="flex-row flex-wrap gap-2">
                 <Chip
                   label={`${uploaded} uploaded`}
                   className="bg-accent-100 dark:bg-accent-900"
@@ -116,6 +117,13 @@ export function TransfersScreen() {
                   className="bg-neutral-200 dark:bg-neutral-800"
                   textClassName="text-neutral-800 dark:text-neutral-200"
                 />
+                {queued > 0 ? (
+                  <Chip
+                    label={`${queued} queued`}
+                    className="bg-neutral-200 dark:bg-neutral-800"
+                    textClassName="text-neutral-800 dark:text-neutral-200"
+                  />
+                ) : null}
                 <Chip label={`${failed} failed`} className="bg-primary" textClassName="text-primary-foreground" />
               </View>
             ) : null}
