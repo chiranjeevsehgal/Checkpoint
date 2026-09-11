@@ -137,7 +137,7 @@ export class IngestionUploader {
       throw new Error("create: unexpected response");
     }
     try {
-      await apiPutBytes(created.upload.url, data, contentType);
+      await apiPutBytes(created.upload.url, data, contentType, this.signal());
     } catch (error) {
       throw new Error(`put failed (${safeHost(created.upload.url)}): ${describeError(error)}`);
     }

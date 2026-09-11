@@ -34,12 +34,14 @@ export async function apiFetch<T>(
 export async function apiPutBytes(
   url: string,
   bytes: Uint8Array,
-  contentType: string
+  contentType: string,
+  signal?: AbortSignal
 ): Promise<number> {
   const res = await fetch(url, {
     method: 'PUT',
     headers: { 'Content-Type': contentType },
     body: bytes as unknown as BodyInit,
+    signal,
   });
   if (res.status !== 200 && res.status !== 201 && res.status !== 204) {
     const body = await res.text().catch(() => '');
