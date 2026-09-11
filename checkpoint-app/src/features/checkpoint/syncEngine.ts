@@ -1,5 +1,5 @@
 import { AppState } from "react-native";
-import { BleManager } from "react-native-ble-plx";
+import { BleManager, State } from "react-native-ble-plx";
 import { Directory, File, Paths } from "expo-file-system";
 import { isAvailableAsync, shareAsync } from "expo-sharing";
 
@@ -51,6 +51,8 @@ export interface ListPage {
   count: number;
 }
 
+export type BluetoothStatus = "on" | "off" | "unauthorized" | "unsupported" | "unknown" | null;
+
 export interface EngineSnapshot {
   connected: boolean;
   busy: boolean;
@@ -62,6 +64,7 @@ export interface EngineSnapshot {
   transfers: TransferRecord[];
   logs: string[];
   needsSettings: boolean;
+  bluetooth: BluetoothStatus;
 }
 
 const INITIAL_SNAPSHOT: EngineSnapshot = {
@@ -75,7 +78,23 @@ const INITIAL_SNAPSHOT: EngineSnapshot = {
   transfers: [],
   logs: [],
   needsSettings: false,
+  bluetooth: null,
 };
+
+function mapBluetoothState(state: State): BluetoothStatus {
+  switch (state) {
+    case State.PoweredOn:
+      return "on";
+    case State.PoweredOff:
+      return "off";
+    case State.Unauthorized:
+      return "unauthorized";
+    case State.Unsupported:
+      return "unsupported";
+    default:
+      return "unknown";
+  }
+}
 
 function pushLog(lines: string[], line: string): string[] {
   const next = [...lines, line];
@@ -95,6 +114,7 @@ class SyncEngine {
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private networkUnsubscribe: (() => void) | null = null;
+  private bluetoothSubscription: { remove: () => void } | null = null;
   private inFlight = new Set<string>();
 
   subscribe = (listener: () => void): (() => void) => {
@@ -117,6 +137,7 @@ class SyncEngine {
     const stored = await loadTransfers();
     if (!this.started) return;
     if (stored.length > 0) this.setState({ transfers: sortTransfers(stored) });
+    this.ensureManager();
     this.cleanup();
     this.appStateSubscription = AppState.addEventListener("change", (state) => {
       if (state === "active") {
@@ -140,6 +161,8 @@ class SyncEngine {
     this.appStateSubscription = null;
     this.networkUnsubscribe?.();
     this.networkUnsubscribe = null;
+    this.bluetoothSubscription?.remove();
+    this.bluetoothSubscription = null;
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
@@ -164,6 +187,23 @@ class SyncEngine {
     return probe.ok;
   }
 
+  private ensureManager(): BleManager {
+    if (!this.manager) {
+      this.manager = new BleManager();
+      try {
+        this.bluetoothSubscription = this.manager.onStateChange(
+          (state) => this.setState({ bluetooth: mapBluetoothState(state) }),
+          true,
+        );
+      } catch (error) {
+        this.appendLog(
+          `[ble] state listener failed: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+      }
+    }
+    return this.manager;
+  }
+
   private async maybeAutoConnect(): Promise<void> {
     if (!this.settings.autoSyncEnabled) {
       this.appendLog("[sync] auto-connect skipped: auto-sync is off");
@@ -179,10 +219,10 @@ class SyncEngine {
       this.appendLog("[sync] auto-connect deferred: Bluetooth permission missing");
       return;
     }
-    if (!this.manager) this.manager = new BleManager();
+    const manager = this.ensureManager();
     let adapter: string;
     try {
-      adapter = await this.manager.state();
+      adapter = await manager.state();
     } catch {
       adapter = "Unknown";
     }
@@ -436,8 +476,7 @@ class SyncEngine {
     this.setState({ busy: true, linkState: "connecting", needsSettings: false });
     let manager: BleManager;
     try {
-      if (!this.manager) this.manager = new BleManager();
-      manager = this.manager;
+      manager = this.ensureManager();
       const gate = await ensureBlePermissions();
       if (gate !== "granted") {
         this.appendLog(

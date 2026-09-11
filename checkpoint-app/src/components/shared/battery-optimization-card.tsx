@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { Text } from '@/components/ui/text';
+import { useBatteryOptimization } from '@/features/checkpoint/hooks/useBatteryOptimization.ts';
 
 function androidPackage(): string {
   return Constants.expoConfig?.android?.package ?? 'com.boredom1234.checkpointapp';
@@ -33,7 +34,8 @@ async function openBatterySettings(): Promise<void> {
 }
 
 export function BatteryOptimizationCard() {
-  if (Platform.OS !== 'android') return null;
+  const restricted = useBatteryOptimization();
+  if (Platform.OS !== 'android' || restricted !== true) return null;
 
   return (
     <Card>

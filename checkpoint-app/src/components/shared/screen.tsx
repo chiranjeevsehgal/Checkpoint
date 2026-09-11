@@ -1,5 +1,6 @@
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { BluetoothBanner } from '@/components/shared/bluetooth-banner';
 import { ConnectivityBanner } from '@/components/shared/connectivity-banner';
 import { cn } from '@/lib/utils';
 
@@ -14,6 +15,7 @@ export function Screen({
       {...props}
     >
       <ConnectivityBanner />
+      <BluetoothBanner />
       {children}
     </SafeAreaView>
   );
