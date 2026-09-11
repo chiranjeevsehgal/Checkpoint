@@ -95,6 +95,7 @@ export function TransfersScreen() {
     <Screen>
       <AppHeader title="Transfers" subtitle={`${transfers.length} audio items`} />
       <FlatList
+        className="flex-1"
         data={transfers}
         keyExtractor={(item) => item.fileId}
         contentContainerStyle={{ gap: 12, paddingBottom: 24 }}

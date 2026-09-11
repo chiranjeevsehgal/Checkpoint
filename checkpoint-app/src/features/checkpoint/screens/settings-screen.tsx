@@ -45,6 +45,7 @@ export function CheckpointSettingsScreen() {
     <Screen>
       <AppHeader title="Settings" subtitle="Server, identity and VAD" />
       <ScrollView
+        className="flex-1"
         contentContainerStyle={{ gap: 14, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
       >

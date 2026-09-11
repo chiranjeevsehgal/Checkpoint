@@ -62,6 +62,8 @@ export function ConnectScreen() {
     <Screen>
       <AppHeader title="Connect" subtitle={view.label} />
       <ScrollView
+        className="flex-1"
+        nestedScrollEnabled
         contentContainerStyle={{ gap: 16, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
       >

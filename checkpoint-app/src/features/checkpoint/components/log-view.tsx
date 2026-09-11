@@ -2,9 +2,11 @@ import { useCallback, useRef } from 'react';
 import {
   Pressable,
   ScrollView,
+  View,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 
 import { Collapsible } from '@/components/shared/collapsible';
 import { Text } from '@/components/ui/text';
@@ -31,12 +33,17 @@ export function LogView({ logs, onClear }: LogViewProps) {
     if (nearBottom.current) scrollRef.current?.scrollToEnd({ animated: false });
   }, []);
 
+  const copyLogs = useCallback(() => {
+    void Clipboard.setStringAsync(logs.join('\n'));
+  }, [logs]);
+
   return (
     <Collapsible title="Debug log">
       <ScrollView
         ref={scrollRef}
         nestedScrollEnabled
-        className="bg-input-bg h-40 p-2"
+        className="bg-input-bg h-52 p-2"
+        contentContainerStyle={{ paddingBottom: 8 }}
         onScroll={handleScroll}
         scrollEventThrottle={16}
         onContentSizeChange={handleContentSizeChange}
@@ -53,9 +60,14 @@ export function LogView({ logs, onClear }: LogViewProps) {
           ))
         )}
       </ScrollView>
-      <Pressable onPress={onClear} accessibilityRole="button" className="self-start">
-        <Text className="font-display text-primary text-xs">Clear</Text>
-      </Pressable>
+      <View className="flex-row gap-3">
+        <Pressable onPress={copyLogs} accessibilityRole="button" className="self-start">
+          <Text className="font-display text-primary text-xs">Copy logs</Text>
+        </Pressable>
+        <Pressable onPress={onClear} accessibilityRole="button" className="self-start">
+          <Text className="font-display text-primary text-xs">Clear</Text>
+        </Pressable>
+      </View>
     </Collapsible>
   );
 }

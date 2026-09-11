@@ -84,6 +84,7 @@ export function StorageScreen() {
     <Screen>
       <AppHeader title="Storage" subtitle="Pendant SD card" />
       <FlatList
+        className="flex-1"
         data={files}
         keyExtractor={(item) => item.name}
         contentContainerStyle={{ gap: 14, paddingBottom: 24 }}

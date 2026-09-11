@@ -54,6 +54,7 @@ export function DeviceScreen() {
         <EmptyState title="Not connected" hint="Connect to a pendant to control it." />
       ) : (
         <ScrollView
+          className="flex-1"
           contentContainerStyle={{ gap: 14, paddingBottom: 24 }}
           showsVerticalScrollIndicator={false}
         >
