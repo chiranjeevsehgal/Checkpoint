@@ -23,7 +23,7 @@ import { connectionActivity, formatFingerprint } from '../connectionView.ts';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { useClaimScanner } from '../hooks/useClaimScanner.ts';
 import { linkView } from '../linkView.ts';
-import { isTerminal } from '../transferStore.ts';
+import { isInProgress } from '../transferStore.ts';
 
 export function ConnectScreen() {
   const {
@@ -91,7 +91,7 @@ export function ConnectScreen() {
     return () => loop.stop();
   }, [busy, pulse]);
 
-  const syncing = transfers.filter((record) => !isTerminal(record)).length;
+  const syncing = transfers.filter(isInProgress).length;
   const activity = connectionActivity({
     connected,
     recording: status?.recording ?? false,

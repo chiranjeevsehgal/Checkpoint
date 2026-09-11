@@ -30,6 +30,10 @@ export function isTerminal(record: TransferRecord): boolean {
   return TERMINAL_OUTCOMES.has(record.outcome);
 }
 
+export function isInProgress(record: TransferRecord): boolean {
+  return record.outcome === "pending";
+}
+
 export function isComplete(record: TransferRecord): boolean {
   return record.totalFrags > 0 && record.received >= record.totalFrags;
 }

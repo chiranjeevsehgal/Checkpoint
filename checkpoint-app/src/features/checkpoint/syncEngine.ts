@@ -346,6 +346,8 @@ class SyncEngine {
       const bytes = await readSavedBytes(record.localUri);
       if (!bytes) {
         this.appendLog(`[sync] local audio missing for ${record.fileId}`);
+        this.reportIngest(record.fileId, "", "failed", "local audio missing");
+        this.patchRecord(record.fileId, { localUri: undefined });
         return;
       }
       this.appendLog(`  [ingest] uploading file_${record.fileId}.ogg (${bytes.length}B) ...`);
@@ -577,7 +579,7 @@ class SyncEngine {
       } catch (error) {
         this.appendLog(`[ui] connect failed: ${error instanceof Error ? error.message : "unknown"}`);
       }
-      this.setState({ connected: false, busy: false, linkState: "idle" });
+      this.setState({ connected: false, busy: false, linkState: "idle", deviceId: null });
       this.client = null;
     })();
   }
@@ -593,7 +595,7 @@ class SyncEngine {
         this.appendLog(`[ui] disconnect failed: ${error instanceof Error ? error.message : "unknown"}`);
       }
     }
-    this.setState({ connected: false, linkState: "idle" });
+    this.setState({ connected: false, linkState: "idle", deviceId: null });
   }
 
   refreshStatus = async (): Promise<void> => {
@@ -613,6 +615,7 @@ class SyncEngine {
         isTerminal(record) ? record : { ...record, nextAttemptAt: undefined },
       ),
     });
+    this.schedulePersist();
     this.appendLog("[ui] retry: backoff reset, draining queue");
     await this.drainQueue();
   };

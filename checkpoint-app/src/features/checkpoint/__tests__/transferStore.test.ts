@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   applyEventToRecords,
+  isInProgress,
   isTerminal,
   patchTransfer,
   pruneExpired,
@@ -164,6 +165,20 @@ describe('patchTransfer', () => {
     assert.equal(next[0]!.attempts, 2);
     assert.equal(next[0]!.nextAttemptAt, NOW + 35_000);
     assert.equal(next[0]!.outcome, 'failed');
+  });
+});
+
+describe('isInProgress', () => {
+  it('is true while receiving or uploading', () => {
+    assert.equal(isInProgress(record({ outcome: 'pending', ingest: 'pending' })), true);
+  });
+
+  it('is false for failed and completed transfers', () => {
+    assert.equal(
+      isInProgress(record({ outcome: 'failed', ingest: 'failed: network timeout' })),
+      false,
+    );
+    assert.equal(isInProgress(record({ outcome: 'uploaded' })), false);
   });
 });
 
