@@ -10,9 +10,9 @@ export function EmptyState({
   hint?: string;
 }) {
   return (
-    <View className="flex-1 items-center justify-center gap-2 bg-background px-6">
-      <Text variant="h3">{title}</Text>
-      {hint ? <Text variant="muted">{hint}</Text> : null}
+    <View className="items-center justify-center gap-1 px-4 py-12">
+      <Text className="font-display text-[15px]">{title}</Text>
+      {hint ? <Text variant="muted" className="text-center">{hint}</Text> : null}
     </View>
   );
 }

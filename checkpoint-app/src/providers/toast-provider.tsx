@@ -20,7 +20,7 @@ export function useToast(): ToastContextValue {
 
 export function ToastProvider({ children }: React.PropsWithChildren) {
   const [message, setMessage] = React.useState<string | null>(null);
-  const progress = React.useRef(new Animated.Value(0)).current;
+  const progress = React.useMemo(() => new Animated.Value(0), []);
   const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearTimer = React.useCallback(() => {

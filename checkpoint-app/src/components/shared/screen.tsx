@@ -8,7 +8,7 @@ export function Screen({
 }: React.ComponentProps<typeof SafeAreaView>) {
   return (
     <SafeAreaView
-      className={cn('flex-1 bg-background px-6', className)}
+      className={cn('bg-background flex-1 px-5', className)}
       {...props}
     />
   );

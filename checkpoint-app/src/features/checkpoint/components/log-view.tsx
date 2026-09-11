@@ -1,8 +1,7 @@
-import { ScrollView } from "react-native";
+import { Pressable, ScrollView } from 'react-native';
 
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Text } from "@/components/ui/text";
+import { Collapsible } from '@/components/shared/collapsible';
+import { Text } from '@/components/ui/text';
 
 interface LogViewProps {
   logs: string[];
@@ -11,26 +10,23 @@ interface LogViewProps {
 
 export function LogView({ logs, onClear }: LogViewProps) {
   return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between">
-        <CardTitle>Logs</CardTitle>
-        <Button variant="ghost" size="sm" onPress={onClear}>
-          <Text>Clear</Text>
-        </Button>
-      </CardHeader>
-      <CardContent>
-        <ScrollView className="max-h-64">
-          {logs.length === 0 ? (
-            <Text variant="muted">No logs yet.</Text>
-          ) : (
-            logs.map((line, index) => (
-              <Text key={`${index}-${line.slice(0, 24)}`} className="font-mono text-xs">
-                {line}
-              </Text>
-            ))
-          )}
-        </ScrollView>
-      </CardContent>
-    </Card>
+    <Collapsible title="Debug log">
+      <ScrollView className="bg-input-bg max-h-40 p-2">
+        {logs.length === 0 ? (
+          <Text variant="muted" className="text-[11px]">
+            No logs yet.
+          </Text>
+        ) : (
+          logs.map((line, index) => (
+            <Text key={`${index}-${line.slice(0, 24)}`} className="font-mono text-[11px]">
+              {line}
+            </Text>
+          ))
+        )}
+      </ScrollView>
+      <Pressable onPress={onClear} accessibilityRole="button" className="self-start">
+        <Text className="font-display text-primary text-xs">Clear</Text>
+      </Pressable>
+    </Collapsible>
   );
 }

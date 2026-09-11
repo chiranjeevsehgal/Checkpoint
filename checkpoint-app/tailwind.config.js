@@ -73,8 +73,8 @@ module.exports = {
       },
       fontFamily: {
         sans: ['Archivo_400Regular'],
-        medium: ['Archivo_600SemiBold'],
-        heading: ['Archivo_800ExtraBold'],
+        label: ['Archivo_600SemiBold'],
+        display: ['Archivo_800ExtraBold'],
       },
       borderWidth: {
         hairline: hairlineWidth(),

@@ -1,11 +1,31 @@
 import { Tabs } from 'expo-router';
 import { ArrowDownUp, Bluetooth, HardDrive, Mic, Settings } from 'lucide-react-native';
+import { useColorScheme } from 'nativewind';
 
 import { Icon } from '@/components/ui/icon';
+import { PALETTE } from '@/lib/theme';
 
 export default function TabsLayout() {
+  const { colorScheme } = useColorScheme();
+  const palette = colorScheme === 'dark' ? PALETTE.dark : PALETTE.light;
+
   return (
-    <Tabs screenOptions={{ headerShown: false }}>
+    <Tabs
+      screenOptions={{
+        headerShown: false,
+        tabBarActiveTintColor: palette.primary,
+        tabBarInactiveTintColor: palette.mutedForeground,
+        tabBarStyle: {
+          backgroundColor: palette.background,
+          borderTopColor: palette.divider,
+          borderTopWidth: 2,
+        },
+        tabBarLabelStyle: {
+          fontFamily: 'Archivo_600SemiBold',
+          fontSize: 10,
+        },
+      }}
+    >
       <Tabs.Screen
         name="connect"
         options={{

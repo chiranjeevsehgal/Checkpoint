@@ -1,10 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { PropsWithChildren } from "react";
-import { Alert } from "react-native";
 import { BleManager } from "react-native-ble-plx";
 import { openSettings } from "expo-linking";
 import { Directory, File, Paths } from "expo-file-system";
 import { isAvailableAsync, shareAsync } from "expo-sharing";
+
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+import { useToast } from "@/providers/toast-provider";
 
 import { CheckpointClient, type CompletedFile } from "../client.ts";
 import { parseClaimHex } from "../claim.ts";
@@ -41,6 +43,8 @@ export interface TransferInfo {
   vad: string;
   ingest: string;
 }
+
+type DialogState = { kind: "delete"; path: string } | { kind: "erase" } | null;
 
 interface ListPage {
   start: number;
@@ -142,8 +146,8 @@ interface CheckpointContextValue {
   toggleRec: () => Promise<void>;
   applyLed: (muted: boolean, brightness: number) => Promise<void>;
   applySync: (enabled: boolean) => Promise<void>;
-  deleteFile: (path: string) => void;
-  eraseStorage: () => void;
+  requestDelete: (path: string) => void;
+  requestErase: () => void;
   updateSettings: (settings: CheckpointSettings) => Promise<void>;
   shareBench: () => Promise<void>;
   clearLogs: () => void;
@@ -160,6 +164,7 @@ export function useCheckpoint(): CheckpointContextValue {
 }
 
 export function CheckpointProvider({ children }: PropsWithChildren) {
+  const { showToast } = useToast();
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [linkState, setLinkState] = useState("idle");
@@ -173,6 +178,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
   const [logs, setLogs] = useState<string[]>([]);
   const [settings, setSettings] = useState<CheckpointSettings>(defaultSettings);
   const [needsSettings, setNeedsSettings] = useState(false);
+  const [dialog, setDialog] = useState<DialogState>(null);
 
   const managerRef = useRef<BleManager | null>(null);
   const clientRef = useRef<CheckpointClient | null>(null);
@@ -464,9 +470,10 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
         const code = await client.cmdLedSet(muted, brightness);
         appendLog(`[ui] led-apply muted=${muted} bright=${brightness} status=${ctrlStatusText(code)}`);
         await client.reqStatus();
+        if (code === CTRL_OK) showToast("LED settings applied.");
       });
     },
-    [appendLog, withClient],
+    [appendLog, showToast, withClient],
   );
 
   const applySync = useCallback(
@@ -475,9 +482,12 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
         const code = await client.cmdSyncSet(enabled);
         appendLog(`[ui] sync-apply enabled=${enabled} status=${ctrlStatusText(code)}`);
         await client.reqStatus();
+        if (code === CTRL_OK) {
+          showToast(`Auto-sync ${enabled ? "enabled" : "disabled"}.`);
+        }
       });
     },
-    [appendLog, withClient],
+    [appendLog, showToast, withClient],
   );
 
   const listPrev = useCallback(async () => {
@@ -498,9 +508,10 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
         appendLog(`[ui] file-delete ${path} status=${ctrlStatusText(code)}`);
         await client.reqStorage();
         await client.reqList(listPage.start);
+        if (code === CTRL_OK) showToast("File deleted.");
       });
     },
-    [appendLog, listPage.start, withClient],
+    [appendLog, listPage.start, showToast, withClient],
   );
 
   const eraseStorage = useCallback(async () => {
@@ -517,8 +528,9 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       setListPage({ start: 0, total: 0, count: 0 });
       await client.reqStorage();
       await client.reqList(0);
+      if ((confirmed.status ?? 1) === CTRL_OK) showToast("All recordings erased.");
     });
-  }, [appendLog, withClient]);
+  }, [appendLog, showToast, withClient]);
 
   const updateSettings = useCallback(
     async (next: CheckpointSettings) => {
@@ -526,8 +538,9 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       setSettings(next);
       settingsRef.current = next;
       appendLog("[ui] settings saved");
+      showToast("Saved.");
     },
-    [appendLog],
+    [appendLog, showToast],
   );
 
   const clearLogs = useCallback(() => setLogs([]), []);
@@ -563,26 +576,18 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     }
   }, [appendLog]);
 
-  const confirmDelete = useCallback(
-    (path: string) => {
-      Alert.alert("Delete file", `Delete ${path} from the pendant? This cannot be undone.`, [
-        { text: "Cancel", style: "cancel" },
-        { text: "Delete", style: "destructive", onPress: () => void deleteFile(path) },
-      ]);
-    },
-    [deleteFile],
-  );
+  const requestDelete = useCallback((path: string) => setDialog({ kind: "delete", path }), []);
 
-  const confirmErase = useCallback(() => {
-    Alert.alert(
-      "Erase all recordings",
-      "Erase ALL recordings from the pendant SD card? This cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Erase all", style: "destructive", onPress: () => void eraseStorage() },
-      ],
-    );
-  }, [eraseStorage]);
+  const requestErase = useCallback(() => setDialog({ kind: "erase" }), []);
+
+  const cancelDialog = useCallback(() => setDialog(null), []);
+
+  const confirmDialog = useCallback(() => {
+    const pending = dialog;
+    setDialog(null);
+    if (pending?.kind === "delete") void deleteFile(pending.path);
+    if (pending?.kind === "erase") void eraseStorage();
+  }, [dialog, deleteFile, eraseStorage]);
 
   const value = useMemo<CheckpointContextValue>(
     () => ({
@@ -609,8 +614,8 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       toggleRec,
       applyLed,
       applySync,
-      deleteFile: confirmDelete,
-      eraseStorage: confirmErase,
+      requestDelete,
+      requestErase,
       updateSettings,
       shareBench,
       clearLogs,
@@ -623,8 +628,6 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       busy,
       claimText,
       clearLogs,
-      confirmDelete,
-      confirmErase,
       connect,
       connected,
       deviceName,
@@ -639,6 +642,8 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       openAppSettings,
       refreshStatus,
       refreshStorage,
+      requestDelete,
+      requestErase,
       settings,
       shareBench,
       status,
@@ -649,5 +654,24 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     ],
   );
 
-  return <CheckpointContext.Provider value={value}>{children}</CheckpointContext.Provider>;
+  const dialogFile = dialog?.kind === "delete" ? dialog.path : "";
+
+  return (
+    <CheckpointContext.Provider value={value}>
+      {children}
+      <ConfirmDialog
+        visible={dialog !== null}
+        title={dialog?.kind === "erase" ? "Erase all recordings" : "Delete file"}
+        body={
+          dialog?.kind === "erase"
+            ? "Erase ALL recordings from the pendant SD card? This cannot be undone. Type ERASE to confirm."
+            : `Delete ${dialogFile} from the pendant? This cannot be undone.`
+        }
+        confirmLabel={dialog?.kind === "erase" ? "Erase all" : "Delete"}
+        requireText={dialog?.kind === "erase" ? "ERASE" : undefined}
+        onCancel={cancelDialog}
+        onConfirm={confirmDialog}
+      />
+    </CheckpointContext.Provider>
+  );
 }
