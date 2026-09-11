@@ -6,6 +6,7 @@ import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { useToast } from "@/providers/toast-provider";
 
 import { CTRL_OK, DEVICE_NAME } from "../config.ts";
+import { networkMonitor } from "../networkMonitor.ts";
 import {
   defaultSettings,
   loadSettings,
@@ -49,6 +50,7 @@ interface CheckpointContextValue {
   clearLogs: () => void;
   needsSettings: boolean;
   openAppSettings: () => Promise<void>;
+  testConnection: () => Promise<void>;
 }
 
 const CheckpointContext = createContext<CheckpointContextValue | null>(null);
@@ -71,10 +73,13 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     void loadSettings().then((loaded) => {
       setSettings(loaded);
       syncEngine.configure(loaded);
+      networkMonitor.configure(loaded.serverUrl);
       void syncEngine.start();
+      void networkMonitor.start();
     });
     return () => {
       void syncEngine.stop();
+      networkMonitor.stop();
     };
   }, []);
 
@@ -123,11 +128,17 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       await saveSettings(next);
       setSettings(next);
       syncEngine.configure(next);
+      networkMonitor.configure(next.serverUrl);
       await syncEngine.applyAutoSyncIfConnected();
       showToast("Saved.");
     },
     [showToast],
   );
+
+  const testConnection = useCallback(async () => {
+    const ok = await syncEngine.testConnection();
+    showToast(ok ? "Server reachable." : "Server unreachable — see debug log.");
+  }, [showToast]);
 
   const openAppSettings = useCallback(async () => {
     try {
@@ -180,6 +191,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       clearLogs: syncEngine.clearLogs,
       needsSettings: snapshot.needsSettings,
       openAppSettings,
+      testConnection,
     }),
     [
       applyLed,
@@ -193,6 +205,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       requestErase,
       settings,
       snapshot,
+      testConnection,
       updateSettings,
     ],
   );

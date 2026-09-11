@@ -17,6 +17,7 @@ import {
   STATUS_POLL_INTERVAL_S,
 } from "./config.ts";
 import { IngestionUploader } from "./ingestion.ts";
+import { networkMonitor } from "./networkMonitor.ts";
 import { ctrlStatusText } from "./parsers.ts";
 import { defaultSettings, type CheckpointSettings } from "./settings.ts";
 import { checkSpeech, shouldUpload, vadSkipReason } from "./vad.ts";
@@ -111,6 +112,17 @@ class SyncEngine {
   async applyAutoSyncIfConnected(): Promise<void> {
     if (!this.snapshot.connected || !this.client) return;
     await this.applyDesiredSync(this.client);
+  }
+
+  async testConnection(): Promise<boolean> {
+    this.appendLog(`[net] testing ${this.settings.serverUrl} …`);
+    const probe = await networkMonitor.probeNow();
+    if (!probe) {
+      this.appendLog("[net] test skipped: no internet connection");
+      return false;
+    }
+    this.appendLog(`[net] ${probe.ok ? "reachable" : "unreachable"} in ${probe.latencyMs}ms`);
+    return probe.ok;
   }
 
   private async maybeAutoConnect(): Promise<void> {
@@ -260,7 +272,7 @@ class SyncEngine {
         vadSpeechS: verdict.speechS.toFixed(2),
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message.slice(0, 200) : "unknown";
+      const message = error instanceof Error ? error.message : "unknown";
       this.appendLog(`  [!] ingest failed: ${message}`);
       client.reportResult({
         fileId: file.fileIdHex,

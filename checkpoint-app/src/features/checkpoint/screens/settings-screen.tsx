@@ -23,7 +23,7 @@ function thresholdHint(value: number): string {
 }
 
 export function CheckpointSettingsScreen() {
-  const { settings, updateSettings } = useCheckpoint();
+  const { settings, updateSettings, testConnection } = useCheckpoint();
   const [draft, setDraft] = useState<CheckpointSettings>(settings);
   const [userIdError, setUserIdError] = useState<string | null>(null);
 
@@ -112,6 +112,10 @@ export function CheckpointSettingsScreen() {
         </Card>
 
         <BatteryOptimizationCard />
+
+        <Button variant="outline" onPress={() => void testConnection()}>
+          <Text>Test server connection</Text>
+        </Button>
 
         <Collapsible title="Advanced — developer">
           <View className="gap-1">

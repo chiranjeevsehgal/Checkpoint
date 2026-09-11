@@ -15,6 +15,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function describeError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause = error.cause;
+  const causeText = cause instanceof Error ? cause.message : cause ? String(cause) : "";
+  if (causeText && !error.message.includes(causeText)) {
+    return `${error.message} (cause: ${causeText})`;
+  }
+  return error.message;
+}
+
 export interface CompletedUpload {
   uploadId: string;
   status: string;
@@ -96,34 +106,48 @@ export class IngestionUploader {
     }
     const headers: Record<string, string> = {};
     if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey.slice(0, 128);
-    const created = await apiFetch<CreateResponse>(
-      `${this.baseUrl}/v1/uploads`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          filename,
-          content_type: contentType,
-          size_bytes: data.length,
-        }),
-        signal: this.signal(),
-        headers,
-      },
-      this.userId,
-    );
+    let created: CreateResponse;
+    try {
+      created = await apiFetch<CreateResponse>(
+        `${this.baseUrl}/v1/uploads`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            filename,
+            content_type: contentType,
+            size_bytes: data.length,
+          }),
+          signal: this.signal(),
+          headers,
+        },
+        this.userId,
+      );
+    } catch (error) {
+      throw new Error(`create failed: ${describeError(error)}`);
+    }
     if (!created?.upload_id || !created?.upload?.url) {
       throw new Error("create: unexpected response");
     }
-    await apiPutBytes(created.upload.url, data, contentType);
+    try {
+      await apiPutBytes(created.upload.url, data, contentType);
+    } catch (error) {
+      throw new Error(`put failed: ${describeError(error)}`);
+    }
     const checksum = bytesToHex(sha256(data));
-    const completed = await apiFetch<StatusResponse>(
-      `${this.baseUrl}/v1/uploads/${created.upload_id}/complete`,
-      {
-        method: "POST",
-        body: JSON.stringify({ size_bytes: data.length, checksum_sha256: checksum }),
-        signal: this.signal(),
-      },
-      this.userId,
-    );
+    let completed: StatusResponse;
+    try {
+      completed = await apiFetch<StatusResponse>(
+        `${this.baseUrl}/v1/uploads/${created.upload_id}/complete`,
+        {
+          method: "POST",
+          body: JSON.stringify({ size_bytes: data.length, checksum_sha256: checksum }),
+          signal: this.signal(),
+        },
+        this.userId,
+      );
+    } catch (error) {
+      throw new Error(`complete failed: ${describeError(error)}`);
+    }
     const doneStatus = completed?.status ?? "";
     if (doneStatus !== "READY" && doneStatus !== "SUBMITTED") {
       throw new Error(`complete: unexpected status ${doneStatus}`);
