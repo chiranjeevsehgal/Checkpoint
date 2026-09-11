@@ -3,6 +3,7 @@ import { useEffect, useMemo } from 'react';
 import { Animated, ScrollView, View } from 'react-native';
 
 import { AppHeader } from '@/components/shared/app-header';
+import { BatteryOptimizationCard } from '@/components/shared/battery-optimization-card';
 import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
@@ -153,6 +154,8 @@ export function ConnectScreen() {
             onChange={(next) => void updateSettings({ ...settings, keepFiles: next })}
           />
         </Card>
+
+        <BatteryOptimizationCard />
 
         <LogView logs={logs} onClear={clearLogs} />
       </ScrollView>

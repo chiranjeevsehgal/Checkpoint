@@ -19,7 +19,6 @@ interface DeviceControls {
   session: boolean;
   muted?: boolean;
   brightness?: number;
-  sync?: boolean;
 }
 
 function StatCell({ value, label }: { value: number; label: string }) {
@@ -39,7 +38,7 @@ export function DeviceScreen() {
   const active = controls.session === connected ? controls : { session: connected };
   const muted = active.muted ?? status?.muted ?? false;
   const brightness = active.brightness ?? status?.brightness ?? 30;
-  const sync = active.sync ?? status?.sync ?? true;
+  const sync = status?.sync ?? false;
 
   const updateControls = (patch: Partial<Omit<DeviceControls, 'session'>>) => {
     setControls({ ...active, ...patch, session: connected });
@@ -110,10 +109,7 @@ export function DeviceScreen() {
               label="Auto-sync"
               description="Sync recordings automatically"
               value={sync}
-              onChange={(next) => {
-                updateControls({ sync: next });
-                void applySync(next);
-              }}
+              onChange={(next) => void applySync(next)}
             />
           </Card>
         </ScrollView>

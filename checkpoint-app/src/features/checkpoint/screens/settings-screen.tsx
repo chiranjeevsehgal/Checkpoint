@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
 import { AppHeader } from '@/components/shared/app-header';
+import { BatteryOptimizationCard } from '@/components/shared/battery-optimization-card';
 import { Collapsible } from '@/components/shared/collapsible';
 import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
@@ -10,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { RangeSlider } from '@/components/ui/slider';
 import { Text } from '@/components/ui/text';
 
+import { Toggle } from '../components/toggle.tsx';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { isValidUserId } from '../parsers.ts';
 import type { CheckpointSettings } from '../settings.ts';
@@ -81,6 +83,35 @@ export function CheckpointSettingsScreen() {
             </Text>
           </View>
         </Card>
+
+        <Card>
+          <CardKicker>Synchronization</CardKicker>
+          <Toggle
+            label="Sync automatically"
+            description="Connect and sync recordings without opening the app."
+            value={draft.autoSyncEnabled}
+            onChange={(next) => set('autoSyncEnabled', next)}
+          />
+          <View className="gap-1">
+            <View className="flex-row justify-between">
+              <Text className="text-[12px]">Keep completed transfers</Text>
+              <Text className="font-mono text-[12px]">{draft.retentionHours}h</Text>
+            </View>
+            <RangeSlider
+              min={1}
+              max={168}
+              step={1}
+              value={draft.retentionHours}
+              onValueChange={(value) => set('retentionHours', Math.round(value))}
+            />
+            <Text variant="muted" className="text-[11px]">
+              Completed transfers and their local audio are cleaned up after {draft.retentionHours}
+              h. Pending and failed audio is never deleted.
+            </Text>
+          </View>
+        </Card>
+
+        <BatteryOptimizationCard />
 
         <Collapsible title="Advanced — developer">
           <View className="gap-1">

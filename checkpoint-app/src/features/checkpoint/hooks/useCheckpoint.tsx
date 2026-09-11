@@ -71,7 +71,11 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     void loadSettings().then((loaded) => {
       setSettings(loaded);
       syncEngine.configure(loaded);
+      void syncEngine.start();
     });
+    return () => {
+      void syncEngine.stop();
+    };
   }, []);
 
   const connect = useCallback(async () => {
@@ -119,6 +123,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       await saveSettings(next);
       setSettings(next);
       syncEngine.configure(next);
+      await syncEngine.applyAutoSyncIfConnected();
       showToast("Saved.");
     },
     [showToast],

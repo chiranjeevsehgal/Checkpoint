@@ -12,8 +12,7 @@ import {
  */
 export async function ensureBlePermissions(): Promise<GateResult> {
   if (Platform.OS !== "android") return "granted";
-  const apiLevel = typeof Platform.Version === "number" ? Platform.Version : 0;
-  const wanted = requiredPermissions(Platform.OS, apiLevel) as Permission[];
+  const wanted = requiredPermissions(Platform.OS, currentApiLevel()) as Permission[];
   const results = await PermissionsAndroid.requestMultiple(wanted);
   const granted = wanted.map(
     (name) =>
@@ -26,4 +25,19 @@ export async function ensureBlePermissions(): Promise<GateResult> {
       PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN,
   );
   return summarizeGrants(granted, blocked);
+}
+
+/**
+ * Check BLE permissions without prompting. Used by auto-connect on launch so a
+ * cold start never shows a permission dialog unrelated to user intent.
+ */
+export async function hasBlePermissions(): Promise<boolean> {
+  if (Platform.OS !== "android") return true;
+  const wanted = requiredPermissions(Platform.OS, currentApiLevel()) as Permission[];
+  const checks = await Promise.all(wanted.map((name) => PermissionsAndroid.check(name)));
+  return checks.every(Boolean);
+}
+
+function currentApiLevel(): number {
+  return typeof Platform.Version === "number" ? Platform.Version : 0;
 }

@@ -1,10 +1,12 @@
+import { AppState } from "react-native";
 import { BleManager } from "react-native-ble-plx";
 import { Directory, File, Paths } from "expo-file-system";
 import { isAvailableAsync, shareAsync } from "expo-sharing";
 
 import { CheckpointClient, type CompletedFile } from "./client.ts";
 import { parseClaimHex } from "./claim.ts";
-import { ensureBlePermissions } from "./permissions.ts";
+import { getEnrolledDeviceId } from "./credentials.ts";
+import { ensureBlePermissions, hasBlePermissions } from "./permissions.ts";
 import {
   CTRL_ERASE_ARM,
   CTRL_ERASE_CONFIRM,
@@ -70,6 +72,8 @@ class SyncEngine {
   private settings: CheckpointSettings = defaultSettings();
   private listeners = new Set<() => void>();
   private snapshot: EngineSnapshot = INITIAL_SNAPSHOT;
+  private started = false;
+  private appStateSubscription: ReturnType<typeof AppState.addEventListener> | null = null;
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -82,6 +86,86 @@ class SyncEngine {
 
   configure(settings: CheckpointSettings): void {
     this.settings = settings;
+  }
+
+  async start(): Promise<void> {
+    if (this.started) return;
+    this.started = true;
+    this.appendLog("[sync] engine started");
+    this.appStateSubscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        void this.onForeground();
+      }
+    });
+    await this.maybeAutoConnect();
+  }
+
+  async stop(): Promise<void> {
+    if (!this.started) return;
+    this.started = false;
+    this.appStateSubscription?.remove();
+    this.appStateSubscription = null;
+    await this.disconnect();
+  }
+
+  async applyAutoSyncIfConnected(): Promise<void> {
+    if (!this.snapshot.connected || !this.client) return;
+    await this.applyDesiredSync(this.client);
+  }
+
+  private async maybeAutoConnect(): Promise<void> {
+    if (!this.settings.autoSyncEnabled) {
+      this.appendLog("[sync] auto-connect skipped: auto-sync is off");
+      return;
+    }
+    if (this.snapshot.connected || this.snapshot.busy) return;
+    const enrolled = await getEnrolledDeviceId();
+    if (!enrolled) {
+      this.appendLog("[sync] auto-connect skipped: no enrolled pendant");
+      return;
+    }
+    if (!(await hasBlePermissions())) {
+      this.appendLog("[sync] auto-connect deferred: Bluetooth permission missing");
+      return;
+    }
+    if (!this.manager) this.manager = new BleManager();
+    let adapter: string;
+    try {
+      adapter = await this.manager.state();
+    } catch {
+      adapter = "Unknown";
+    }
+    if (adapter !== "PoweredOn") {
+      this.appendLog(`[sync] auto-connect deferred: Bluetooth ${adapter}`);
+      return;
+    }
+    this.appendLog("[sync] auto-connecting to enrolled pendant");
+    await this.connect(DEVICE_NAME, "");
+  }
+
+  private async applyDesiredSync(client: CheckpointClient): Promise<void> {
+    try {
+      const status = await client.reqStatus();
+      if (status.sync === this.settings.autoSyncEnabled) {
+        this.appendLog(`[sync] pendant sync already ${status.sync}`);
+        return;
+      }
+      const code = await client.cmdSyncSet(this.settings.autoSyncEnabled);
+      this.appendLog(
+        `[sync] pendant sync set ${this.settings.autoSyncEnabled} status=${ctrlStatusText(code)}`,
+      );
+      await client.reqStatus();
+    } catch (error) {
+      this.appendLog(`[sync] apply failed: ${error instanceof Error ? error.message : "unknown"}`);
+    }
+  }
+
+  private async onForeground(): Promise<void> {
+    if (this.snapshot.connected) {
+      await this.applyAutoSyncIfConnected();
+      return;
+    }
+    await this.maybeAutoConnect();
   }
 
   private setState(patch: Partial<EngineSnapshot>): void {
@@ -284,11 +368,7 @@ class SyncEngine {
           onReady: async () => {
             this.setState({ connected: true, busy: false });
             this.appendLog("[ui] listening for file transfers …");
-            try {
-              await client.reqStatus();
-            } catch (error) {
-              this.appendLog(`[ui] initial status failed: ${error instanceof Error ? error.message : "unknown"}`);
-            }
+            await this.applyDesiredSync(client);
             try {
               await client.reqStorage();
               await client.reqList(0);
