@@ -66,7 +66,7 @@ class PlaybackController {
     const file = this.writePreview(data);
     const context = this.ensureContext();
     if (context.state === 'suspended') await context.resume();
-    const source = context.createBufferSource({ pitchCorrection: false });
+    const source = context.createBufferSource({ pitchCorrection: true });
     source.buffer = await decodeAudioData(toArrayBuffer(data));
     source.connect(context.destination);
     source.playbackRate.value = SLOW_PLAYBACK_RATE;

@@ -814,14 +814,13 @@ class SyncEngine {
     if (!this.client) return null;
     this.setState({ deleting: path });
     try {
-      const start = this.snapshot.listPage.start;
-      return await this.withClient('file-delete', async (client) => {
-        const code = await client.cmdFileDelete(path);
-        this.appendLog(`[ui] file-delete ${path} status=${ctrlStatusText(code)}`);
-        await client.reqStorage();
-        await client.reqList(start);
-        return code;
+      const code = await this.withClient('file-delete', async (client) => {
+        const status = await client.cmdFileDelete(path);
+        this.appendLog(`[ui] file-delete ${path} status=${ctrlStatusText(status)}`);
+        return status;
       });
+      await this.refreshStorage();
+      return code;
     } finally {
       this.setState({ deleting: null });
     }
