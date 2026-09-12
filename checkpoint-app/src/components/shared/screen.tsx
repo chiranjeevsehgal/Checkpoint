@@ -13,7 +13,7 @@ export function Screen({
       style={{ flex: 1 }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <SafeAreaView className={cn('flex-1 bg-background px-5', className)} {...props}>
+      <SafeAreaView className={cn('flex-1 bg-background px-4', className)} {...props}>
         {children}
       </SafeAreaView>
     </KeyboardAvoidingView>

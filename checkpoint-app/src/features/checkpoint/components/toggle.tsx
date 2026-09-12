@@ -1,5 +1,6 @@
 import { Pressable, View } from 'react-native';
 
+import { Switch } from '@/components/ui/switch';
 import { Text } from '@/components/ui/text';
 import { cn } from '@/lib/utils';
 
@@ -31,14 +32,7 @@ export function Toggle({ label, description, value, onChange, disabled }: Toggle
           </Text>
         ) : null}
       </View>
-      <View
-        className={cn(
-          'h-6 w-11 flex-none justify-center',
-          value ? 'items-end bg-primary' : 'items-start bg-border',
-        )}
-      >
-        <View className="m-0.5 h-[18px] w-[18px] bg-switch-thumb" />
-      </View>
+      <Switch value={value} onValueChange={onChange} disabled={disabled} />
     </Pressable>
   );
 }
