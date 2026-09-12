@@ -185,10 +185,17 @@ first `docker compose build embedding` downloads it once; no volume or
 internet is needed at runtime. Worker RAM sits around 3–4 GB during
 inference, so give Docker Desktop at least ~6 GB.
 
+Watch progress with plain output — the model step prints a rolling
+`[model] ...` line every 15 s so the big download is never a silent hang:
+
 ```bash
-docker compose up -d --build embedding
+docker compose build --progress=plain embedding
+docker compose up -d embedding
 docker compose logs -f embedding     # "listening on kafka topic embedding.jobs.v1 ..."
 ```
+
+The `embedding-migrate` job builds from a separate slim stage (psycopg
+only) and does not pull the model layers.
 
 Delivery semantics mirror the transcription service: offsets commit only
 after a message is embedded and stored; poison messages (bad JSON, empty

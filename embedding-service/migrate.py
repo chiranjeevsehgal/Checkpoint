@@ -45,10 +45,10 @@ def ensure_version_table(cur) -> None:
     cur.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {VERSION_TABLE} (
-            id         INTEGER PRIMARY KEY,
+            id SERIAL PRIMARY KEY,
             version_id BIGINT NOT NULL,
             is_applied BOOLEAN NOT NULL,
-            tstamp     TIMESTAMP NULL DEFAULT now()
+            tstamp TIMESTAMP NULL DEFAULT now()
         )
         """
     )
