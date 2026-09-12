@@ -1,13 +1,13 @@
 import { Trash2 } from 'lucide-react-native';
 import { FlatList, Pressable, View } from 'react-native';
 
+import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { fileStateLabel, formatBytes } from '../parsers.ts';
 import type { DeviceFileEntry } from '../types.ts';
 
 import { AppHeader } from '@/components/shared/app-header';
 import { EmptyState } from '@/components/shared/empty-state';
-import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
@@ -78,7 +78,7 @@ export function StorageScreen() {
   const files = fileList?.entries ?? [];
 
   return (
-    <Screen>
+    <CheckpointScreen>
       <AppHeader title="Storage" subtitle="Pendant SD card" />
       <FlatList
         className="flex-1"
@@ -158,6 +158,6 @@ export function StorageScreen() {
           </View>
         }
       />
-    </Screen>
+    </CheckpointScreen>
   );
 }

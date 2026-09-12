@@ -1,9 +1,10 @@
 import { BluetoothOff, TriangleAlert } from 'lucide-react-native';
 import { View } from 'react-native';
 
+import { useBluetoothState } from '../hooks/useBluetoothState.ts';
+
 import { Icon } from '@/components/ui/icon';
 import { Text } from '@/components/ui/text';
-import { useBluetoothState } from '@/features/checkpoint/hooks/useBluetoothState.ts';
 import { cn } from '@/lib/utils';
 
 const BANNERS = {

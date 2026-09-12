@@ -2,12 +2,12 @@ import { Play, RefreshCw, Square } from 'lucide-react-native';
 import { useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
+import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
 import { Toggle } from '../components/toggle.tsx';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 
 import { AppHeader } from '@/components/shared/app-header';
 import { EmptyState } from '@/components/shared/empty-state';
-import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
@@ -51,7 +51,7 @@ export function DeviceScreen() {
   const levelPct = status ? Math.max(0, Math.min(100, ((status.levelDbfs + 60) / 60) * 100)) : 0;
 
   return (
-    <Screen>
+    <CheckpointScreen>
       <AppHeader title="Device" subtitle="BLE remote control" />
       {!connected ? (
         <EmptyState title="Not connected" hint="Connect to a pendant to control it." />
@@ -123,6 +123,6 @@ export function DeviceScreen() {
           </Card>
         </ScrollView>
       )}
-    </Screen>
+    </CheckpointScreen>
   );
 }

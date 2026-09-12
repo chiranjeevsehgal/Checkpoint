@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { Text } from '@/components/ui/text';
-import { useBatteryOptimization } from '@/features/checkpoint/hooks/useBatteryOptimization.ts';
+import { useBatteryOptimization } from '@/hooks/useBatteryOptimization';
 
 function androidPackage(): string {
   return Constants.expoConfig?.android?.package ?? 'com.boredom1234.checkpointapp';

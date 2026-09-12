@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
+import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
 import { Toggle } from '../components/toggle.tsx';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { isValidUserId } from '../parsers.ts';
@@ -9,7 +10,6 @@ import type { CheckpointSettings } from '../settings.ts';
 import { AppHeader } from '@/components/shared/app-header';
 import { BatteryOptimizationCard } from '@/components/shared/battery-optimization-card';
 import { Collapsible } from '@/components/shared/collapsible';
-import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -45,7 +45,7 @@ export function CheckpointSettingsScreen() {
   };
 
   return (
-    <Screen>
+    <CheckpointScreen>
       <AppHeader title="Settings" subtitle="Server, identity and VAD" />
       <ScrollView
         className="flex-1"
@@ -155,6 +155,6 @@ export function CheckpointSettingsScreen() {
           <Text>Save settings</Text>
         </Button>
       </ScrollView>
-    </Screen>
+    </CheckpointScreen>
   );
 }

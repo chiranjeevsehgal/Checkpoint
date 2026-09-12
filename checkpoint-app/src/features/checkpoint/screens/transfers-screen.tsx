@@ -2,13 +2,13 @@ import { Upload } from 'lucide-react-native';
 import { Fragment, useState } from 'react';
 import { FlatList, Pressable, View } from 'react-native';
 
+import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { isTerminal, type TransferRecord } from '../transferStore.ts';
 import { transferView, type TransferStage, type TransferView } from '../transferView.ts';
 
 import { AppHeader } from '@/components/shared/app-header';
 import { EmptyState } from '@/components/shared/empty-state';
-import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
@@ -126,7 +126,7 @@ export function TransfersScreen() {
   const queued = transfers.filter((item) => !isTerminal(item) && item.localUri).length;
 
   return (
-    <Screen>
+    <CheckpointScreen>
       <AppHeader title="Transfers" subtitle={`${transfers.length} audio items`} />
       <FlatList
         className="flex-1"
@@ -185,6 +185,6 @@ export function TransfersScreen() {
           />
         }
       />
-    </Screen>
+    </CheckpointScreen>
   );
 }

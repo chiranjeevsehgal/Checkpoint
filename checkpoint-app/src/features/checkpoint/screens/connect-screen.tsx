@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo } from 'react';
 import { Animated, Pressable, ScrollView, View } from 'react-native';
 
 import { parseClaimHex } from '../claim.ts';
+import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
 import { LogView } from '../components/log-view.tsx';
 import { Toggle } from '../components/toggle.tsx';
 import { DEVICE_NAME } from '../config.ts';
@@ -14,7 +15,6 @@ import { isInProgress } from '../transferStore.ts';
 
 import { AppHeader } from '@/components/shared/app-header';
 import { BatteryOptimizationCard } from '@/components/shared/battery-optimization-card';
-import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
@@ -135,7 +135,7 @@ export function ConnectScreen() {
   const showSettings = view.openSettings || needsSettings;
 
   return (
-    <Screen>
+    <CheckpointScreen>
       <AppHeader title="Connect" subtitle={view.label} />
       <ScrollView
         className="flex-1"
@@ -302,6 +302,6 @@ export function ConnectScreen() {
 
         <LogView logs={logs} onClear={clearLogs} />
       </ScrollView>
-    </Screen>
+    </CheckpointScreen>
   );
 }
