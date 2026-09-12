@@ -1,4 +1,4 @@
-import { UPLOAD_RETRY_DELAYS_MS } from "./config.ts";
+import { UPLOAD_RETRY_DELAYS_MS } from './config.ts';
 
 export function nextRetryDelayMs(attempts: number): number {
   if (attempts <= 0) return UPLOAD_RETRY_DELAYS_MS[0]!;

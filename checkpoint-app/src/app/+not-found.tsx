@@ -11,7 +11,7 @@ export default function NotFoundScreen() {
         <Text variant="h1">404</Text>
         <Text variant="muted">This screen does not exist.</Text>
         <Link href="/(app)/(tabs)/connect">
-          <Text variant="large" className="text-primary">
+          <Text variant="large" className="text-primary-text">
             Go home
           </Text>
         </Link>

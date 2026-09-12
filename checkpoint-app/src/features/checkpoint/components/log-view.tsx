@@ -1,3 +1,4 @@
+import * as Clipboard from 'expo-clipboard';
 import { useCallback, useRef } from 'react';
 import {
   Pressable,
@@ -6,7 +7,6 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
-import * as Clipboard from 'expo-clipboard';
 
 import { Collapsible } from '@/components/shared/collapsible';
 import { Text } from '@/components/ui/text';
@@ -24,8 +24,7 @@ export function LogView({ logs, onClear }: LogViewProps) {
 
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const distanceFromBottom =
-      contentSize.height - (contentOffset.y + layoutMeasurement.height);
+    const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
     nearBottom.current = distanceFromBottom <= NEAR_BOTTOM_PX;
   }, []);
 
@@ -42,7 +41,7 @@ export function LogView({ logs, onClear }: LogViewProps) {
       <ScrollView
         ref={scrollRef}
         nestedScrollEnabled
-        className="bg-input-bg h-52 p-2"
+        className="h-52 bg-input-bg p-2"
         contentContainerStyle={{ paddingBottom: 8 }}
         onScroll={handleScroll}
         scrollEventThrottle={16}
@@ -62,10 +61,10 @@ export function LogView({ logs, onClear }: LogViewProps) {
       </ScrollView>
       <View className="flex-row gap-3">
         <Pressable onPress={copyLogs} accessibilityRole="button" className="self-start">
-          <Text className="font-display text-primary text-xs">Copy logs</Text>
+          <Text className="font-display text-xs text-primary-text">Copy logs</Text>
         </Pressable>
         <Pressable onPress={onClear} accessibilityRole="button" className="self-start">
-          <Text className="font-display text-primary text-xs">Clear</Text>
+          <Text className="font-display text-xs text-primary-text">Clear</Text>
         </Pressable>
       </View>
     </Collapsible>

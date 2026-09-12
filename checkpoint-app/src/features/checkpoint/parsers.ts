@@ -16,14 +16,9 @@ import {
   CTRL_LIST_FLAG_PENDING,
   CTRL_OK,
   CTRL_STORAGE_LEN,
-} from "./config.ts";
-import { decodeUtf8 } from "./ogg.ts";
-import type {
-  DeviceFileList,
-  DeviceStatus,
-  LedState,
-  StorageInfo,
-} from "./types.ts";
+} from './config.ts';
+import { decodeUtf8 } from './ogg.ts';
+import type { DeviceFileList, DeviceStatus, LedState, StorageInfo } from './types.ts';
 
 const textEncoder = new TextEncoder();
 
@@ -62,7 +57,7 @@ export function parseFileList(payload: Uint8Array): DeviceFileList | null {
   const start = view.getUint16(0, true);
   const total = view.getUint16(2, true);
   const count = payload[4]!;
-  const entries: DeviceFileList["entries"] = [];
+  const entries: DeviceFileList['entries'] = [];
   let offset = 5;
   for (let i = 0; i < count; i++) {
     if (offset + 1 > payload.length) break;
@@ -76,11 +71,7 @@ export function parseFileList(payload: Uint8Array): DeviceFileList | null {
       break;
     }
     offset += nameLen;
-    const entryView = new DataView(
-      payload.buffer,
-      payload.byteOffset + offset,
-      4,
-    );
+    const entryView = new DataView(payload.buffer, payload.byteOffset + offset, 4);
     const size = entryView.getUint32(0, true);
     const flags = payload[offset + 4]!;
     offset += 5;
@@ -146,28 +137,28 @@ export function buildListReqPayload(start: number): Uint8Array {
 export function ctrlStatusText(status: number): string {
   switch (status) {
     case CTRL_OK:
-      return "ok";
+      return 'ok';
     case CTRL_ERR_NOT_READY:
-      return "not-ready";
+      return 'not-ready';
     case CTRL_ERR_NO_SD:
-      return "no-sd";
+      return 'no-sd';
     case CTRL_ERR_BAD_ARG:
-      return "bad-arg";
+      return 'bad-arg';
     case CTRL_ERR_DENIED:
-      return "denied";
+      return 'denied';
     case CTRL_ERR_BUSY:
-      return "busy";
+      return 'busy';
     case CTRL_ERR_NOT_FOUND:
-      return "not-found";
+      return 'not-found';
     default:
-      return `0x${(status & 0xff).toString(16).padStart(2, "0")}`;
+      return `0x${(status & 0xff).toString(16).padStart(2, '0')}`;
   }
 }
 
 export function fileStateLabel(flags: number): string {
-  if (flags & CTRL_LIST_FLAG_ACTIVE) return "recording";
-  if (flags & CTRL_LIST_FLAG_PENDING) return "pending";
-  return "synced";
+  if (flags & CTRL_LIST_FLAG_ACTIVE) return 'recording';
+  if (flags & CTRL_LIST_FLAG_PENDING) return 'pending';
+  return 'synced';
 }
 
 export function formatBytes(value: number): string {

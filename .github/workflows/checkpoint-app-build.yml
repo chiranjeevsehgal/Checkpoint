@@ -4,6 +4,18 @@ on:
   schedule:
     - cron: "30 20 * * *"
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the rolling app-nightly release
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: checkpoint-app-nightly
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -50,12 +62,35 @@ jobs:
       - name: Build APK
         run: npm run build:android -- -PreactNativeArchitectures=arm64-v8a
 
-      - name: Rename APK
-        run: cp android/app/build/outputs/apk/release/app-release.apk checkpoint-debug-app.apk
+      - name: Stage APK
+        run: cp android/app/build/outputs/apk/release/app-release.apk checkpoint-nightly-arm64-v8a.apk
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - name: Build metadata
+        run: echo "BUILD_DATE=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+
+      - name: Checksum
+        run: sha256sum checkpoint-nightly-arm64-v8a.apk > checkpoint-nightly-arm64-v8a.apk.sha256
+
+      - name: Publish nightly release
+        if: ${{ github.event_name == 'schedule' || inputs.publish }}
+        uses: softprops/action-gh-release@v2
         with:
-          name: checkpoint-debug-app
-          path: checkpoint-app/checkpoint-debug-app.apk
-          retention-days: 7
+          tag_name: app-nightly
+          name: Checkpoint app - nightly
+          prerelease: true
+          make_latest: "false"
+          overwrite_files: true
+          files: |
+            checkpoint-app/checkpoint-nightly-arm64-v8a.apk
+            checkpoint-app/checkpoint-nightly-arm64-v8a.apk.sha256
+          body: |
+            Nightly arm64-v8a build of the Checkpoint app.
+
+            - Commit: ${{ github.sha }}
+            - Branch: ${{ github.ref_name }} (${{ github.event_name }})
+            - Date (UTC): ${{ env.BUILD_DATE }}
+            - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - Signed with the debug keystore; not Play Store ready.
+            - arm64-v8a only; needs a 64-bit ARM device.
+
+            Install: `adb install -r checkpoint-nightly-arm64-v8a.apk`

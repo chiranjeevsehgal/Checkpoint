@@ -1,8 +1,8 @@
-import { BLE_FRAG_SIZE, BLE_WINDOW } from "./config.ts";
-import { bytesToHex } from "./crypto.ts";
+import { BLE_FRAG_SIZE, BLE_WINDOW } from './config.ts';
+import { bytesToHex } from './crypto.ts';
 
 export function fileIdHex(fileId: bigint): string {
-  return fileId.toString(16).padStart(16, "0");
+  return fileId.toString(16).padStart(16, '0');
 }
 
 export function contigOf(received: Set<number>): number {
@@ -52,10 +52,7 @@ export class IncomingFile {
   }
 
   isComplete(): boolean {
-    return (
-      this.received.size === this.totalFrags &&
-      this.contigSeq === this.totalFrags - 1
-    );
+    return this.received.size === this.totalFrags && this.contigSeq === this.totalFrags - 1;
   }
 
   data(): Uint8Array {
@@ -104,11 +101,7 @@ export function resumeFrom(received: number[], totalFrags: number): number {
   return resume;
 }
 
-export function shouldSendAck(
-  receivedCount: number,
-  contig: number,
-  totalFrags: number,
-): boolean {
+export function shouldSendAck(receivedCount: number, contig: number, totalFrags: number): boolean {
   return (
     contig >= 0 &&
     (receivedCount % BLE_WINDOW === 0 ||
@@ -118,7 +111,7 @@ export function shouldSendAck(
 }
 
 export function crcHex(crc: number): string {
-  return (crc >>> 0).toString(16).padStart(8, "0");
+  return (crc >>> 0).toString(16).padStart(8, '0');
 }
 
 export function partFileName(fileId: bigint): string {

@@ -1,10 +1,15 @@
 import { useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
+import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
+import { Toggle } from '../components/toggle.tsx';
+import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
+import { isValidUserId } from '../parsers.ts';
+import type { CheckpointSettings } from '../settings.ts';
+
 import { AppHeader } from '@/components/shared/app-header';
 import { BatteryOptimizationCard } from '@/components/shared/battery-optimization-card';
 import { Collapsible } from '@/components/shared/collapsible';
-import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -12,11 +17,6 @@ import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { RangeSlider } from '@/components/ui/slider';
 import { Text } from '@/components/ui/text';
 import { useRefresh } from '@/lib/use-refresh';
-
-import { Toggle } from '../components/toggle.tsx';
-import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
-import { isValidUserId } from '../parsers.ts';
-import type { CheckpointSettings } from '../settings.ts';
 
 function thresholdHint(value: number): string {
   if (value < 0.35) return 'More sensitive — catches quieter speech, more false positives.';
@@ -45,7 +45,7 @@ export function CheckpointSettingsScreen() {
   };
 
   return (
-    <Screen>
+    <CheckpointScreen>
       <AppHeader title="Settings" subtitle="Server, identity and VAD" />
       <ScrollView
         className="flex-1"
@@ -124,7 +124,9 @@ export function CheckpointSettingsScreen() {
 
         <Collapsible title="Advanced — developer">
           <View className="gap-1">
-            <Text className="text-[11px] opacity-65">Server URL (LAN IP for on-device testing)</Text>
+            <Text className="text-[11px] text-subtle-foreground">
+              Server URL (LAN IP for on-device testing)
+            </Text>
             <Input
               value={draft.serverUrl}
               onChangeText={(text) => set('serverUrl', text)}
@@ -134,7 +136,7 @@ export function CheckpointSettingsScreen() {
             />
           </View>
           <View className="gap-1">
-            <Text className="text-[11px] opacity-65">User ID (Bearer token)</Text>
+            <Text className="text-[11px] text-subtle-foreground">User ID (Bearer token)</Text>
             <Input
               value={draft.userId}
               onChangeText={(text) => set('userId', text)}
@@ -143,7 +145,9 @@ export function CheckpointSettingsScreen() {
               placeholder="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
               className="font-mono text-[13px]"
             />
-            {userIdError ? <Text className="text-primary text-[11px]">{userIdError}</Text> : null}
+            {userIdError ? (
+              <Text className="text-[11px] text-destructive">{userIdError}</Text>
+            ) : null}
           </View>
         </Collapsible>
 
@@ -151,6 +155,6 @@ export function CheckpointSettingsScreen() {
           <Text>Save settings</Text>
         </Button>
       </ScrollView>
-    </Screen>
+    </CheckpointScreen>
   );
 }

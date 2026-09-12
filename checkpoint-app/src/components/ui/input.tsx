@@ -1,5 +1,6 @@
-import { cn } from '@/lib/utils';
 import { Platform, TextInput } from 'react-native';
+
+import { cn } from '@/lib/utils';
 
 function Input({
   className,
@@ -8,13 +9,13 @@ function Input({
   return (
     <TextInput
       className={cn(
-        'bg-input-bg border-border text-foreground selection:text-primary-foreground h-9 w-full min-w-0 rounded-none border px-2.5 py-1.5 font-sans text-[14px]',
+        'h-9 w-full min-w-0 rounded-none border border-border bg-input-bg px-2.5 py-1.5 font-sans text-[14px] text-foreground selection:text-primary-foreground',
         props.editable === false && 'opacity-45',
         Platform.select({
-          web: 'placeholder:text-muted-foreground focus-visible:border-primary outline-none transition-colors',
+          web: 'outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-border-strong',
           native: 'placeholder:text-muted-foreground',
         }),
-        className
+        className,
       )}
       {...props}
     />

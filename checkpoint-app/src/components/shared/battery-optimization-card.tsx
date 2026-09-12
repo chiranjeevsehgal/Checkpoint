@@ -1,13 +1,13 @@
+import Constants from 'expo-constants';
+import { openSettings } from 'expo-linking';
 import { BatteryCharging } from 'lucide-react-native';
 import { Linking, Platform } from 'react-native';
-import { openSettings } from 'expo-linking';
-import Constants from 'expo-constants';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { Text } from '@/components/ui/text';
-import { useBatteryOptimization } from '@/features/checkpoint/hooks/useBatteryOptimization.ts';
+import { useBatteryOptimization } from '@/hooks/useBatteryOptimization';
 
 function androidPackage(): string {
   return Constants.expoConfig?.android?.package ?? 'com.boredom1234.checkpointapp';
@@ -40,7 +40,7 @@ export function BatteryOptimizationCard() {
   return (
     <Card>
       <CardKicker>Background sync</CardKicker>
-      <Text className="text-[12px] opacity-75">
+      <Text className="text-[12px] text-muted-foreground">
         Android may pause Bluetooth and uploads when the screen is off. Allow Checkpoint to run
         without battery optimization so recordings keep syncing in the background.
       </Text>

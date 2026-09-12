@@ -1,5 +1,5 @@
-import { BENCH_FIELDNAMES } from "./config.ts";
-import { fileIdHex } from "./transfer.ts";
+import { BENCH_FIELDNAMES } from './config.ts';
+import { fileIdHex } from './transfer.ts';
 
 export interface BenchRow {
   ts: string;
@@ -31,7 +31,7 @@ function percentile(sorted: number[], frac: number): number {
 
 function timestamp(): string {
   const now = new Date();
-  const pad = (n: number) => n.toString().padStart(2, "0");
+  const pad = (n: number) => n.toString().padStart(2, '0');
   return (
     `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
     `T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
@@ -52,12 +52,7 @@ export class BenchRecorder {
     resumeFrom: number;
   } | null = null;
 
-  resetFile(
-    fileId: bigint,
-    total: number,
-    totalFrags: number,
-    resumeFrom: number,
-  ): void {
+  resetFile(fileId: bigint, total: number, totalFrags: number, resumeFrom: number): void {
     this.startTime = Date.now();
     this.gaps = [];
     this.duplicates = 0;
@@ -78,8 +73,8 @@ export class BenchRecorder {
     total: number,
     mtu: number,
     fragSize: number,
-    ingestStatus = "",
-    vadStatus = "",
+    ingestStatus = '',
+    vadStatus = '',
   ): BenchRow | null {
     const meta = this.active;
     if (!meta) return null;
@@ -102,11 +97,11 @@ export class BenchRecorder {
       crcOk,
       resumeFrom: meta.resumeFrom,
       elapsedS: elapsed.toFixed(2),
-      ingestUploadId: "",
+      ingestUploadId: '',
       ingestStatus,
-      ingestError: "",
+      ingestError: '',
       vadStatus,
-      vadSpeechS: "",
+      vadSpeechS: '',
     };
     this.rows.push(row);
     this.active = null;
@@ -117,7 +112,7 @@ export class BenchRecorder {
     fileIdHexValue: string,
     uploadId: string,
     status: string,
-    error = "",
+    error = '',
     vadStatus?: string,
     vadSpeechS?: string,
   ): void {
@@ -132,15 +127,13 @@ export class BenchRecorder {
 
   toCsv(): string {
     const cell = (value: string | number | boolean): string => {
-      const text = typeof value === "boolean" ? (value ? "True" : "False") : String(value);
+      const text = typeof value === 'boolean' ? (value ? 'True' : 'False') : String(value);
       return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
     };
-    const lines = [BENCH_FIELDNAMES.join(",")];
+    const lines = [BENCH_FIELDNAMES.join(',')];
     for (const row of this.rows) {
-      lines.push(
-        BENCH_FIELDNAMES.map((field) => cell(row[field as keyof BenchRow])).join(","),
-      );
+      lines.push(BENCH_FIELDNAMES.map((field) => cell(row[field as keyof BenchRow])).join(','));
     }
-    return lines.join("\n") + "\n";
+    return lines.join('\n') + '\n';
   }
 }

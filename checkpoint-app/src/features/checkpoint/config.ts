@@ -1,9 +1,9 @@
-export const DEVICE_NAME = "Checkpoint";
+export const DEVICE_NAME = 'Checkpoint';
 
-export const SERVICE_UUID = "9a8b0001-4a2b-4e3c-8f1a-5b2c9d0e1f2a";
-export const CTRL_UUID = "9a8b0002-4a2b-4e3c-8f1a-5b2c9d0e1f2a";
-export const DATA_UUID = "9a8b0003-4a2b-4e3c-8f1a-5b2c9d0e1f2a";
-export const ACK_UUID = "9a8b0004-4a2b-4e3c-8f1a-5b2c9d0e1f2a";
+export const SERVICE_UUID = '9a8b0001-4a2b-4e3c-8f1a-5b2c9d0e1f2a';
+export const CTRL_UUID = '9a8b0002-4a2b-4e3c-8f1a-5b2c9d0e1f2a';
+export const DATA_UUID = '9a8b0003-4a2b-4e3c-8f1a-5b2c9d0e1f2a';
+export const ACK_UUID = '9a8b0004-4a2b-4e3c-8f1a-5b2c9d0e1f2a';
 
 export const PROTO_VER = 3;
 export const PROTO_HEADER = 6;
@@ -23,7 +23,7 @@ export const CONNECT_ATTEMPT_LIMIT = 3;
 export const RECONNECT_DELAY_MS = 2000;
 export const COMPLETED_CACHE_SIZE = 16;
 
-export const INGEST_USER_ID_DEFAULT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+export const INGEST_USER_ID_DEFAULT = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 export const INGEST_TIMEOUT_S = 15;
 export const INGEST_MAX_BYTES = 10 * 1024 * 1024;
 export const INGEST_POLL_TIMEOUT_S = 30;
@@ -42,22 +42,16 @@ export const VAD_CONTEXT_SAMPLES = VAD_WINDOW_SAMPLES / 8;
 
 export const STATUS_POLL_INTERVAL_S = 5;
 export const STATUS_PUSH_SEQ = 0;
-export const KAFKA_TOPIC_HINT = "transcription.jobs.v1";
+export const KAFKA_TOPIC_HINT = 'transcription.jobs.v1';
 
 export const MAX_LOG_LINES = 500;
 
 export const TRANSFER_RETENTION_HOURS = 24;
 export const TRANSFER_TICK_MS = 60000;
 export const TRANSFER_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
-export const UPLOAD_RETRY_DELAYS_MS = [
-  5_000,
-  30_000,
-  120_000,
-  600_000,
-  1_800_000,
-] as const;
+export const UPLOAD_RETRY_DELAYS_MS = [5_000, 30_000, 120_000, 600_000, 1_800_000] as const;
 
-export const HEALTH_PATH = "/health/ready";
+export const HEALTH_PATH = '/health/ready';
 export const HEALTH_TIMEOUT_MS = 4000;
 export const HEALTH_POLL_OK_MS = 15000;
 export const HEALTH_POLL_DOWN_MS = 60000;
@@ -66,26 +60,26 @@ export const HEALTH_UNSTABLE_WINDOW_MS = 60000;
 export const HEALTH_SLOW_MS = 3000;
 
 export const BENCH_FIELDNAMES = [
-  "ts",
-  "file_id",
-  "total_bytes",
-  "total_frags",
-  "mtu",
-  "frag_size",
-  "goodput_kBps",
-  "median_rtt_ms",
-  "p95_rtt_ms",
-  "duplicates",
-  "retries",
-  "decrypt_fail",
-  "crc_ok",
-  "resume_from",
-  "elapsed_s",
-  "ingest_upload_id",
-  "ingest_status",
-  "ingest_error",
-  "vad_status",
-  "vad_speech_s",
+  'ts',
+  'file_id',
+  'total_bytes',
+  'total_frags',
+  'mtu',
+  'frag_size',
+  'goodput_kBps',
+  'median_rtt_ms',
+  'p95_rtt_ms',
+  'duplicates',
+  'retries',
+  'decrypt_fail',
+  'crc_ok',
+  'resume_from',
+  'elapsed_s',
+  'ingest_upload_id',
+  'ingest_status',
+  'ingest_error',
+  'vad_status',
+  'vad_speech_s',
 ] as const;
 
 export const PKT_HELLO = 0x01;

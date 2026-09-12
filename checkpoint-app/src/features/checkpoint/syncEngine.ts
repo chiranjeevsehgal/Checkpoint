@@ -1,12 +1,10 @@
-import { AppState } from "react-native";
-import { BleManager, State } from "react-native-ble-plx";
-import { Directory, File, Paths } from "expo-file-system";
-import { isAvailableAsync, shareAsync } from "expo-sharing";
+import { Directory, File, Paths } from 'expo-file-system';
+import { isAvailableAsync, shareAsync } from 'expo-sharing';
+import { AppState } from 'react-native';
+import { BleManager, State } from 'react-native-ble-plx';
 
-import { CheckpointClient, type CompletedFile } from "./client.ts";
-import { parseClaimHex } from "./claim.ts";
-import { getEnrolledDeviceId } from "./credentials.ts";
-import { ensureBlePermissions, hasBlePermissions } from "./permissions.ts";
+import { parseClaimHex } from './claim.ts';
+import { CheckpointClient, type CompletedFile } from './client.ts';
 import {
   CTRL_ERASE_ARM,
   CTRL_ERASE_CONFIRM,
@@ -16,20 +14,21 @@ import {
   MAX_LOG_LINES,
   STATUS_POLL_INTERVAL_S,
   TRANSFER_TICK_MS,
-} from "./config.ts";
-import { IngestionUploader } from "./ingestion.ts";
-import { networkMonitor } from "./networkMonitor.ts";
-import { ctrlStatusText } from "./parsers.ts";
-import { nextRetryDelayMs } from "./retry.ts";
-import { defaultSettings, type CheckpointSettings } from "./settings.ts";
+} from './config.ts';
+import { getEnrolledDeviceId } from './credentials.ts';
+import { IngestionUploader } from './ingestion.ts';
+import { networkMonitor } from './networkMonitor.ts';
+import { ctrlStatusText } from './parsers.ts';
+import { ensureBlePermissions, hasBlePermissions } from './permissions.ts';
+import { nextRetryDelayMs } from './retry.ts';
+import { defaultSettings, type CheckpointSettings } from './settings.ts';
 import {
   deleteSaved,
   loadTransfers,
   readSavedBytes,
   receivedFile,
   saveTransfers,
-} from "./store.ts";
-import { checkSpeech, shouldUpload, vadSkipReason } from "./vad.ts";
+} from './store.ts';
 import {
   applyEventToRecords,
   isTerminal,
@@ -37,13 +36,9 @@ import {
   pruneExpired,
   sortTransfers,
   type TransferRecord,
-} from "./transferStore.ts";
-import type {
-  CheckpointEvent,
-  DeviceFileList,
-  DeviceStatus,
-  StorageInfo,
-} from "./types.ts";
+} from './transferStore.ts';
+import type { CheckpointEvent, DeviceFileList, DeviceStatus, StorageInfo } from './types.ts';
+import { checkSpeech, shouldUpload, vadSkipReason } from './vad.ts';
 
 export interface ListPage {
   start: number;
@@ -51,7 +46,7 @@ export interface ListPage {
   count: number;
 }
 
-export type BluetoothStatus = "on" | "off" | "unauthorized" | "unsupported" | "unknown" | null;
+export type BluetoothStatus = 'on' | 'off' | 'unauthorized' | 'unsupported' | 'unknown' | null;
 
 export interface EngineSnapshot {
   connected: boolean;
@@ -72,7 +67,7 @@ export interface EngineSnapshot {
 const INITIAL_SNAPSHOT: EngineSnapshot = {
   connected: false,
   busy: false,
-  linkState: "idle",
+  linkState: 'idle',
   status: null,
   storage: null,
   fileList: null,
@@ -88,15 +83,15 @@ const INITIAL_SNAPSHOT: EngineSnapshot = {
 function mapBluetoothState(state: State): BluetoothStatus {
   switch (state) {
     case State.PoweredOn:
-      return "on";
+      return 'on';
     case State.PoweredOff:
-      return "off";
+      return 'off';
     case State.Unauthorized:
-      return "unauthorized";
+      return 'unauthorized';
     case State.Unsupported:
-      return "unsupported";
+      return 'unsupported';
     default:
-      return "unknown";
+      return 'unknown';
   }
 }
 
@@ -122,7 +117,7 @@ class SyncEngine {
   private inFlight = new Set<string>();
   private autoConnectGaveUp = false;
   private connectTask: Promise<void> | null = null;
-  private connectOrigin: "user" | "auto" | null = null;
+  private connectOrigin: 'user' | 'auto' | null = null;
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -140,19 +135,19 @@ class SyncEngine {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
-    this.appendLog("[sync] engine started");
+    this.appendLog('[sync] engine started');
     const stored = await loadTransfers();
     if (!this.started) return;
     if (stored.length > 0) this.setState({ transfers: sortTransfers(stored) });
     this.ensureManager();
     this.cleanup();
-    this.appStateSubscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") {
+    this.appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
         void this.onForeground();
       }
     });
     this.networkUnsubscribe = networkMonitor.subscribe(() => {
-      if (networkMonitor.getSnapshot().state === "online") void this.drainQueue();
+      if (networkMonitor.getSnapshot().state === 'online') void this.drainQueue();
     });
     this.tickTimer = setInterval(() => {
       this.cleanup();
@@ -188,10 +183,10 @@ class SyncEngine {
     this.appendLog(`[net] testing ${this.settings.serverUrl} …`);
     const probe = await networkMonitor.probeNow();
     if (!probe) {
-      this.appendLog("[net] test skipped: no internet connection");
+      this.appendLog('[net] test skipped: no internet connection');
       return false;
     }
-    this.appendLog(`[net] ${probe.ok ? "reachable" : "unreachable"} in ${probe.latencyMs}ms`);
+    this.appendLog(`[net] ${probe.ok ? 'reachable' : 'unreachable'} in ${probe.latencyMs}ms`);
     return probe.ok;
   }
 
@@ -205,7 +200,7 @@ class SyncEngine {
         );
       } catch (error) {
         this.appendLog(
-          `[ble] state listener failed: ${error instanceof Error ? error.message : "unknown"}`,
+          `[ble] state listener failed: ${error instanceof Error ? error.message : 'unknown'}`,
         );
       }
     }
@@ -214,17 +209,17 @@ class SyncEngine {
 
   private async maybeAutoConnect(): Promise<void> {
     if (!this.settings.autoSyncEnabled) {
-      this.appendLog("[sync] auto-connect skipped: auto-sync is off");
+      this.appendLog('[sync] auto-connect skipped: auto-sync is off');
       return;
     }
     if (this.snapshot.connected || this.snapshot.busy || this.snapshot.autoConnecting) return;
     const enrolled = await getEnrolledDeviceId();
     if (!enrolled) {
-      this.appendLog("[sync] auto-connect skipped: no enrolled pendant");
+      this.appendLog('[sync] auto-connect skipped: no enrolled pendant');
       return;
     }
     if (!(await hasBlePermissions())) {
-      this.appendLog("[sync] auto-connect deferred: Bluetooth permission missing");
+      this.appendLog('[sync] auto-connect deferred: Bluetooth permission missing');
       return;
     }
     const manager = this.ensureManager();
@@ -232,14 +227,14 @@ class SyncEngine {
     try {
       adapter = await manager.state();
     } catch {
-      adapter = "Unknown";
+      adapter = 'Unknown';
     }
-    if (adapter !== "PoweredOn") {
+    if (adapter !== 'PoweredOn') {
       this.appendLog(`[sync] auto-connect deferred: Bluetooth ${adapter}`);
       return;
     }
-    this.appendLog("[sync] auto-connecting to enrolled pendant");
-    await this.connect(DEVICE_NAME, "", "auto");
+    this.appendLog('[sync] auto-connecting to enrolled pendant');
+    await this.connect(DEVICE_NAME, '', 'auto');
   }
 
   private async applyDesiredSync(client: CheckpointClient): Promise<void> {
@@ -255,7 +250,7 @@ class SyncEngine {
       );
       await client.reqStatus();
     } catch (error) {
-      this.appendLog(`[sync] apply failed: ${error instanceof Error ? error.message : "unknown"}`);
+      this.appendLog(`[sync] apply failed: ${error instanceof Error ? error.message : 'unknown'}`);
     }
   }
 
@@ -285,9 +280,16 @@ class SyncEngine {
     vadStatus?: string,
     vadSpeechS?: string,
   ): void {
-    this.client?.bench.updateIngest(fileId, uploadId, ingestStatus, ingestError, vadStatus, vadSpeechS);
+    this.client?.bench.updateIngest(
+      fileId,
+      uploadId,
+      ingestStatus,
+      ingestError,
+      vadStatus,
+      vadSpeechS,
+    );
     this.handleEvent({
-      type: "ingest",
+      type: 'ingest',
       fileId,
       uploadId,
       ingestStatus,
@@ -337,7 +339,7 @@ class SyncEngine {
           (record.nextAttemptAt === undefined || record.nextAttemptAt <= now),
       );
       for (const record of queue) {
-        if (networkMonitor.getSnapshot().state !== "online") break;
+        if (networkMonitor.getSnapshot().state !== 'online') break;
         await this.uploadRecord(record);
       }
     } finally {
@@ -352,7 +354,7 @@ class SyncEngine {
       const bytes = await readSavedBytes(record.localUri);
       if (!bytes) {
         this.appendLog(`[sync] local audio missing for ${record.fileId}`);
-        this.reportIngest(record.fileId, "", "failed", "local audio missing");
+        this.reportIngest(record.fileId, '', 'failed', 'local audio missing');
         this.patchRecord(record.fileId, { localUri: undefined });
         return;
       }
@@ -362,20 +364,20 @@ class SyncEngine {
         const result = await uploader.upload(
           bytes,
           `file_${record.fileId}.ogg`,
-          "audio/ogg",
+          'audio/ogg',
           record.fileId,
         );
         this.appendLog(`  [ingest] OK upload_id=${result.uploadId} status=${result.status}`);
-        this.reportIngest(record.fileId, result.uploadId, result.status, "");
+        this.reportIngest(record.fileId, result.uploadId, result.status, '');
         this.patchRecord(record.fileId, { attempts: 0, nextAttemptAt: undefined });
         if (!this.settings.keepFiles) {
-          await CheckpointClient.deleteLocalCopy(record.fileId);
+          CheckpointClient.deleteLocalCopy(record.fileId);
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : "unknown";
+        const message = error instanceof Error ? error.message : 'unknown';
         this.appendLog(`  [!] ingest failed: ${message}`);
         const attempts = record.attempts + 1;
-        this.reportIngest(record.fileId, "", "failed", message);
+        this.reportIngest(record.fileId, '', 'failed', message);
         this.patchRecord(record.fileId, {
           attempts,
           nextAttemptAt: Date.now() + nextRetryDelayMs(attempts),
@@ -393,26 +395,26 @@ class SyncEngine {
 
   private appendLog(line: string): void {
     // Mirrored to logcat so field issues can be diagnosed over adb.
-    console.log(line);
+    console.debug(line);
     this.setState({ logs: pushLog(this.snapshot.logs, line) });
   }
 
   private handleEvent(event: CheckpointEvent): void {
-    if (event.type === "link") {
+    if (event.type === 'link') {
       this.setState({ linkState: event.state });
       return;
     }
-    if (event.type === "rec_status") {
+    if (event.type === 'rec_status') {
       const { type: _ignored, ...rest } = event;
       this.setState({ status: rest });
       return;
     }
-    if (event.type === "storage") {
+    if (event.type === 'storage') {
       const { type: _ignored, ...rest } = event;
       this.setState({ storage: rest });
       return;
     }
-    if (event.type === "file_list") {
+    if (event.type === 'file_list') {
       const { type: _ignored, ...rest } = event;
       this.setState({
         fileList: rest,
@@ -424,7 +426,7 @@ class SyncEngine {
       applyEventToRecords(this.snapshot.transfers, event, Date.now()),
     );
     this.setState({ transfers });
-    if (event.type !== "progress") this.schedulePersist();
+    if (event.type !== 'progress') this.schedulePersist();
   }
 
   private async handleCompletedFile(file: CompletedFile): Promise<void> {
@@ -434,9 +436,9 @@ class SyncEngine {
           threshold: current.vadThreshold,
           minSpeechS: current.minSpeechS,
         })
-      : { status: "disabled" as const, speechS: 0 };
-    if (verdict.status === "unavailable") {
-      this.appendLog(`  [vad] unavailable: ${verdict.error ?? "unknown"} — uploading anyway`);
+      : { status: 'disabled' as const, speechS: 0 };
+    if (verdict.status === 'unavailable') {
+      this.appendLog(`  [vad] unavailable: ${verdict.error ?? 'unknown'} — uploading anyway`);
     }
     const vad = `${verdict.status} ${verdict.speechS.toFixed(2)}s`.trim();
     if (!shouldUpload(verdict)) {
@@ -444,23 +446,23 @@ class SyncEngine {
       this.appendLog(`  [vad] filtered ${file.fileIdHex}: ${reason} — skipping upload`);
       this.reportIngest(
         file.fileIdHex,
-        "",
-        "skipped-no-speech",
+        '',
+        'skipped-no-speech',
         reason,
         verdict.status,
         verdict.speechS.toFixed(2),
       );
       if (!current.keepFiles) {
-        await CheckpointClient.deleteLocalCopy(file.fileIdHex);
+        CheckpointClient.deleteLocalCopy(file.fileIdHex);
       }
       return;
     }
     if (!current.ingestEnabled) {
-      this.reportIngest(file.fileIdHex, "", "disabled", "", "disabled", "0.00");
+      this.reportIngest(file.fileIdHex, '', 'disabled', '', 'disabled', '0.00');
       return;
     }
     this.patchRecord(file.fileIdHex, {
-      localUri: receivedFile(file.fileIdHex, ".ogg").uri,
+      localUri: receivedFile(file.fileIdHex, '.ogg').uri,
       vad,
     });
     const record = this.snapshot.transfers.find((item) => item.fileId === file.fileIdHex);
@@ -476,7 +478,9 @@ class SyncEngine {
     try {
       return await run(client);
     } catch (error) {
-      this.appendLog(`[ui] ${action} failed: ${error instanceof Error ? error.message : "unknown"}`);
+      this.appendLog(
+        `[ui] ${action} failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
       return null;
     }
   }
@@ -484,21 +488,21 @@ class SyncEngine {
   async connect(
     deviceName: string,
     claimText: string,
-    origin: "user" | "auto" = "user",
+    origin: 'user' | 'auto' = 'user',
   ): Promise<void> {
-    if (origin === "user") await this.stopAutoConnect();
+    if (origin === 'user') await this.stopAutoConnect();
     if (this.connectTask || this.snapshot.connected || this.snapshot.busy) return;
     this.connectOrigin = origin;
     this.setState(
-      origin === "user"
-        ? { busy: true, autoConnecting: false, linkState: "connecting", needsSettings: false }
-        : { busy: false, autoConnecting: true, linkState: "idle", needsSettings: false },
+      origin === 'user'
+        ? { busy: true, autoConnecting: false, linkState: 'connecting', needsSettings: false }
+        : { busy: false, autoConnecting: true, linkState: 'idle', needsSettings: false },
     );
     let manager: BleManager;
     try {
       manager = this.ensureManager();
       const gate = await ensureBlePermissions();
-      if (gate !== "granted") {
+      if (gate !== 'granted') {
         this.appendLog(
           `[ui] missing Bluetooth permission (${gate}) — grant Nearby devices + Location and retry`,
         );
@@ -506,44 +510,46 @@ class SyncEngine {
         this.setState({
           busy: false,
           autoConnecting: false,
-          needsSettings: gate === "needs-settings",
-          linkState: gate === "needs-settings" ? "needs permission" : "permission denied",
+          needsSettings: gate === 'needs-settings',
+          linkState: gate === 'needs-settings' ? 'needs permission' : 'permission denied',
         });
         return;
       }
-      this.appendLog("[ui] permissions granted");
+      this.appendLog('[ui] permissions granted');
       const adapter = await manager.state();
-      if (adapter !== "PoweredOn") {
+      if (adapter !== 'PoweredOn') {
         this.appendLog(
-          adapter === "PoweredOff"
-            ? "[ui] Bluetooth is off — turn it on and retry"
+          adapter === 'PoweredOff'
+            ? '[ui] Bluetooth is off — turn it on and retry'
             : `[ui] Bluetooth unavailable (${adapter}) — check system settings and retry`,
         );
         this.connectOrigin = null;
         this.setState({
           busy: false,
           autoConnecting: false,
-          needsSettings: adapter === "Unauthorized",
-          linkState: adapter === "PoweredOff" ? "bluetooth off" : "bluetooth unavailable",
+          needsSettings: adapter === 'Unauthorized',
+          linkState: adapter === 'PoweredOff' ? 'bluetooth off' : 'bluetooth unavailable',
         });
         return;
       }
       this.appendLog(`[ble] adapter ${adapter} — scanning...`);
     } catch (error) {
-      this.appendLog(`[ui] pre-connect check failed: ${error instanceof Error ? error.message : "unknown"}`);
+      this.appendLog(
+        `[ui] pre-connect check failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
       this.connectOrigin = null;
-      this.setState({ busy: false, autoConnecting: false, linkState: "idle" });
+      this.setState({ busy: false, autoConnecting: false, linkState: 'idle' });
       return;
     }
     let claimKey: Uint8Array | null = null;
     const trimmedClaim = claimText.trim();
-    if (trimmedClaim !== "") {
+    if (trimmedClaim !== '') {
       try {
         claimKey = parseClaimHex(trimmedClaim);
       } catch (error) {
-        this.appendLog(`[ui] bad claim key: ${error instanceof Error ? error.message : "unknown"}`);
+        this.appendLog(`[ui] bad claim key: ${error instanceof Error ? error.message : 'unknown'}`);
         this.connectOrigin = null;
-        this.setState({ busy: false, autoConnecting: false, linkState: "idle" });
+        this.setState({ busy: false, autoConnecting: false, linkState: 'idle' });
         return;
       }
     }
@@ -557,9 +563,11 @@ class SyncEngine {
         },
       });
     } catch (error) {
-      this.appendLog(`[ui] client init failed: ${error instanceof Error ? error.message : "unknown"}`);
+      this.appendLog(
+        `[ui] client init failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
       this.connectOrigin = null;
-      this.setState({ busy: false, autoConnecting: false, linkState: "idle" });
+      this.setState({ busy: false, autoConnecting: false, linkState: 'idle' });
       return;
     }
     this.client = client;
@@ -577,19 +585,21 @@ class SyncEngine {
             this.autoConnectGaveUp = false;
             this.setState({ connected: true, busy: false, autoConnecting: false });
             this.setState({ deviceId: await getEnrolledDeviceId() });
-            this.appendLog("[ui] listening for file transfers …");
+            this.appendLog('[ui] listening for file transfers …');
             await this.applyDesiredSync(client);
             try {
               await client.reqStorage();
               await client.reqList(0);
             } catch (error) {
-              this.appendLog(`[ui] initial storage load failed: ${error instanceof Error ? error.message : "unknown"}`);
+              this.appendLog(
+                `[ui] initial storage load failed: ${error instanceof Error ? error.message : 'unknown'}`,
+              );
             }
             this.appendLog(`[ui] queue-wait until SUBMITTED (Kafka ${KAFKA_TOPIC_HINT})`);
             void this.drainQueue();
           },
-          onAlive: async () => {
-            this.setState({ linkState: "listening" });
+          onAlive: () => {
+            this.setState({ linkState: 'listening' });
           },
           onTick: async () => {
             const now = Date.now();
@@ -598,15 +608,25 @@ class SyncEngine {
             try {
               await client.reqStatus();
             } catch (error) {
-              this.appendLog(`[ui] status poll failed: ${error instanceof Error ? error.message : "unknown"}`);
+              this.appendLog(
+                `[ui] status poll failed: ${error instanceof Error ? error.message : 'unknown'}`,
+              );
             }
           },
         });
       } catch (error) {
-        this.appendLog(`[ui] connect failed: ${error instanceof Error ? error.message : "unknown"}`);
+        this.appendLog(
+          `[ui] connect failed: ${error instanceof Error ? error.message : 'unknown'}`,
+        );
       }
       if (!reachedReady) this.autoConnectGaveUp = true;
-      this.setState({ connected: false, busy: false, autoConnecting: false, linkState: "idle", deviceId: null });
+      this.setState({
+        connected: false,
+        busy: false,
+        autoConnecting: false,
+        linkState: 'idle',
+        deviceId: null,
+      });
       this.client = null;
       this.connectTask = null;
       this.connectOrigin = null;
@@ -614,8 +634,8 @@ class SyncEngine {
   }
 
   stopAutoConnect = async (): Promise<void> => {
-    if (this.connectOrigin !== "auto") return;
-    this.appendLog("[ui] auto-connect cancelled");
+    if (this.connectOrigin !== 'auto') return;
+    this.appendLog('[ui] auto-connect cancelled');
     this.stopped = true;
     this.client?.requestStop();
     await this.connectTask;
@@ -628,20 +648,22 @@ class SyncEngine {
     if (client) {
       try {
         await client.disconnect();
-        this.appendLog("[ui] disconnected (bond kept — no re-pair needed)");
+        this.appendLog('[ui] disconnected (bond kept — no re-pair needed)');
       } catch (error) {
-        this.appendLog(`[ui] disconnect failed: ${error instanceof Error ? error.message : "unknown"}`);
+        this.appendLog(
+          `[ui] disconnect failed: ${error instanceof Error ? error.message : 'unknown'}`,
+        );
       }
     }
-    this.setState({ connected: false, autoConnecting: false, linkState: "idle", deviceId: null });
+    this.setState({ connected: false, autoConnecting: false, linkState: 'idle', deviceId: null });
   }
 
   refreshStatus = async (): Promise<void> => {
-    await this.withClient("status", async (client) => client.reqStatus());
+    await this.withClient('status', async (client) => client.reqStatus());
   };
 
   refreshStorage = async (): Promise<void> => {
-    await this.withClient("storage", async (client) => {
+    await this.withClient('storage', async (client) => {
       await client.reqStorage();
       await client.reqList(0);
     });
@@ -654,30 +676,32 @@ class SyncEngine {
       ),
     });
     this.schedulePersist();
-    this.appendLog("[ui] retry: backoff reset, draining queue");
+    this.appendLog('[ui] retry: backoff reset, draining queue');
     await this.drainQueue();
   };
 
   toggleRec = async (): Promise<void> => {
-    await this.withClient("rec-toggle", async (client) => {
+    await this.withClient('rec-toggle', async (client) => {
       const next = !(this.snapshot.status?.recording ?? false);
       const code = next ? await client.cmdRecStart() : await client.cmdRecStop();
-      this.appendLog(`[ui] rec-${next ? "start" : "stop"} status=${ctrlStatusText(code)}`);
+      this.appendLog(`[ui] rec-${next ? 'start' : 'stop'} status=${ctrlStatusText(code)}`);
       await client.reqStatus();
     });
   };
 
   async applyLed(muted: boolean, brightness: number): Promise<number | null> {
-    return this.withClient("led-apply", async (client) => {
+    return this.withClient('led-apply', async (client) => {
       const code = await client.cmdLedSet(muted, brightness);
-      this.appendLog(`[ui] led-apply muted=${muted} bright=${brightness} status=${ctrlStatusText(code)}`);
+      this.appendLog(
+        `[ui] led-apply muted=${muted} bright=${brightness} status=${ctrlStatusText(code)}`,
+      );
       await client.reqStatus();
       return code;
     });
   }
 
   async applySync(enabled: boolean): Promise<number | null> {
-    return this.withClient("sync-apply", async (client) => {
+    return this.withClient('sync-apply', async (client) => {
       const code = await client.cmdSyncSet(enabled);
       this.appendLog(`[ui] sync-apply enabled=${enabled} status=${ctrlStatusText(code)}`);
       await client.reqStatus();
@@ -688,19 +712,19 @@ class SyncEngine {
   listPrev = async (): Promise<void> => {
     const page = this.snapshot.listPage;
     const start = Math.max(0, page.start - Math.max(1, page.count));
-    await this.withClient("file-list", async (client) => client.reqList(start));
+    await this.withClient('file-list', async (client) => client.reqList(start));
   };
 
   listNext = async (): Promise<void> => {
     const page = this.snapshot.listPage;
     const start = page.start + Math.max(1, page.count);
     if (page.total > 0 && start >= page.total) return;
-    await this.withClient("file-list", async (client) => client.reqList(start));
+    await this.withClient('file-list', async (client) => client.reqList(start));
   };
 
   async deleteFile(path: string): Promise<number | null> {
     const start = this.snapshot.listPage.start;
-    return this.withClient("file-delete", async (client) => {
+    return this.withClient('file-delete', async (client) => {
       const code = await client.cmdFileDelete(path);
       this.appendLog(`[ui] file-delete ${path} status=${ctrlStatusText(code)}`);
       await client.reqStorage();
@@ -710,7 +734,7 @@ class SyncEngine {
   }
 
   async eraseStorage(): Promise<number | null> {
-    return this.withClient("storage-erase", async (client) => {
+    return this.withClient('storage-erase', async (client) => {
       const arm = await client.cmdStorageErase(CTRL_ERASE_ARM);
       if ((arm.status ?? 1) !== CTRL_OK) {
         this.appendLog(`[ui] erase arm refused status=${ctrlStatusText(arm.status ?? 1)}`);
@@ -718,7 +742,7 @@ class SyncEngine {
       }
       const confirmed = await client.cmdStorageErase(CTRL_ERASE_CONFIRM);
       this.appendLog(
-        `[ui] erase confirm status=${ctrlStatusText(confirmed.status ?? 1)} removed=${confirmed.removed ?? "?"}`,
+        `[ui] erase confirm status=${ctrlStatusText(confirmed.status ?? 1)} removed=${confirmed.removed ?? '?'}`,
       );
       this.setState({ listPage: { start: 0, total: 0, count: 0 } });
       await client.reqStorage();
@@ -734,25 +758,27 @@ class SyncEngine {
   shareBench = async (): Promise<void> => {
     const client = this.client;
     if (!client || client.bench.rows.length === 0) {
-      this.appendLog("[ui] bench: no rows to share yet");
+      this.appendLog('[ui] bench: no rows to share yet');
       return;
     }
     try {
       if (!(await isAvailableAsync())) {
-        this.appendLog("[ui] bench: sharing is not available on this device");
+        this.appendLog('[ui] bench: sharing is not available on this device');
         return;
       }
-      const dir = new Directory(Paths.cache, "checkpoint");
+      const dir = new Directory(Paths.cache, 'checkpoint');
       if (!dir.exists) dir.create();
       const file = new File(dir, `bench-${Date.now()}.csv`);
       if (file.exists) file.delete();
       file.create();
       file.write(new TextEncoder().encode(client.bench.toCsv()));
-      await shareAsync(file.uri, { dialogTitle: "Share bench CSV" });
+      await shareAsync(file.uri, { dialogTitle: 'Share bench CSV' });
     } catch (error) {
-      this.appendLog(`[ui] bench share failed: ${error instanceof Error ? error.message : "unknown"}`);
+      this.appendLog(
+        `[ui] bench share failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
     }
-  }
+  };
 }
 
 export const syncEngine = new SyncEngine();

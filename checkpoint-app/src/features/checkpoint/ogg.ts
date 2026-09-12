@@ -26,7 +26,7 @@ export function makeOggPage(
 ): Uint8Array {
   const page = new Uint8Array(27 + segments.length + payload.length);
   const view = new DataView(page.buffer);
-  page.set(textEncoder.encode("OggS"), 0);
+  page.set(textEncoder.encode('OggS'), 0);
   page[4] = 0;
   page[5] = headerType & 0xff;
   view.setBigUint64(6, granulePosition, true);
@@ -73,23 +73,23 @@ function startsWith(data: Uint8Array, text: string): boolean {
 export function repairOpusOgg(data: Uint8Array): Uint8Array {
   const pages = parseOggPages(data);
   const first = pages[0];
-  if (!first) throw new Error("No OGG pages found");
+  if (!first) throw new Error('No OGG pages found');
   const view = new DataView(first.buffer, first.byteOffset, first.byteLength);
   const serial = view.getUint32(14, true);
   const segmentCount = first[26]!;
   const segments: number[] = [];
   for (let i = 0; i < segmentCount; i++) segments.push(first[27 + i]!);
   const payload = first.slice(27 + segmentCount);
-  if (startsWith(payload, "OpusHead") && segments.length === 1) return data;
+  if (startsWith(payload, 'OpusHead') && segments.length === 1) return data;
   if (segments.length < 2) {
-    throw new Error(`Unexpected OGG layout: ${segments.join(",")}`);
+    throw new Error(`Unexpected OGG layout: ${segments.join(',')}`);
   }
   const headSize = segments[0]!;
   const tagsSize = segments[1]!;
   const opusHead = payload.slice(0, headSize);
   const opusTags = payload.slice(headSize, headSize + tagsSize);
-  if (!startsWith(opusHead, "OpusHead")) throw new Error("OpusHead not found");
-  if (!startsWith(opusTags, "OpusTags")) throw new Error("OpusTags not found");
+  if (!startsWith(opusHead, 'OpusHead')) throw new Error('OpusHead not found');
+  if (!startsWith(opusTags, 'OpusTags')) throw new Error('OpusTags not found');
   const fixed: Uint8Array[] = [
     makeOggPage(0x02, BigInt(0), serial, 0, [headSize], opusHead),
     makeOggPage(0x00, BigInt(0), serial, 1, [tagsSize], opusTags),

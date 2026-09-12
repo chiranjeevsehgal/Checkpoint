@@ -1,5 +1,5 @@
-import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 
 import {
   applyEventToRecords,
@@ -147,10 +147,7 @@ describe('applyEventToRecords', () => {
       NOW + 150,
       'document/checkpoint/received/file_aaaa000000000001.ogg',
     );
-    assert.equal(
-      records[0]!.localUri,
-      'document/checkpoint/received/file_aaaa000000000001.ogg',
-    );
+    assert.equal(records[0]!.localUri, 'document/checkpoint/received/file_aaaa000000000001.ogg');
   });
 });
 
@@ -200,20 +197,12 @@ describe('pruneExpired', () => {
   const retentionMs = 24 * 60 * 60 * 1000;
 
   it('removes terminal records past retention', () => {
-    const records = pruneExpired(
-      [record({ createdAt: NOW - retentionMs - 1 })],
-      NOW,
-      retentionMs,
-    );
+    const records = pruneExpired([record({ createdAt: NOW - retentionMs - 1 })], NOW, retentionMs);
     assert.equal(records.length, 0);
   });
 
   it('keeps recent terminal records', () => {
-    const records = pruneExpired(
-      [record({ createdAt: NOW - 1000 })],
-      NOW,
-      retentionMs,
-    );
+    const records = pruneExpired([record({ createdAt: NOW - 1000 })], NOW, retentionMs);
     assert.equal(records.length, 1);
   });
 

@@ -1,4 +1,4 @@
-import { CameraView } from "expo-camera";
+import { CameraView } from 'expo-camera';
 
 export function claimScannerAvailable(): boolean {
   return CameraView.isModernBarcodeScannerAvailable === true;
@@ -17,9 +17,9 @@ export function startClaimScanner(
   subscription = CameraView.onModernBarcodeScanned((event) => {
     handled = true;
     stop();
-    onResult(event.data ?? "");
+    onResult(event.data ?? '');
   });
-  CameraView.launchScanner({ barcodeTypes: ["qr"] })
+  CameraView.launchScanner({ barcodeTypes: ['qr'] })
     .then(() => {
       if (!handled) stop();
     })

@@ -1,13 +1,13 @@
-import { storage } from "@/lib/storage";
-import { settingsKey } from "@/lib/storage/keys";
-import { env } from "@/lib/env";
-
 import {
   INGEST_USER_ID_DEFAULT,
   TRANSFER_RETENTION_HOURS,
   VAD_MIN_SPEECH_S_DEFAULT,
   VAD_THRESHOLD_DEFAULT,
-} from "./config.ts";
+} from './config.ts';
+
+import { env } from '@/lib/env';
+import { storage } from '@/lib/storage';
+import { settingsKey } from '@/lib/storage/keys';
 
 export interface CheckpointSettings {
   serverUrl: string;
@@ -22,15 +22,15 @@ export interface CheckpointSettings {
 }
 
 const KEYS = {
-  serverUrl: settingsKey("serverUrl"),
-  userId: settingsKey("userId"),
-  vadThreshold: settingsKey("vadThreshold"),
-  minSpeechS: settingsKey("minSpeechS"),
-  keepFiles: settingsKey("keepFiles"),
-  ingestEnabled: settingsKey("ingestEnabled"),
-  vadEnabled: settingsKey("vadEnabled"),
-  autoSyncEnabled: settingsKey("autoSyncEnabled"),
-  retentionHours: settingsKey("retentionHours"),
+  serverUrl: settingsKey('serverUrl'),
+  userId: settingsKey('userId'),
+  vadThreshold: settingsKey('vadThreshold'),
+  minSpeechS: settingsKey('minSpeechS'),
+  keepFiles: settingsKey('keepFiles'),
+  ingestEnabled: settingsKey('ingestEnabled'),
+  vadEnabled: settingsKey('vadEnabled'),
+  autoSyncEnabled: settingsKey('autoSyncEnabled'),
+  retentionHours: settingsKey('retentionHours'),
 } as const;
 
 export function defaultSettings(): CheckpointSettings {
@@ -77,30 +77,28 @@ export async function loadSettings(): Promise<CheckpointSettings> {
     storage.get(KEYS.retentionHours),
   ]);
   return {
-    serverUrl: (serverUrl ?? "").trim() || defaults.serverUrl,
-    userId: (userId ?? "").trim() || defaults.userId,
+    serverUrl: (serverUrl ?? '').trim() || defaults.serverUrl,
+    userId: (userId ?? '').trim() || defaults.userId,
     vadThreshold: toNumber(vadThreshold, defaults.vadThreshold),
     minSpeechS: toNumber(minSpeechS, defaults.minSpeechS),
-    keepFiles: keepFiles === "1",
-    ingestEnabled: ingestEnabled !== "0",
-    vadEnabled: vadEnabled !== "0",
-    autoSyncEnabled: autoSyncEnabled !== "0",
+    keepFiles: keepFiles === '1',
+    ingestEnabled: ingestEnabled !== '0',
+    vadEnabled: vadEnabled !== '0',
+    autoSyncEnabled: autoSyncEnabled !== '0',
     retentionHours: toNumber(retentionHours, defaults.retentionHours),
   };
 }
 
-export async function saveSettings(
-  settings: CheckpointSettings,
-): Promise<void> {
+export async function saveSettings(settings: CheckpointSettings): Promise<void> {
   await Promise.all([
     storage.set(KEYS.serverUrl, settings.serverUrl.trim()),
     storage.set(KEYS.userId, settings.userId.trim()),
     storage.set(KEYS.vadThreshold, String(settings.vadThreshold)),
     storage.set(KEYS.minSpeechS, String(settings.minSpeechS)),
-    storage.set(KEYS.keepFiles, settings.keepFiles ? "1" : "0"),
-    storage.set(KEYS.ingestEnabled, settings.ingestEnabled ? "1" : "0"),
-    storage.set(KEYS.vadEnabled, settings.vadEnabled ? "1" : "0"),
-    storage.set(KEYS.autoSyncEnabled, settings.autoSyncEnabled ? "1" : "0"),
+    storage.set(KEYS.keepFiles, settings.keepFiles ? '1' : '0'),
+    storage.set(KEYS.ingestEnabled, settings.ingestEnabled ? '1' : '0'),
+    storage.set(KEYS.vadEnabled, settings.vadEnabled ? '1' : '0'),
+    storage.set(KEYS.autoSyncEnabled, settings.autoSyncEnabled ? '1' : '0'),
     storage.set(KEYS.retentionHours, String(settings.retentionHours)),
   ]);
 }

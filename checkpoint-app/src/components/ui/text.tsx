@@ -1,15 +1,16 @@
-import { cn } from '@/lib/utils';
 import { Slot } from '@rn-primitives/slot';
 import { cva, type VariantProps } from 'class-variance-authority';
 import * as React from 'react';
 import { Platform, Text as RNText, type Role } from 'react-native';
+
+import { cn } from '@/lib/utils';
 
 const textVariants = cva(
   cn(
     'text-foreground font-sans text-[15px] leading-[1.55]',
     Platform.select({
       web: 'select-text',
-    })
+    }),
   ),
   {
     variants: {
@@ -17,14 +18,20 @@ const textVariants = cva(
         default: '',
         h1: cn(
           'font-display text-4xl leading-[1.12] tracking-[-0.015em]',
-          Platform.select({ web: 'scroll-m-20 text-balance' })
+          Platform.select({ web: 'scroll-m-20 text-balance' }),
         ),
         h2: cn(
           'font-display text-3xl leading-[1.12] tracking-[-0.015em]',
-          Platform.select({ web: 'scroll-m-20 first:mt-0' })
+          Platform.select({ web: 'scroll-m-20 first:mt-0' }),
         ),
-        h3: cn('font-display text-2xl leading-[1.12] tracking-[-0.015em]', Platform.select({ web: 'scroll-m-20' })),
-        h4: cn('font-display text-xl leading-[1.12] tracking-[-0.015em]', Platform.select({ web: 'scroll-m-20' })),
+        h3: cn(
+          'font-display text-2xl leading-[1.12] tracking-[-0.015em]',
+          Platform.select({ web: 'scroll-m-20' }),
+        ),
+        h4: cn(
+          'font-display text-xl leading-[1.12] tracking-[-0.015em]',
+          Platform.select({ web: 'scroll-m-20' }),
+        ),
         p: 'mt-3 leading-7 sm:mt-6',
         blockquote: 'mt-4 border-l-2 pl-3 italic sm:mt-6 sm:pl-6',
         code: 'bg-muted relative rounded px-[0.3rem] py-[0.2rem] font-mono text-sm font-semibold',
@@ -32,13 +39,13 @@ const textVariants = cva(
         large: 'font-label text-lg',
         small: 'font-label text-sm',
         muted: 'text-muted-foreground text-[13px]',
-        kicker: 'font-display text-primary text-[10px] uppercase tracking-[0.1em]',
+        kicker: 'font-display text-muted-foreground text-[10px] uppercase tracking-[0.1em]',
       },
     },
     defaultVariants: {
       variant: 'default',
     },
-  }
+  },
 );
 
 type TextVariantProps = VariantProps<typeof textVariants>;

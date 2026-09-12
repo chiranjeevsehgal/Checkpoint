@@ -1,5 +1,5 @@
-import { hmac } from "@noble/hashes/hmac.js";
-import { sha256 } from "@noble/hashes/sha2.js";
+import { hmac } from '@noble/hashes/hmac.js';
+import { sha256 } from '@noble/hashes/sha2.js';
 
 import {
   CRYPTO_KEY_BYTES,
@@ -7,30 +7,30 @@ import {
   CRYPTO_TAG_BYTES,
   PKT_DATA,
   PROTO_VER,
-} from "./config.ts";
+} from './config.ts';
 
-export const AUTH_DOMAIN = "checkpoint-auth-v3";
-export const SERVER_DOMAIN = "checkpoint-server-finish-v3";
-export const CLIENT_DOMAIN = "checkpoint-client-finish-v3";
-const SESSION_INFO = "checkpoint-session-v3";
-const ENROLL_INFO = "checkpoint-client-v3";
-const FILE_INFO = "checkpoint-file-v1";
-const NONCE_INFO = "checkpoint-nonce-v1";
+export const AUTH_DOMAIN = 'checkpoint-auth-v3';
+export const SERVER_DOMAIN = 'checkpoint-server-finish-v3';
+export const CLIENT_DOMAIN = 'checkpoint-client-finish-v3';
+const SESSION_INFO = 'checkpoint-session-v3';
+const ENROLL_INFO = 'checkpoint-client-v3';
+const FILE_INFO = 'checkpoint-file-v1';
+const NONCE_INFO = 'checkpoint-nonce-v1';
 
 const textEncoder = new TextEncoder();
 
 export function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 export function hexToBytes(hex: string): Uint8Array {
-  if (hex.length % 2 !== 0) throw new Error("Odd-length hex string");
+  if (hex.length % 2 !== 0) throw new Error('Odd-length hex string');
   const out = new Uint8Array(hex.length / 2);
   for (let i = 0; i < out.length; i++) {
     const byte = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-    if (Number.isNaN(byte)) throw new Error("Invalid hex string");
+    if (Number.isNaN(byte)) throw new Error('Invalid hex string');
     out[i] = byte;
   }
   return out;
@@ -38,12 +38,12 @@ export function hexToBytes(hex: string): Uint8Array {
 
 export function newId(): Uint8Array {
   const webCrypto = (globalThis as { crypto?: Crypto }).crypto;
-  if (typeof webCrypto?.getRandomValues === "function") {
+  if (typeof webCrypto?.getRandomValues === 'function') {
     return webCrypto.getRandomValues(new Uint8Array(16));
   }
   // Hermes builds without WebCrypto fall back to the native module.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const expoCrypto = require("expo-crypto") as {
+  const expoCrypto = require('expo-crypto') as {
     getRandomBytes(byteCount: number): Uint8Array;
   };
   return expoCrypto.getRandomBytes(16);
@@ -94,11 +94,7 @@ export function deriveFileKey(
   sessionId: number,
   fileId: bigint,
 ): Uint8Array {
-  const info = concat(
-    textEncoder.encode(FILE_INFO),
-    packSession(sessionId),
-    packFileId(fileId),
-  );
+  const info = concat(textEncoder.encode(FILE_INFO), packSession(sessionId), packFileId(fileId));
   return hkdfSha256(new Uint8Array(0), sessionKey, info, CRYPTO_KEY_BYTES);
 }
 
@@ -130,12 +126,7 @@ export function deriveSessionKeyV3(
   sessionId: number,
 ): Uint8Array {
   const salt = concat(deviceNonce, clientNonce);
-  const info = concat(
-    textEncoder.encode(SESSION_INFO),
-    deviceId,
-    clientId,
-    packSession(sessionId),
-  );
+  const info = concat(textEncoder.encode(SESSION_INFO), deviceId, clientId, packSession(sessionId));
   return hkdfSha256(salt, clientKey, info, CRYPTO_KEY_BYTES);
 }
 
@@ -147,18 +138,11 @@ export function deriveClientKeyV3(
   clientId: Uint8Array,
 ): Uint8Array {
   const salt = concat(deviceNonce, clientNonce);
-  const info = concat(
-    textEncoder.encode(ENROLL_INFO),
-    deviceId,
-    clientId,
-  );
+  const info = concat(textEncoder.encode(ENROLL_INFO), deviceId, clientId);
   return hkdfSha256(salt, claimKey, info, 32);
 }
 
-export function clientProof(
-  clientKey: Uint8Array,
-  transcript: Uint8Array,
-): Uint8Array {
+export function clientProof(clientKey: Uint8Array, transcript: Uint8Array): Uint8Array {
   return hmac(sha256, clientKey, transcript);
 }
 
@@ -167,18 +151,10 @@ export function finishProof(
   domain: string,
   transcript: Uint8Array,
 ): Uint8Array {
-  return hmac(
-    sha256,
-    sessionKey,
-    concat(textEncoder.encode(domain), transcript),
-  );
+  return hmac(sha256, sessionKey, concat(textEncoder.encode(domain), transcript));
 }
 
-export function buildNonce(
-  sessionId: number,
-  fileId: bigint,
-  seq: number,
-): Uint8Array {
+export function buildNonce(sessionId: number, fileId: bigint, seq: number): Uint8Array {
   const seqBytes = new Uint8Array(2);
   new DataView(seqBytes.buffer).setUint16(0, seq & 0xffff, true);
   const msg = concat(
@@ -214,11 +190,8 @@ const SBOX: Uint8Array = (() => {
       inverse = 1;
       for (let i = 0; i < 254; i++) inverse = gfMultiply(inverse, x);
     }
-    const rot = (v: number, n: number) =>
-      ((v << n) | (v >>> (8 - n))) & 0xff;
-    box[x] =
-      inverse ^ rot(inverse, 1) ^ rot(inverse, 2) ^ rot(inverse, 3) ^
-      rot(inverse, 4) ^ 0x63;
+    const rot = (v: number, n: number) => ((v << n) | (v >>> (8 - n))) & 0xff;
+    box[x] = inverse ^ rot(inverse, 1) ^ rot(inverse, 2) ^ rot(inverse, 3) ^ rot(inverse, 4) ^ 0x63;
   }
   return box;
 })();
@@ -346,11 +319,7 @@ function ccmMac(
   return mac;
 }
 
-function ccmCrypt(
-  key: Uint8Array,
-  nonce: Uint8Array,
-  message: Uint8Array,
-): Uint8Array {
+function ccmCrypt(key: Uint8Array, nonce: Uint8Array, message: Uint8Array): Uint8Array {
   const out = new Uint8Array(message.length);
   let counter = 1;
   for (let offset = 0; offset < message.length; offset += 16) {

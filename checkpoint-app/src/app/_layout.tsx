@@ -10,9 +10,8 @@ import { PortalHost } from '@rn-primitives/portal';
 import { Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
-
 import { useColorScheme } from 'nativewind';
+import { useEffect } from 'react';
 
 import { NAV_THEME } from '@/lib/theme';
 import { AppProviders } from '@/providers/app-providers';

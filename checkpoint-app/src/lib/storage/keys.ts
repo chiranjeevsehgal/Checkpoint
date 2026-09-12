@@ -10,9 +10,7 @@ export function isValidStoreKey(key: string): boolean {
 
 export function assertValidStoreKey(key: string): void {
   if (!isValidStoreKey(key)) {
-    throw new Error(
-      `Invalid store key ${JSON.stringify(key)}: use only A-Z a-z 0-9 . - _`,
-    );
+    throw new Error(`Invalid store key ${JSON.stringify(key)}: use only A-Z a-z 0-9 . - _`);
   }
 }
 

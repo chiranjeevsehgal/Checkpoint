@@ -2,21 +2,21 @@ import { Upload } from 'lucide-react-native';
 import { Fragment, useState } from 'react';
 import { FlatList, Pressable, View } from 'react-native';
 
+import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
+import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
+import { isTerminal, type TransferRecord } from '../transferStore.ts';
+import { transferView, type TransferStage, type TransferView } from '../transferView.ts';
+
 import { AppHeader } from '@/components/shared/app-header';
 import { EmptyState } from '@/components/shared/empty-state';
-import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { ProgressBar } from '@/components/ui/progress-bar';
 import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { Text } from '@/components/ui/text';
-import { cn } from '@/lib/utils';
 import { useRefresh } from '@/lib/use-refresh';
-
-import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
-import { isTerminal, type TransferRecord } from '../transferStore.ts';
-import { transferView, type TransferStage } from '../transferView.ts';
+import { cn } from '@/lib/utils';
 
 const STEPS = ['Receive', 'Analyze', 'Upload'] as const;
 
@@ -28,18 +28,34 @@ const STAGE_INDEX: Record<TransferStage, number> = {
 };
 
 function stepBackground(index: number, stageIndex: number): string {
-  if (stageIndex > index) return 'bg-accent-300 dark:bg-accent-800';
+  if (stageIndex > index) return 'bg-success';
   if (stageIndex === index) return 'bg-primary';
   return 'bg-input-bg';
 }
 
 function stepText(index: number, stageIndex: number): string {
-  if (stageIndex > index) return 'text-foreground';
+  if (stageIndex > index) return 'text-background';
   if (stageIndex === index) return 'text-primary-foreground';
   return 'text-muted-foreground';
 }
 
-function Chip({ label, className, textClassName }: { label: string; className?: string; textClassName?: string }) {
+function statusTextClass(view: TransferView): string {
+  if (view.failed) return 'text-destructive';
+  if (view.stage === 'receiving' || view.stage === 'uploading') return 'text-primary';
+  if (view.stage === 'analyzing') return 'text-warning';
+  if (view.outcome === 'uploaded') return 'text-success';
+  return 'text-muted-foreground';
+}
+
+function Chip({
+  label,
+  className,
+  textClassName,
+}: {
+  label: string;
+  className?: string;
+  textClassName?: string;
+}) {
   return (
     <View className={cn('px-2.5 py-1', className)}>
       <Text className={cn('text-[11px]', textClassName)}>{label}</Text>
@@ -47,7 +63,15 @@ function Chip({ label, className, textClassName }: { label: string; className?: 
   );
 }
 
-function TransferRow({ item, expanded, onToggle }: { item: TransferRecord; expanded: boolean; onToggle: () => void }) {
+function TransferRow({
+  item,
+  expanded,
+  onToggle,
+}: {
+  item: TransferRecord;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const view = transferView(item);
   const stageIndex = STAGE_INDEX[view.stage];
 
@@ -64,18 +88,25 @@ function TransferRow({ item, expanded, onToggle }: { item: TransferRecord; expan
         <View className="flex-row items-center gap-1.5">
           {STEPS.map((step, index) => (
             <Fragment key={step}>
-              {index > 0 ? <View className="bg-divider h-px flex-1" /> : null}
-              <Text className={cn('px-2 py-0.5 text-[10px]', stepBackground(index, stageIndex), stepText(index, stageIndex))}>
+              {index > 0 ? <View className="h-px flex-1 bg-divider" /> : null}
+              <Text
+                className={cn(
+                  'px-2 py-0.5 text-[10px]',
+                  stepBackground(index, stageIndex),
+                  stepText(index, stageIndex),
+                )}
+              >
                 {step}
               </Text>
             </Fragment>
           ))}
         </View>
-        <Text className="text-[12px] opacity-75">VAD: {view.vadLabel}</Text>
-        <Text className="text-[12px] opacity-75">Ingest: {view.ingestLabel}</Text>
+        <Text className="text-[12px] text-muted-foreground">VAD: {view.vadLabel}</Text>
+        <Text className={cn('text-[12px]', statusTextClass(view))}>Ingest: {view.ingestLabel}</Text>
         {expanded ? (
-          <Text className="border-divider border-t pt-2 font-mono text-[11px] opacity-60">
-            fragments {Math.round(view.pct * 100)}% received · stage tracked live from the pendant transfer
+          <Text className="border-t border-divider pt-2 font-mono text-[11px] text-subtle-foreground">
+            fragments {Math.round(view.pct * 100)}% received · stage tracked live from the pendant
+            transfer
           </Text>
         ) : null}
       </Pressable>
@@ -95,7 +126,7 @@ export function TransfersScreen() {
   const queued = transfers.filter((item) => !isTerminal(item) && item.localUri).length;
 
   return (
-    <Screen>
+    <CheckpointScreen>
       <AppHeader title="Transfers" subtitle={`${transfers.length} audio items`} />
       <FlatList
         className="flex-1"
@@ -114,22 +145,26 @@ export function TransfersScreen() {
               <View className="flex-row flex-wrap gap-2">
                 <Chip
                   label={`${uploaded} uploaded`}
-                  className="bg-accent-100 dark:bg-accent-900"
-                  textClassName="text-accent-800 dark:text-accent-300"
+                  className="bg-success"
+                  textClassName="text-background"
                 />
                 <Chip
                   label={`${filtered} filtered`}
-                  className="bg-neutral-200 dark:bg-neutral-800"
-                  textClassName="text-neutral-800 dark:text-neutral-200"
+                  className="bg-secondary"
+                  textClassName="text-secondary-foreground"
                 />
                 {queued > 0 ? (
                   <Chip
                     label={`${queued} queued`}
-                    className="bg-neutral-200 dark:bg-neutral-800"
-                    textClassName="text-neutral-800 dark:text-neutral-200"
+                    className="bg-warning"
+                    textClassName="text-background"
                   />
                 ) : null}
-                <Chip label={`${failed} failed`} className="bg-primary" textClassName="text-primary-foreground" />
+                <Chip
+                  label={`${failed} failed`}
+                  className="bg-destructive"
+                  textClassName="text-background"
+                />
               </View>
             ) : null}
           </View>
@@ -138,13 +173,18 @@ export function TransfersScreen() {
           <TransferRow
             item={item}
             expanded={expandedId === item.fileId}
-            onToggle={() => setExpandedId((current) => (current === item.fileId ? null : item.fileId))}
+            onToggle={() =>
+              setExpandedId((current) => (current === item.fileId ? null : item.fileId))
+            }
           />
         )}
         ListEmptyComponent={
-          <EmptyState title="No transfers yet" hint="Connect and sync the pendant to receive audio." />
+          <EmptyState
+            title="No transfers yet"
+            hint="Connect and sync the pendant to receive audio."
+          />
         }
       />
-    </Screen>
+    </CheckpointScreen>
   );
 }

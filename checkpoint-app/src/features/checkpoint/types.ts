@@ -43,20 +43,20 @@ export interface LedState {
 }
 
 export type CheckpointEvent =
-  | { type: "link"; state: "up" | "down" }
-  | { type: "announce"; fileId: string; totalBytes: number; totalFrags: number }
-  | { type: "progress"; fileId: string; received: number; totalFrags: number }
+  | { type: 'link'; state: 'up' | 'down' }
+  | { type: 'announce'; fileId: string; totalBytes: number; totalFrags: number }
+  | { type: 'progress'; fileId: string; received: number; totalFrags: number }
   | {
-      type: "file_done";
+      type: 'file_done';
       fileId: string;
       crcOk: boolean;
       totalBytes: number;
       ingestStatus: string;
       vadStatus: string;
     }
-  | { type: "vad"; fileId: string; vadStatus: string; vadSpeechS: number }
+  | { type: 'vad'; fileId: string; vadStatus: string; vadSpeechS: number }
   | {
-      type: "ingest";
+      type: 'ingest';
       fileId: string;
       uploadId: string;
       ingestStatus: string;
@@ -64,6 +64,6 @@ export type CheckpointEvent =
       vadStatus?: string;
       vadSpeechS?: string;
     }
-  | ({ type: "rec_status" } & DeviceStatus)
-  | ({ type: "storage" } & StorageInfo)
-  | ({ type: "file_list" } & DeviceFileList);
+  | ({ type: 'rec_status' } & DeviceStatus)
+  | ({ type: 'storage' } & StorageInfo)
+  | ({ type: 'file_list' } & DeviceFileList);

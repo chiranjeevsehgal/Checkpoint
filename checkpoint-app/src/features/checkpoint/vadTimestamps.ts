@@ -4,7 +4,7 @@ import {
   VAD_MIN_SPEECH_MS,
   VAD_PAD_MS,
   VAD_WINDOW_SAMPLES,
-} from "./config.ts";
+} from './config.ts';
 
 export interface SpeechSpan {
   start: number;
@@ -51,17 +51,13 @@ export function buildVadWindows(
  * intentionally omitted. Returns spans in seconds, rounded like Python's
  * round(x, 1).
  */
-export function groupSpeechProbs(
-  probs: number[],
-  opts: GroupingOptions,
-): SpeechSpan[] {
+export function groupSpeechProbs(probs: number[], opts: GroupingOptions): SpeechSpan[] {
   const threshold = opts.threshold;
   const samplingRate = opts.samplingRate ?? 16000;
   const windowSamples = opts.windowSamples ?? 512;
-  const minSpeechSamples = ((samplingRate * (opts.minSpeechMs ?? VAD_MIN_SPEECH_MS)) / 1000);
+  const minSpeechSamples = (samplingRate * (opts.minSpeechMs ?? VAD_MIN_SPEECH_MS)) / 1000;
   const padSamples = (samplingRate * (opts.padMs ?? VAD_PAD_MS)) / 1000;
-  const minSilenceSamples =
-    (samplingRate * (opts.minSilenceMs ?? VAD_MIN_SILENCE_MS)) / 1000;
+  const minSilenceSamples = (samplingRate * (opts.minSilenceMs ?? VAD_MIN_SILENCE_MS)) / 1000;
   const audioLengthSamples = opts.audioLengthSamples ?? probs.length * windowSamples;
 
   const negThreshold = Math.max(threshold - 0.15, 0.01);

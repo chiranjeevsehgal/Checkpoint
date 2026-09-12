@@ -1,18 +1,18 @@
-import { Directory, File, Paths } from "expo-file-system";
+import { Directory, File, Paths } from 'expo-file-system';
 
-import { partFileName } from "./transfer.ts";
-import type { SidecarState } from "./transfer.ts";
-import type { TransferRecord } from "./transferStore.ts";
+import { partFileName } from './transfer.ts';
+import type { SidecarState } from './transfer.ts';
+import type { TransferRecord } from './transferStore.ts';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
 function checkpointDir(): Directory {
-  return new Directory(Paths.document, "checkpoint");
+  return new Directory(Paths.document, 'checkpoint');
 }
 
 function receivedDir(): Directory {
-  return new Directory(Paths.document, "checkpoint", "received");
+  return new Directory(Paths.document, 'checkpoint', 'received');
 }
 
 export function ensureDirs(): void {
@@ -38,7 +38,7 @@ export function receivedMetaFile(fileIdHex: string): File {
 }
 
 export function transfersFile(): File {
-  return new File(checkpointDir(), "transfers.json");
+  return new File(checkpointDir(), 'transfers.json');
 }
 
 export async function loadTransfers(): Promise<TransferRecord[]> {
@@ -94,7 +94,7 @@ export function openPart(fileIdHex: string, total: number): PartWriter | null {
           } catch {
             /* ignore */
           }
-          throw new Error("part write failed");
+          throw new Error('part write failed');
         }
       },
       close() {
@@ -110,9 +110,7 @@ export function openPart(fileIdHex: string, total: number): PartWriter | null {
   }
 }
 
-export async function readPartBytes(
-  fileIdHex: string,
-): Promise<Uint8Array | null> {
+export async function readPartBytes(fileIdHex: string): Promise<Uint8Array | null> {
   try {
     const file = partFile(fileIdHex);
     if (!file.exists) return null;
@@ -122,19 +120,17 @@ export async function readPartBytes(
   }
 }
 
-export async function readSidecar(
-  fileIdHex: string,
-): Promise<SidecarState | null> {
+export async function readSidecar(fileIdHex: string): Promise<SidecarState | null> {
   try {
     const file = sidecarFile(fileIdHex);
     if (!file.exists) return null;
     const raw = await file.text();
     const parsed = JSON.parse(raw) as Partial<SidecarState>;
     if (
-      typeof parsed.crc !== "string" ||
-      typeof parsed.total !== "number" ||
-      typeof parsed.totalFrags !== "number" ||
-      typeof parsed.fragSize !== "number" ||
+      typeof parsed.crc !== 'string' ||
+      typeof parsed.total !== 'number' ||
+      typeof parsed.totalFrags !== 'number' ||
+      typeof parsed.fragSize !== 'number' ||
       !Array.isArray(parsed.received)
     ) {
       return null;
@@ -194,13 +190,10 @@ export async function readSavedBytes(uri: string): Promise<Uint8Array | null> {
   }
 }
 
-export async function deleteSaved(fileIdHex: string): Promise<void> {
-  for (const ext of [".ogg", ".wav", ".json"]) {
+export function deleteSaved(fileIdHex: string): void {
+  for (const ext of ['.ogg', '.wav', '.json']) {
     try {
-      const file =
-        ext === ".json"
-          ? receivedMetaFile(fileIdHex)
-          : receivedFile(fileIdHex, ext);
+      const file = ext === '.json' ? receivedMetaFile(fileIdHex) : receivedFile(fileIdHex, ext);
       if (file.exists) file.delete();
     } catch {
       /* ignore */

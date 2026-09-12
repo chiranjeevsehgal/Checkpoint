@@ -2,28 +2,36 @@ import { Bluetooth, ScanLine } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo } from 'react';
 import { Animated, Pressable, ScrollView, View } from 'react-native';
 
+import { parseClaimHex } from '../claim.ts';
+import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
+import { LogView } from '../components/log-view.tsx';
+import { Toggle } from '../components/toggle.tsx';
+import { DEVICE_NAME } from '../config.ts';
+import { connectionActivity, formatFingerprint, type ActivityTone } from '../connectionView.ts';
+import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
+import { useClaimScanner } from '../hooks/useClaimScanner.ts';
+import { linkView } from '../linkView.ts';
+import { isInProgress } from '../transferStore.ts';
+
 import { AppHeader } from '@/components/shared/app-header';
 import { BatteryOptimizationCard } from '@/components/shared/battery-optimization-card';
-import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { Input } from '@/components/ui/input';
 import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { Text } from '@/components/ui/text';
-import { cn } from '@/lib/utils';
 import { useRefresh } from '@/lib/use-refresh';
+import { cn } from '@/lib/utils';
 import { useToast } from '@/providers/toast-provider';
 
-import { parseClaimHex } from '../claim.ts';
-import { LogView } from '../components/log-view.tsx';
-import { Toggle } from '../components/toggle.tsx';
-import { DEVICE_NAME } from '../config.ts';
-import { connectionActivity, formatFingerprint } from '../connectionView.ts';
-import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
-import { useClaimScanner } from '../hooks/useClaimScanner.ts';
-import { linkView } from '../linkView.ts';
-import { isInProgress } from '../transferStore.ts';
+const ACTIVITY_DOT: Record<ActivityTone, string> = {
+  recording: 'bg-primary',
+  capturing: 'bg-primary',
+  syncing: 'bg-warning',
+  connected: 'bg-success',
+  disconnected: 'bg-muted-foreground',
+};
 
 export function ConnectScreen() {
   const {
@@ -67,14 +75,14 @@ export function ConnectScreen() {
         showToast('Not a valid claim QR.');
       }
     },
-    [setClaimText, showToast]
+    [setClaimText, showToast],
   );
   const handleScanError = useCallback(() => {
     showToast('Could not open the scanner.');
   }, [showToast]);
   const { available: scannerAvailable, start: startScanner } = useClaimScanner(
     handleScannedClaim,
-    handleScanError
+    handleScanError,
   );
 
   const refresh = useCallback(async () => {
@@ -93,7 +101,7 @@ export function ConnectScreen() {
       Animated.sequence([
         Animated.timing(pulse, { toValue: 0.45, duration: 550, useNativeDriver: true }),
         Animated.timing(pulse, { toValue: 1, duration: 550, useNativeDriver: true }),
-      ])
+      ]),
     );
     loop.start();
     return () => loop.stop();
@@ -107,9 +115,10 @@ export function ConnectScreen() {
     syncing,
   });
   const fingerprint = formatFingerprint(deviceId);
+  const activityLive = activity.tone === 'recording' || activity.tone === 'capturing';
 
   useEffect(() => {
-    if (activity.tone !== 'live') {
+    if (!activityLive) {
       livePulse.setValue(1);
       return;
     }
@@ -117,17 +126,16 @@ export function ConnectScreen() {
       Animated.sequence([
         Animated.timing(livePulse, { toValue: 0.25, duration: 700, useNativeDriver: true }),
         Animated.timing(livePulse, { toValue: 1, duration: 700, useNativeDriver: true }),
-      ])
+      ]),
     );
     loop.start();
     return () => loop.stop();
-  }, [activity.tone, livePulse]);
+  }, [activityLive, livePulse]);
 
-  const heroActive = connected || busy;
   const showSettings = view.openSettings || needsSettings;
 
   return (
-    <Screen>
+    <CheckpointScreen>
       <AppHeader title="Connect" subtitle={view.label} />
       <ScrollView
         className="flex-1"
@@ -143,13 +151,19 @@ export function ConnectScreen() {
               style={{ opacity: busy ? pulse : 1 }}
               className={cn(
                 'h-[52px] w-[52px] flex-none items-center justify-center',
-                heroActive ? 'bg-primary' : 'bg-input-bg'
+                connected ? 'bg-success' : busy ? 'bg-primary' : 'bg-input-bg',
               )}
             >
               <Icon
                 as={Bluetooth}
                 size={26}
-                className={heroActive ? 'text-primary-foreground' : 'text-muted-foreground'}
+                className={
+                  connected
+                    ? 'text-background'
+                    : busy
+                      ? 'text-primary-foreground'
+                      : 'text-muted-foreground'
+                }
               />
             </Animated.View>
             <View className="flex-1 gap-0.5">
@@ -160,16 +174,13 @@ export function ConnectScreen() {
 
           {connected ? (
             <View className="flex-row items-center justify-between gap-2">
-              <Text className="font-mono text-primary text-[12px] tracking-[0.15em]">
+              <Text className="font-mono text-[12px] tracking-[0.15em] text-primary-text">
                 {fingerprint || '—'}
               </Text>
               <View className="flex-row items-center gap-1.5">
                 <Animated.View
-                  style={{ opacity: activity.tone === 'live' ? livePulse : 1 }}
-                  className={cn(
-                    'h-2 w-2',
-                    activity.tone === 'live' ? 'bg-primary' : 'bg-muted-foreground'
-                  )}
+                  style={{ opacity: activityLive ? livePulse : 1 }}
+                  className={cn('h-2 w-2', ACTIVITY_DOT[activity.tone])}
                 />
                 <Text variant="muted" className="text-[11px]">
                   {activity.label}
@@ -178,7 +189,7 @@ export function ConnectScreen() {
             </View>
           ) : null}
 
-          <View className="bg-divider h-0.5" />
+          <View className="h-0.5 bg-divider" />
 
           {autoConnecting ? (
             <View className="flex-row items-center justify-between gap-2">
@@ -190,13 +201,13 @@ export function ConnectScreen() {
                 accessibilityRole="button"
                 className="active:opacity-60"
               >
-                <Text className="font-display text-primary text-[12px]">Stop</Text>
+                <Text className="font-display text-[12px] text-primary-text">Stop</Text>
               </Pressable>
             </View>
           ) : null}
 
           <View className="gap-1">
-            <Text className="text-[11px] opacity-65">Device name or address</Text>
+            <Text className="text-[11px] text-subtle-foreground">Device name or address</Text>
             <Input
               value={deviceName}
               onChangeText={(text) => {
@@ -209,7 +220,9 @@ export function ConnectScreen() {
             />
           </View>
           <View className="gap-1">
-            <Text className="text-[11px] opacity-65">Claim key (enroll only, 64 hex or claim URI)</Text>
+            <Text className="text-[11px] text-subtle-foreground">
+              Claim key (enroll only, 64 hex or claim URI)
+            </Text>
             <View className="flex-row gap-2">
               <Input
                 className="flex-1"
@@ -289,6 +302,6 @@ export function ConnectScreen() {
 
         <LogView logs={logs} onClear={clearLogs} />
       </ScrollView>
-    </Screen>
+    </CheckpointScreen>
   );
 }

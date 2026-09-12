@@ -1,6 +1,6 @@
+import * as Battery from 'expo-battery';
 import { useEffect, useState } from 'react';
 import { AppState, Platform } from 'react-native';
-import * as Battery from 'expo-battery';
 
 /**
  * Whether Android battery optimization is enabled for this app (true = the app

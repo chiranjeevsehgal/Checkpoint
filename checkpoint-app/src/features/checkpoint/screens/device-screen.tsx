@@ -2,9 +2,12 @@ import { Play, RefreshCw, Square } from 'lucide-react-native';
 import { useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
+import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
+import { Toggle } from '../components/toggle.tsx';
+import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
+
 import { AppHeader } from '@/components/shared/app-header';
 import { EmptyState } from '@/components/shared/empty-state';
-import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
@@ -14,9 +17,6 @@ import { RangeSlider } from '@/components/ui/slider';
 import { Text } from '@/components/ui/text';
 import { useRefresh } from '@/lib/use-refresh';
 
-import { Toggle } from '../components/toggle.tsx';
-import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
-
 interface DeviceControls {
   session: boolean;
   muted?: boolean;
@@ -25,7 +25,7 @@ interface DeviceControls {
 
 function StatCell({ value, label }: { value: number; label: string }) {
   return (
-    <View className="bg-input-bg flex-1 items-center p-2.5">
+    <View className="flex-1 items-center bg-input-bg p-2.5">
       <Text className="font-display text-lg">{value}</Text>
       <Text variant="muted" className="text-[10px]">
         {label}
@@ -51,7 +51,7 @@ export function DeviceScreen() {
   const levelPct = status ? Math.max(0, Math.min(100, ((status.levelDbfs + 60) / 60) * 100)) : 0;
 
   return (
-    <Screen>
+    <CheckpointScreen>
       <AppHeader title="Device" subtitle="BLE remote control" />
       {!connected ? (
         <EmptyState title="Not connected" hint="Connect to a pendant to control it." />
@@ -80,7 +80,7 @@ export function DeviceScreen() {
               <StatCell value={status?.utterances ?? 0} label="Utterances" />
             </View>
             <Button
-              className={status?.recording ? 'bg-primary' : 'bg-foreground'}
+              variant={status?.recording ? 'destructive' : 'default'}
               onPress={() => void toggleRec()}
             >
               <Icon as={status?.recording ? Square : Play} size={14} />
@@ -90,7 +90,11 @@ export function DeviceScreen() {
 
           <Card>
             <CardKicker>LED</CardKicker>
-            <Toggle label="LED muted" value={muted} onChange={(next) => updateControls({ muted: next })} />
+            <Toggle
+              label="LED muted"
+              value={muted}
+              onChange={(next) => updateControls({ muted: next })}
+            />
             <View className="gap-1">
               <View className="flex-row justify-between">
                 <Text className="text-[12px]">Brightness</Text>
@@ -119,6 +123,6 @@ export function DeviceScreen() {
           </Card>
         </ScrollView>
       )}
-    </Screen>
+    </CheckpointScreen>
   );
 }
