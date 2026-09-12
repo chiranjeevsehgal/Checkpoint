@@ -24,7 +24,7 @@
         "android.permission.BLUETOOTH_ADMIN"
       ],
       "adaptiveIcon": {
-        "backgroundColor": "#f7f6f3",
+        "backgroundColor": "#000000",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
