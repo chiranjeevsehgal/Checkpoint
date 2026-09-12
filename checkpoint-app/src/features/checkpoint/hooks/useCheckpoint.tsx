@@ -10,6 +10,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 
+import { startSyncService, stopSyncService } from '../backgroundService.ts';
 import { CTRL_OK, DEVICE_NAME } from '../config.ts';
 import { networkMonitor } from '../networkMonitor.ts';
 import { ctrlStatusText } from '../parsers.ts';
@@ -99,6 +100,17 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       networkMonitor.stop();
     };
   }, []);
+
+  useEffect(() => {
+    if (!snapshot.connected || !settings.autoSyncEnabled) {
+      void stopSyncService();
+      return;
+    }
+    void startSyncService();
+    return () => {
+      void stopSyncService();
+    };
+  }, [snapshot.connected, settings.autoSyncEnabled]);
 
   const connect = useCallback(async () => {
     syncEngine.configure(settings);

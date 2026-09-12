@@ -14,6 +14,7 @@ import { useColorScheme } from 'nativewind';
 import { useEffect, useState } from 'react';
 
 import { AppSplash } from '@/components/shared/app-splash';
+import '@/features/checkpoint/backgroundService';
 import { NAV_THEME } from '@/lib/theme';
 import { AppProviders } from '@/providers/app-providers';
 

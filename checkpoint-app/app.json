@@ -11,6 +11,7 @@
       "icon": "./assets/expo.icon",
       "bundleIdentifier": "com.checkpoint.pendant",
       "infoPlist": {
+        "UIBackgroundModes": ["bluetooth-central"],
         "NSBluetoothAlwaysUsageDescription": "Checkpoint syncs recordings from your pendant over Bluetooth.",
         "NSBluetoothPeripheralUsageDescription": "Checkpoint syncs recordings from your pendant over Bluetooth."
       }
@@ -22,7 +23,10 @@
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_ADMIN"
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#000000",
@@ -55,7 +59,14 @@
           "cameraPermission": "Allow Checkpoint to scan the pendant enrollment QR code."
         }
       ],
-      "react-native-ble-plx",
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": true,
+          "modes": ["central"]
+        }
+      ],
+      "./plugins/withSyncForegroundService",
       [
         "expo-build-properties",
         {
