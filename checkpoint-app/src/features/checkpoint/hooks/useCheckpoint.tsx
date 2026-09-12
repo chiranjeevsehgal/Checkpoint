@@ -14,7 +14,7 @@ import { startSyncService, stopSyncService } from '../backgroundService.ts';
 import { CTRL_OK } from '../config.ts';
 import { networkMonitor } from '../networkMonitor.ts';
 import type { HealthProbe } from '../networkStatus.ts';
-import { ctrlStatusText } from '../parsers.ts';
+import { ctrlStatusText, formatBytes } from '../parsers.ts';
 import {
   defaultSettings,
   loadSettings,
@@ -306,7 +306,11 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
         }
         body={
           dialog?.kind === 'erase'
-            ? 'Erase ALL recordings from the pendant SD card? This cannot be undone. Type ERASE to confirm.'
+            ? `Erase ALL recordings from the pendant SD card? This cannot be undone.${
+                snapshot.storage
+                  ? ` Files: ${snapshot.storage.files} · Used: ${formatBytes(snapshot.storage.used)}.`
+                  : ''
+              } Type ERASE to confirm.`
             : dialog?.kind === 'forget'
               ? 'Forget this pendant? You will need its claim key to set it up again.'
               : `Delete ${dialogFile} from the pendant? This cannot be undone.`
