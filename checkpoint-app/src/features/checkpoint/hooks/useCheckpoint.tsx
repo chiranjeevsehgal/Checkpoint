@@ -156,7 +156,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     try {
       await openSettings();
     } catch (error) {
-      console.log(
+      console.warn(
         `[ui] open settings failed: ${error instanceof Error ? error.message : 'unknown'}`,
       );
     }

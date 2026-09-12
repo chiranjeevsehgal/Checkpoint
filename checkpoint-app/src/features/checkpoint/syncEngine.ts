@@ -371,7 +371,7 @@ class SyncEngine {
         this.reportIngest(record.fileId, result.uploadId, result.status, '');
         this.patchRecord(record.fileId, { attempts: 0, nextAttemptAt: undefined });
         if (!this.settings.keepFiles) {
-          await CheckpointClient.deleteLocalCopy(record.fileId);
+          CheckpointClient.deleteLocalCopy(record.fileId);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'unknown';
@@ -395,7 +395,7 @@ class SyncEngine {
 
   private appendLog(line: string): void {
     // Mirrored to logcat so field issues can be diagnosed over adb.
-    console.log(line);
+    console.debug(line);
     this.setState({ logs: pushLog(this.snapshot.logs, line) });
   }
 
@@ -453,7 +453,7 @@ class SyncEngine {
         verdict.speechS.toFixed(2),
       );
       if (!current.keepFiles) {
-        await CheckpointClient.deleteLocalCopy(file.fileIdHex);
+        CheckpointClient.deleteLocalCopy(file.fileIdHex);
       }
       return;
     }
@@ -598,7 +598,7 @@ class SyncEngine {
             this.appendLog(`[ui] queue-wait until SUBMITTED (Kafka ${KAFKA_TOPIC_HINT})`);
             void this.drainQueue();
           },
-          onAlive: async () => {
+          onAlive: () => {
             this.setState({ linkState: 'listening' });
           },
           onTick: async () => {

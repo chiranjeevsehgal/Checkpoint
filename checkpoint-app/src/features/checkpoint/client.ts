@@ -637,9 +637,9 @@ export class CheckpointClient {
     }
     if (packet.type === PKT_ERROR) {
       this.lastError = packet.payload.length > 0 ? packet.payload[0]! : null;
-      if (this.helloDone === null) this.helloDone = false;
-      if (this.authDone === null) this.authDone = false;
-      if (this.readyDone === null) this.readyDone = false;
+      this.helloDone ??= false;
+      this.authDone ??= false;
+      this.readyDone ??= false;
       this.log(`  [!] Device ERROR: ${name} payload=${bytesToHex(packet.payload)}`);
       return;
     }
@@ -813,9 +813,8 @@ export class CheckpointClient {
 
   private async completedOk(fileId: bigint, fileCrc: number, total: number): Promise<boolean> {
     const entry = this.completed.get(fileIdHex(fileId));
-    if (!entry || entry.crcHex !== crcHex(fileCrc) || entry.size !== total) {
-      return false;
-    }
+    if (!entry) return false;
+    if (entry.crcHex !== crcHex(fileCrc) || entry.size !== total) return false;
     const saved = await readSavedBytes(entry.uri);
     return saved !== null && crc32(saved) === fileCrc >>> 0;
   }
@@ -845,7 +844,7 @@ export class CheckpointClient {
     let fromCache = false;
     let savedNow = false;
     let data: Uint8Array | null = null;
-    if (file && file.fileId === fileId) {
+    if (file?.fileId === fileId) {
       data = file.data();
       const actual = crc32(data);
       ok = actual === fileCrc >>> 0 && file.received.size === file.totalFrags;
@@ -1003,7 +1002,7 @@ export class CheckpointClient {
     hooks: {
       stopped: () => boolean;
       onReady?: () => Promise<void>;
-      onAlive?: () => Promise<void>;
+      onAlive?: () => void | Promise<void>;
       onTick?: () => Promise<void>;
     },
   ): Promise<void> {
@@ -1100,7 +1099,7 @@ export class CheckpointClient {
     this.stopRequested = true;
   }
 
-  static async deleteLocalCopy(fileIdHexValue: string): Promise<void> {
-    await deleteSaved(fileIdHexValue);
+  static deleteLocalCopy(fileIdHexValue: string): void {
+    deleteSaved(fileIdHexValue);
   }
 }

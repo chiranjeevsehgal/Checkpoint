@@ -72,7 +72,7 @@ export async function isCredentialPending(deviceId: Uint8Array): Promise<boolean
 export async function markCredentialActive(deviceId: Uint8Array): Promise<void> {
   const key = credentialKey(bytesToHex(deviceId));
   const record = decodeCredential(await storage.get(key));
-  if (record && record.pending) {
+  if (record?.pending) {
     await storage.set(key, JSON.stringify({ ...record, pending: false }));
   }
 }

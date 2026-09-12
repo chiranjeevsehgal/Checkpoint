@@ -39,14 +39,12 @@ const modelAsset = require('../../../assets/models/silero_vad.onnx') as number;
 let sessionPromise: Promise<InferenceSession> | null = null;
 
 function ensureSession(): Promise<InferenceSession> {
-  if (!sessionPromise) {
-    sessionPromise = (async () => {
-      const asset = Asset.fromModule(modelAsset);
-      await asset.downloadAsync();
-      if (!asset.localUri) throw new Error('VAD model asset has no local URI');
-      return InferenceSession.create(asset.localUri);
-    })();
-  }
+  sessionPromise ??= (async () => {
+    const asset = Asset.fromModule(modelAsset);
+    await asset.downloadAsync();
+    if (!asset.localUri) throw new Error('VAD model asset has no local URI');
+    return InferenceSession.create(asset.localUri);
+  })();
   return sessionPromise;
 }
 

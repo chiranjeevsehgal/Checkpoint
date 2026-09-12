@@ -190,7 +190,7 @@ export async function readSavedBytes(uri: string): Promise<Uint8Array | null> {
   }
 }
 
-export async function deleteSaved(fileIdHex: string): Promise<void> {
+export function deleteSaved(fileIdHex: string): void {
   for (const ext of ['.ogg', '.wav', '.json']) {
     try {
       const file = ext === '.json' ? receivedMetaFile(fileIdHex) : receivedFile(fileIdHex, ext);

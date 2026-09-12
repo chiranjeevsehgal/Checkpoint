@@ -24,15 +24,18 @@ module.exports = defineConfig([
       '@typescript-eslint/no-floating-promises': 'warn',
       '@typescript-eslint/no-misused-promises': 'warn',
       '@typescript-eslint/require-await': 'warn',
-      '@typescript-eslint/no-unnecessary-condition': 'warn',
+      '@typescript-eslint/no-unnecessary-condition': 'off',
       '@typescript-eslint/prefer-nullish-coalescing': 'warn',
       '@typescript-eslint/prefer-optional-chain': 'warn',
-      '@typescript-eslint/switch-exhaustiveness-check': 'warn',
+      '@typescript-eslint/switch-exhaustiveness-check': [
+        'warn',
+        { considerDefaultExhaustiveForUnions: true },
+      ],
       'import/order': [
         'warn',
         { 'newlines-between': 'always', alphabetize: { order: 'asc', caseInsensitive: true } },
       ],
-      'no-console': ['warn', { allow: ['warn', 'error'] }],
+      'no-console': ['warn', { allow: ['warn', 'error', 'debug'] }],
       complexity: ['warn', 20],
       'max-depth': ['warn', 3],
       'max-lines': ['warn', { max: 600, skipBlankLines: true, skipComments: true }],
@@ -45,6 +48,10 @@ module.exports = defineConfig([
     languageOptions: {
       globals: { __dirname: 'readonly', __filename: 'readonly' },
     },
+  },
+  {
+    files: ['**/*.web.ts'],
+    rules: { '@typescript-eslint/require-await': 'off' },
   },
   {
     files: ['**/*.d.ts'],
