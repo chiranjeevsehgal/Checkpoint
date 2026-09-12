@@ -46,7 +46,7 @@ describe('connectionActivity', () => {
   it('reports idle when connected with no activity', () => {
     assert.deepEqual(
       connectionActivity({ connected: true, recording: false, vadActive: false, syncing: 0 }),
-      { label: 'Idle · listening', tone: 'connected' },
+      { label: 'Idle', tone: 'connected' },
     );
   });
 });

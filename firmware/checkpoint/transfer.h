@@ -7,3 +7,6 @@ bool transfer_is_busy();
 String transfer_current_file();
 // True while the transfer task holds this path open for upload.
 bool transfer_is_transferring(const String &path);
+// Queue a one-shot preview fetch. The transfer task sends exactly this file
+// and, unlike sync, leaves the SD file and the manifest untouched.
+void transfer_request_fetch(const char *path, size_t len);

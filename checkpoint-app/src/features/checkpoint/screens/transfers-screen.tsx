@@ -1,9 +1,10 @@
-import { Upload } from 'lucide-react-native';
+import { Pause, Play, Upload } from 'lucide-react-native';
 import { Fragment, useState } from 'react';
 import { FlatList, Pressable, View } from 'react-native';
 
 import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
+import { playback, usePlayback } from '../playback.ts';
 import { isTerminal, type TransferRecord } from '../transferStore.ts';
 import { transferView, type TransferStage, type TransferView } from '../transferView.ts';
 
@@ -17,6 +18,7 @@ import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { Text } from '@/components/ui/text';
 import { useRefresh } from '@/lib/use-refresh';
 import { cn } from '@/lib/utils';
+import { useToast } from '@/providers/toast-provider';
 
 const STEPS = ['Receive', 'Analyze', 'Upload'] as const;
 
@@ -60,6 +62,38 @@ function Chip({
     <View className={cn('px-2.5 py-1', className)}>
       <Text className={cn('text-[11px]', textClassName)}>{label}</Text>
     </View>
+  );
+}
+
+function PlayButton({ uri, label }: { uri: string; label: string }) {
+  const { label: playingLabel, playing, paused } = usePlayback();
+  const { showToast } = useToast();
+  const isPlaying = playing && playingLabel === label;
+  const isPaused = paused && playingLabel === label;
+
+  const onPress = () => {
+    if (isPlaying) {
+      playback.pause();
+      return;
+    }
+    if (isPaused) {
+      playback.resume();
+      return;
+    }
+    void playback.play(uri, label).catch((error: unknown) => {
+      showToast(error instanceof Error ? error.message : 'Playback failed.');
+    });
+  };
+
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={isPlaying ? `Pause ${label}` : `Play ${label}`}
+      className="active:bg-foreground/10 border border-border p-1.5"
+    >
+      <Icon as={isPlaying ? Pause : Play} size={14} />
+    </Pressable>
   );
 }
 
@@ -110,6 +144,11 @@ function TransferRow({
           </Text>
         ) : null}
       </Pressable>
+      {item.localUri ? (
+        <View className="mt-2 flex-row justify-end">
+          <PlayButton uri={item.localUri} label={view.filename} />
+        </View>
+      ) : null}
     </Card>
   );
 }

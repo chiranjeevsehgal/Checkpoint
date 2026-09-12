@@ -1,6 +1,12 @@
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
+export function isOggOpus(data: Uint8Array): boolean {
+  return (
+    data.length >= 4 && data[0] === 0x4f && data[1] === 0x67 && data[2] === 0x67 && data[3] === 0x53
+  );
+}
+
 export function oggCrc(data: Uint8Array): number {
   let crc = 0;
   for (const byte of data) {

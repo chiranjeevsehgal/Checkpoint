@@ -1,4 +1,4 @@
-import { Play, RefreshCw, Square } from 'lucide-react-native';
+import { Play, Square } from 'lucide-react-native';
 import { useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
@@ -8,6 +8,7 @@ import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 
 import { AppHeader } from '@/components/shared/app-header';
 import { EmptyState } from '@/components/shared/empty-state';
+import { RefreshButton } from '@/components/shared/refresh-button';
 import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
@@ -65,10 +66,7 @@ export function DeviceScreen() {
           <Card>
             <View className="flex-row items-center justify-between">
               <CardKicker>Recording</CardKicker>
-              <Button variant="ghost" size="sm" onPress={() => void refreshStatus()}>
-                <Icon as={RefreshCw} size={14} />
-                <Text>Refresh</Text>
-              </Button>
+              <RefreshButton onPress={() => void refreshStatus()} />
             </View>
             <ProgressBar value={levelPct / 100} className="h-1.5" />
             <Text variant="muted" className="text-[11px]">

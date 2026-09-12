@@ -17,6 +17,7 @@ enum CtrlCmd : uint8_t {
   CTRL_CMD_SYNC_GET = 0x13,   // reply extra [enabled]
   CTRL_CMD_FILE_DELETE = 0x20,  // payload[1..] = full "/rec/..." path bytes
   CTRL_CMD_STORAGE_ERASE = 0x21, // payload[1] = CTRL_ERASE_ARM / CTRL_ERASE_CONFIRM
+  CTRL_CMD_FILE_FETCH = 0x22,   // payload[1..] = full "/rec/..." path (preview, keeps file)
 };
 
 // Status codes carried in PKT_CMD_RESP payload[1].

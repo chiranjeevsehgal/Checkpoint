@@ -1,6 +1,7 @@
 import {
   CTRL_BRIGHT_MIN,
   CTRL_CMD_FILE_DELETE,
+  CTRL_CMD_FILE_FETCH,
   CTRL_CMD_LED_GET,
   CTRL_CMD_LED_SET,
   CTRL_CMD_STORAGE_ERASE,
@@ -126,6 +127,14 @@ export function buildFileDeletePayload(path: string): Uint8Array {
 
 export function buildStorageErasePayload(step: number): Uint8Array {
   return new Uint8Array([CTRL_CMD_STORAGE_ERASE, step & 0xff]);
+}
+
+export function buildFileFetchPayload(path: string): Uint8Array {
+  const name = textEncoder.encode(path);
+  const out = new Uint8Array(1 + name.length);
+  out[0] = CTRL_CMD_FILE_FETCH;
+  out.set(name, 1);
+  return out;
 }
 
 export function buildListReqPayload(start: number): Uint8Array {

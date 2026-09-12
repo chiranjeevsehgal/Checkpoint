@@ -20,6 +20,7 @@ import { IngestionUploader } from './ingestion.ts';
 import { networkMonitor } from './networkMonitor.ts';
 import { ctrlStatusText } from './parsers.ts';
 import { ensureBlePermissions, hasBlePermissions } from './permissions.ts';
+import { playback } from './playback.ts';
 import { nextRetryDelayMs } from './retry.ts';
 import { defaultSettings, type CheckpointSettings } from './settings.ts';
 import {
@@ -48,6 +49,14 @@ export interface ListPage {
 
 export type BluetoothStatus = 'on' | 'off' | 'unauthorized' | 'unsupported' | 'unknown' | null;
 
+export interface PreviewSnapshot {
+  path: string;
+  fileId: string;
+  received: number;
+  totalFrags: number;
+  totalBytes: number;
+}
+
 export interface EngineSnapshot {
   connected: boolean;
   busy: boolean;
@@ -57,6 +66,9 @@ export interface EngineSnapshot {
   fileList: DeviceFileList | null;
   listPage: ListPage;
   transfers: TransferRecord[];
+  preview: PreviewSnapshot | null;
+  deleting: string | null;
+  erasing: boolean;
   logs: string[];
   needsSettings: boolean;
   bluetooth: BluetoothStatus;
@@ -73,6 +85,9 @@ const INITIAL_SNAPSHOT: EngineSnapshot = {
   fileList: null,
   listPage: { start: 0, total: 0, count: 0 },
   transfers: [],
+  preview: null,
+  deleting: null,
+  erasing: false,
   logs: [],
   needsSettings: false,
   bluetooth: null,
@@ -370,9 +385,6 @@ class SyncEngine {
         this.appendLog(`  [ingest] OK upload_id=${result.uploadId} status=${result.status}`);
         this.reportIngest(record.fileId, result.uploadId, result.status, '');
         this.patchRecord(record.fileId, { attempts: 0, nextAttemptAt: undefined });
-        if (!this.settings.keepFiles) {
-          CheckpointClient.deleteLocalCopy(record.fileId);
-        }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'unknown';
         this.appendLog(`  [!] ingest failed: ${message}`);
@@ -399,9 +411,44 @@ class SyncEngine {
     this.setState({ logs: pushLog(this.snapshot.logs, line) });
   }
 
+  private handlePreviewEvent(event: CheckpointEvent): void {
+    if (event.type === 'announce') {
+      this.setState({
+        preview: {
+          path: event.path ?? this.snapshot.preview?.path ?? 'preview',
+          fileId: event.fileId,
+          received: 0,
+          totalFrags: event.totalFrags,
+          totalBytes: event.totalBytes,
+        },
+      });
+      return;
+    }
+    if (event.type === 'progress') {
+      const preview = this.snapshot.preview;
+      if (!preview) return;
+      this.setState({
+        preview: { ...preview, received: event.received, totalFrags: event.totalFrags },
+      });
+      return;
+    }
+    if (event.type === 'file_done' && !event.crcOk) {
+      this.appendLog(`[preview] ${event.fileId} checksum failed`);
+      this.setState({ preview: null });
+    }
+  }
+
   private handleEvent(event: CheckpointEvent): void {
     if (event.type === 'link') {
-      this.setState({ linkState: event.state });
+      this.setState(
+        event.state === 'down'
+          ? { linkState: event.state, preview: null }
+          : { linkState: event.state },
+      );
+      return;
+    }
+    if ('preview' in event && event.preview) {
+      this.handlePreviewEvent(event);
       return;
     }
     if (event.type === 'rec_status') {
@@ -452,9 +499,7 @@ class SyncEngine {
         verdict.status,
         verdict.speechS.toFixed(2),
       );
-      if (!current.keepFiles) {
-        CheckpointClient.deleteLocalCopy(file.fileIdHex);
-      }
+      CheckpointClient.deleteLocalCopy(file.fileIdHex);
       return;
     }
     if (!current.ingestEnabled) {
@@ -467,6 +512,19 @@ class SyncEngine {
     });
     const record = this.snapshot.transfers.find((item) => item.fileId === file.fileIdHex);
     if (record) await this.uploadRecord(record);
+  }
+
+  private async handlePreviewFile(file: CompletedFile): Promise<void> {
+    const label = this.snapshot.preview?.path ?? 'preview';
+    this.setState({ preview: null });
+    try {
+      await playback.playBytes(file.bytes, label);
+      this.appendLog(`[preview] playing ${label}`);
+    } catch (error) {
+      this.appendLog(
+        `[preview] playback failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
+    }
   }
 
   private async withClient<T>(
@@ -559,7 +617,8 @@ class SyncEngine {
         onEvent: (event) => this.handleEvent(event),
         log: (line) => this.appendLog(line),
         onFile: (file) => {
-          void this.handleCompletedFile(file);
+          if (file.preview) void this.handlePreviewFile(file);
+          else void this.handleCompletedFile(file);
         },
       });
     } catch (error) {
@@ -655,7 +714,13 @@ class SyncEngine {
         );
       }
     }
-    this.setState({ connected: false, autoConnecting: false, linkState: 'idle', deviceId: null });
+    this.setState({
+      connected: false,
+      autoConnecting: false,
+      linkState: 'idle',
+      deviceId: null,
+      preview: null,
+    });
   }
 
   refreshStatus = async (): Promise<void> => {
@@ -663,10 +728,33 @@ class SyncEngine {
   };
 
   refreshStorage = async (): Promise<void> => {
+    const start = this.snapshot.listPage.start;
     await this.withClient('storage', async (client) => {
       await client.reqStorage();
-      await client.reqList(0);
+      await client.reqList(start);
     });
+  };
+
+  previewStorageFile = async (path: string): Promise<number | null> => {
+    const client = this.client;
+    if (!client) return null;
+    this.setState({
+      preview: { path, fileId: '', received: 0, totalFrags: 0, totalBytes: 0 },
+    });
+    try {
+      const code = await client.cmdFileFetch(path);
+      if (code !== CTRL_OK) {
+        this.setState({ preview: null });
+        this.appendLog(`[preview] fetch ${path} rejected status=${ctrlStatusText(code)}`);
+      }
+      return code;
+    } catch (error) {
+      this.setState({ preview: null });
+      this.appendLog(
+        `[preview] fetch failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
+      return null;
+    }
   };
 
   refreshTransfers = async (): Promise<void> => {
@@ -723,32 +811,43 @@ class SyncEngine {
   };
 
   async deleteFile(path: string): Promise<number | null> {
-    const start = this.snapshot.listPage.start;
-    return this.withClient('file-delete', async (client) => {
-      const code = await client.cmdFileDelete(path);
-      this.appendLog(`[ui] file-delete ${path} status=${ctrlStatusText(code)}`);
-      await client.reqStorage();
-      await client.reqList(start);
+    if (!this.client) return null;
+    this.setState({ deleting: path });
+    try {
+      const code = await this.withClient('file-delete', async (client) => {
+        const status = await client.cmdFileDelete(path);
+        this.appendLog(`[ui] file-delete ${path} status=${ctrlStatusText(status)}`);
+        return status;
+      });
+      await this.refreshStorage();
       return code;
-    });
+    } finally {
+      this.setState({ deleting: null });
+    }
   }
 
   async eraseStorage(): Promise<number | null> {
-    return this.withClient('storage-erase', async (client) => {
-      const arm = await client.cmdStorageErase(CTRL_ERASE_ARM);
-      if ((arm.status ?? 1) !== CTRL_OK) {
-        this.appendLog(`[ui] erase arm refused status=${ctrlStatusText(arm.status ?? 1)}`);
-        return null;
-      }
-      const confirmed = await client.cmdStorageErase(CTRL_ERASE_CONFIRM);
-      this.appendLog(
-        `[ui] erase confirm status=${ctrlStatusText(confirmed.status ?? 1)} removed=${confirmed.removed ?? '?'}`,
-      );
-      this.setState({ listPage: { start: 0, total: 0, count: 0 } });
-      await client.reqStorage();
-      await client.reqList(0);
-      return confirmed.status ?? 1;
-    });
+    if (!this.client) return null;
+    this.setState({ erasing: true });
+    try {
+      return await this.withClient('storage-erase', async (client) => {
+        const arm = await client.cmdStorageErase(CTRL_ERASE_ARM);
+        if ((arm.status ?? 1) !== CTRL_OK) {
+          this.appendLog(`[ui] erase arm refused status=${ctrlStatusText(arm.status ?? 1)}`);
+          return null;
+        }
+        const confirmed = await client.cmdStorageErase(CTRL_ERASE_CONFIRM);
+        this.appendLog(
+          `[ui] erase confirm status=${ctrlStatusText(confirmed.status ?? 1)} removed=${confirmed.removed ?? '?'}`,
+        );
+        this.setState({ listPage: { start: 0, total: 0, count: 0 } });
+        await client.reqStorage();
+        await client.reqList(0);
+        return confirmed.status ?? 1;
+      });
+    } finally {
+      this.setState({ erasing: false });
+    }
   }
 
   clearLogs = (): void => {

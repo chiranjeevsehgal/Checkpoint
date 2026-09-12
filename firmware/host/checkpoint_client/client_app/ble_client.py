@@ -568,6 +568,11 @@ class CheckpointClient:
         return await self._ctrl_roundtrip(
             cfg.PKT_CMD, bytes([cfg.CTRL_CMD_STORAGE_ERASE, step & 0xFF]), timeout)
 
+    async def cmd_file_fetch(self, path: str, timeout: float = 5.0) -> int:
+        res = await self._ctrl_roundtrip(
+            cfg.PKT_CMD, bytes([cfg.CTRL_CMD_FILE_FETCH]) + path.encode("utf-8"), timeout)
+        return int(res.get("status", cfg.CTRL_ERR_NOT_READY))
+
     @staticmethod
     def parse_status(payload: bytes) -> dict:
         if len(payload) < 16:

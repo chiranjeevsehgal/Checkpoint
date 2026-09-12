@@ -21,5 +21,5 @@ export function connectionActivity(input: {
   if (input.recording) return { label: 'Recording now', tone: 'recording' };
   if (input.vadActive) return { label: 'Capturing speech', tone: 'capturing' };
   if (input.syncing > 0) return { label: `Syncing ${input.syncing}`, tone: 'syncing' };
-  return { label: 'Idle · listening', tone: 'connected' };
+  return { label: 'Idle', tone: 'connected' };
 }

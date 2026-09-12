@@ -10,15 +10,17 @@ import {
   useSyncExternalStore,
 } from 'react';
 
+import { startSyncService, stopSyncService } from '../backgroundService.ts';
 import { CTRL_OK, DEVICE_NAME } from '../config.ts';
 import { networkMonitor } from '../networkMonitor.ts';
+import { ctrlStatusText } from '../parsers.ts';
 import {
   defaultSettings,
   loadSettings,
   saveSettings,
   type CheckpointSettings,
 } from '../settings.ts';
-import { syncEngine, type ListPage } from '../syncEngine.ts';
+import { syncEngine, type ListPage, type PreviewSnapshot } from '../syncEngine.ts';
 import type { TransferRecord } from '../transferStore.ts';
 import type { DeviceFileList, DeviceStatus, StorageInfo } from '../types.ts';
 
@@ -42,6 +44,9 @@ interface CheckpointContextValue {
   fileList: DeviceFileList | null;
   listPage: ListPage;
   transfers: TransferRecord[];
+  preview: PreviewSnapshot | null;
+  deleting: string | null;
+  erasing: boolean;
   logs: string[];
   settings: CheckpointSettings;
   connect: () => Promise<void>;
@@ -57,6 +62,7 @@ interface CheckpointContextValue {
   applySync: (enabled: boolean) => Promise<void>;
   requestDelete: (path: string) => void;
   requestErase: () => void;
+  previewStorageFile: (path: string) => Promise<number | null>;
   updateSettings: (settings: CheckpointSettings) => Promise<void>;
   shareBench: () => Promise<void>;
   clearLogs: () => void;
@@ -89,11 +95,18 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       void syncEngine.start();
       void networkMonitor.start();
     });
-    return () => {
-      void syncEngine.stop();
-      networkMonitor.stop();
-    };
   }, []);
+
+  useEffect(() => {
+    if (!settings.autoSyncEnabled) {
+      void stopSyncService();
+      return;
+    }
+    void startSyncService({
+      connected: snapshot.connected,
+      recording: snapshot.status?.recording ?? false,
+    });
+  }, [settings.autoSyncEnabled, snapshot.connected, snapshot.status?.recording]);
 
   const connect = useCallback(async () => {
     syncEngine.configure(settings);
@@ -126,6 +139,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     async (path: string) => {
       const code = await syncEngine.deleteFile(path);
       if (code === CTRL_OK) showToast('File deleted.');
+      else if (code !== null) showToast(`Delete failed: ${ctrlStatusText(code)}`);
     },
     [showToast],
   );
@@ -162,6 +176,17 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     }
   }, []);
 
+  const previewStorageFile = useCallback(
+    async (path: string) => {
+      const code = await syncEngine.previewStorageFile(path);
+      if (code !== null && code !== CTRL_OK) {
+        showToast(`Could not fetch preview: ${ctrlStatusText(code)}`);
+      }
+      return code;
+    },
+    [showToast],
+  );
+
   const requestDelete = useCallback((path: string) => setDialog({ kind: 'delete', path }), []);
   const requestErase = useCallback(() => setDialog({ kind: 'erase' }), []);
   const cancelDialog = useCallback(() => setDialog(null), []);
@@ -189,6 +214,9 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       fileList: snapshot.fileList,
       listPage: snapshot.listPage,
       transfers: snapshot.transfers,
+      preview: snapshot.preview,
+      deleting: snapshot.deleting,
+      erasing: snapshot.erasing,
       logs: snapshot.logs,
       settings,
       connect,
@@ -204,6 +232,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       applySync,
       requestDelete,
       requestErase,
+      previewStorageFile,
       updateSettings,
       shareBench: syncEngine.shareBench,
       clearLogs: syncEngine.clearLogs,
@@ -219,6 +248,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       deviceName,
       disconnect,
       openAppSettings,
+      previewStorageFile,
       requestDelete,
       requestErase,
       settings,

@@ -2,13 +2,24 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { hexToBytes } from '../crypto.ts';
-import { makeOggPage, oggCrc, parseOggPages, repairOpusOgg } from '../ogg.ts';
+import { isOggOpus, makeOggPage, oggCrc, parseOggPages, repairOpusOgg } from '../ogg.ts';
 
 function hex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 }
+
+describe('isOggOpus', () => {
+  it('detects the OggS magic', () => {
+    assert.equal(isOggOpus(hexToBytes('4f6767530000')), true);
+  });
+
+  it('rejects WAV and short input', () => {
+    assert.equal(isOggOpus(hexToBytes('52494646')), false);
+    assert.equal(isOggOpus(new Uint8Array([0x4f, 0x67])), false);
+  });
+});
 
 describe('oggCrc', () => {
   it('matches client_app for OggS-test', () => {

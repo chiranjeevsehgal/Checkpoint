@@ -63,8 +63,10 @@ import {
   finishProof,
   newId,
 } from './crypto.ts';
+import { decodeUtf8, isOggOpus } from './ogg.ts';
 import {
   buildFileDeletePayload,
+  buildFileFetchPayload,
   buildLedSetPayload,
   buildListReqPayload,
   buildStorageErasePayload,
@@ -119,6 +121,7 @@ export interface CompletedFile {
   fileIdHex: string;
   bytes: Uint8Array;
   totalBytes: number;
+  preview?: boolean;
 }
 
 interface PendingRoundtrip {
@@ -166,6 +169,7 @@ export class CheckpointClient {
   private currentFile: IncomingFile | null = null;
   private partWriter: PartWriter | null = null;
   private completed = new Map<string, CompletedEntry>();
+  private previewIds = new Set<string>();
   private seqGen = 1;
   private pending = new Map<number, PendingRoundtrip>();
   private stopRequested = false;
@@ -348,6 +352,7 @@ export class CheckpointClient {
     this.sessionKey = null;
     this.sessionId = null;
     this.currentFile = null;
+    this.previewIds.clear();
     this.closePart();
     for (const [, waiter] of this.pending) {
       clearTimeout(waiter.timer);
@@ -702,9 +707,14 @@ export class CheckpointClient {
     const deviceStartSeq = view.getUint16(11, true);
     const fileId = view.getBigUint64(13, true);
     const idHex = fileIdHex(fileId);
+    // Preview fetches append flags + path; normal announces stay 21 bytes.
+    const preview = payload.length >= 22 && (payload[21]! & 0x01) === 1;
+    const previewPath = preview && payload.length > 22 ? decodeUtf8(payload.slice(22)) : undefined;
     this.log(
-      `  FILE_ANNOUNCE: total=${total}B frags=${totalFrags} crc=${crcHex(fileCrc)} file_id=${idHex}`,
+      `  FILE_ANNOUNCE: total=${total}B frags=${totalFrags} crc=${crcHex(fileCrc)} file_id=${idHex}${preview ? ` preview=${previewPath ?? '?'}` : ''}`,
     );
+    if (preview) this.previewIds.add(idHex);
+    else this.previewIds.delete(idHex);
     let key: Uint8Array | null = null;
     if (this.sessionKey && this.sessionId !== null) {
       key = deriveFileKey(this.sessionKey, this.sessionId, fileId);
@@ -721,6 +731,7 @@ export class CheckpointClient {
     this.currentFile = incoming;
     let resume = 0;
     if (
+      !preview &&
       totalFrags > 0 &&
       deviceStartSeq === totalFrags &&
       (await this.completedOk(fileId, fileCrc, total))
@@ -730,8 +741,8 @@ export class CheckpointClient {
       incoming.contigSeq = totalFrags - 1;
       this.log(`  [resume] ${idHex} already completed — confirming`);
     } else {
-      const partBytes = await readPartBytes(idHex);
-      const sidecar = await readSidecar(idHex);
+      const partBytes = preview ? null : await readPartBytes(idHex);
+      const sidecar = preview ? null : await readSidecar(idHex);
       const valid = validateSidecar(
         sidecar,
         crcHex(fileCrc),
@@ -753,7 +764,7 @@ export class CheckpointClient {
       this.closePart();
       this.partWriter = openPart(idHex, total);
     }
-    this.bench.resetFile(fileId, total, totalFrags, resume);
+    if (!preview) this.bench.resetFile(fileId, total, totalFrags, resume);
     const sent = await this.writeAck(
       PKT_FILE_ANNOUNCE_ACK,
       this.nextSeq(),
@@ -763,7 +774,14 @@ export class CheckpointClient {
       this.log('  [!] ANNOUNCE_ACK write failed — keeping state for firmware retry');
       return;
     }
-    this.emit({ type: 'announce', fileId: idHex, totalBytes: total, totalFrags });
+    this.emit({
+      type: 'announce',
+      fileId: idHex,
+      totalBytes: total,
+      totalFrags,
+      preview,
+      path: previewPath,
+    });
   }
 
   private async handleData(seq: number, raw: Uint8Array): Promise<void> {
@@ -787,11 +805,13 @@ export class CheckpointClient {
       }
       const count = file.received.size;
       if (count % 20 === 0 || count === file.totalFrags) {
+        const progressId = fileIdHex(file.fileId);
         this.emit({
           type: 'progress',
-          fileId: fileIdHex(file.fileId),
+          fileId: progressId,
           received: count,
           totalFrags: file.totalFrags,
+          preview: this.previewIds.has(progressId),
         });
       }
       if (shouldSendAck(count, file.contigSeq, file.totalFrags)) {
@@ -839,6 +859,7 @@ export class CheckpointClient {
     const fileCrc = view.getUint32(8, true);
     const total = view.getUint32(12, true);
     const idHex = fileIdHex(fileId);
+    const preview = this.previewIds.has(idHex);
     const file = this.currentFile;
     let ok = false;
     let fromCache = false;
@@ -854,14 +875,7 @@ export class CheckpointClient {
         this.log(`  duplicate FILE_DONE for completed ${idHex} — re-ACKing`);
       }
       if (ok && !fromCache && data) {
-        const ext =
-          data.length >= 4 &&
-          data[0] === 0x4f &&
-          data[1] === 0x67 &&
-          data[2] === 0x67 &&
-          data[3] === 0x53
-            ? '.ogg'
-            : '.wav';
+        const ext = isOggOpus(data) ? '.ogg' : '.wav';
         const uri = saveCompleted(idHex, ext, data, {
           file_id: idHex,
           total,
@@ -894,13 +908,7 @@ export class CheckpointClient {
       deletePart(idHex);
       this.closePart();
     }
-    const isOgg =
-      data !== null &&
-      data.length >= 4 &&
-      data[0] === 0x4f &&
-      data[1] === 0x67 &&
-      data[2] === 0x67 &&
-      data[3] === 0x53;
+    const isOgg = data !== null && isOggOpus(data);
     let ingestStatus = '';
     let vadStatus = '';
     if (ok && savedNow && data) {
@@ -915,7 +923,9 @@ export class CheckpointClient {
         vadStatus = 'pending';
       }
     }
-    this.bench.finalize(ok, total, this.mtu ?? 0, this.fragSize, ingestStatus, vadStatus);
+    if (!preview) {
+      this.bench.finalize(ok, total, this.mtu ?? 0, this.fragSize, ingestStatus, vadStatus);
+    }
     this.emit({
       type: 'file_done',
       fileId: idHex,
@@ -923,14 +933,16 @@ export class CheckpointClient {
       totalBytes: total,
       ingestStatus,
       vadStatus,
+      preview,
     });
-    if (ok && !fromCache && data && ingestStatus === 'pending') {
+    if (ok && !fromCache && data && (ingestStatus === 'pending' || preview)) {
       try {
-        this.callbacks.onFile?.({ fileIdHex: idHex, bytes: data, totalBytes: total });
+        this.callbacks.onFile?.({ fileIdHex: idHex, bytes: data, totalBytes: total, preview });
       } catch {
         /* listener errors must not break the link */
       }
     }
+    if (preview) this.previewIds.delete(idHex);
     if (this.currentFile?.fileId === fileId) this.currentFile = null;
   }
 
@@ -985,6 +997,11 @@ export class CheckpointClient {
 
   async cmdFileDelete(path: string): Promise<number> {
     const res = (await this.ctrlRoundtrip(PKT_CMD, buildFileDeletePayload(path))) as CmdResponse;
+    return res.status ?? CTRL_ERR_NOT_READY;
+  }
+
+  async cmdFileFetch(path: string): Promise<number> {
+    const res = (await this.ctrlRoundtrip(PKT_CMD, buildFileFetchPayload(path))) as CmdResponse;
     return res.status ?? CTRL_ERR_NOT_READY;
   }
 

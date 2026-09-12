@@ -11,10 +11,14 @@ import { Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useColorScheme } from 'nativewind';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
+import { AppSplash } from '@/components/shared/app-splash';
+import '@/features/checkpoint/backgroundService';
 import { NAV_THEME } from '@/lib/theme';
 import { AppProviders } from '@/providers/app-providers';
+
+const SPLASH_DURATION_MS = 1200;
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -26,9 +30,13 @@ function RootNavigator() {
     Archivo_600SemiBold,
     Archivo_800ExtraBold,
   });
+  const [splashVisible, setSplashVisible] = useState(true);
 
   useEffect(() => {
-    if (fontsLoaded) void SplashScreen.hideAsync();
+    if (!fontsLoaded) return;
+    void SplashScreen.hideAsync();
+    const timer = setTimeout(() => setSplashVisible(false), SPLASH_DURATION_MS);
+    return () => clearTimeout(timer);
   }, [fontsLoaded]);
 
   if (!fontsLoaded) return null;
@@ -36,11 +44,15 @@ function RootNavigator() {
   return (
     <ThemeProvider value={NAV_THEME[scheme]}>
       <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="(public)" />
-        <Stack.Screen name="(app)" />
-        <Stack.Screen name="+not-found" />
-      </Stack>
+      {splashVisible ? (
+        <AppSplash />
+      ) : (
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="(public)" />
+          <Stack.Screen name="(app)" />
+          <Stack.Screen name="+not-found" />
+        </Stack>
+      )}
       <PortalHost />
     </ThemeProvider>
   );
