@@ -1,14 +1,8 @@
 name: checkpoint-app-build
 
 on:
-  push:
-    paths:
-      - "checkpoint-app/**"
-      - ".github/workflows/checkpoint-app-build.yml"
-  pull_request:
-    paths:
-      - "checkpoint-app/**"
-      - ".github/workflows/checkpoint-app-build.yml"
+  schedule:
+    - cron: "30 20 * * *"
   workflow_dispatch:
 
 jobs:
@@ -64,4 +58,4 @@ jobs:
         with:
           name: checkpoint-debug-app
           path: checkpoint-app/checkpoint-debug-app.apk
-          retention-days: 30
+          retention-days: 7
