@@ -3,4 +3,5 @@ android
 ios
 .expo
 dist
+assets
 package-lock.json
