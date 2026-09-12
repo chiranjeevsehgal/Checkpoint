@@ -237,7 +237,9 @@ export class CheckpointClient {
       const cleanup = () => {
         if (cancelPoll !== null) clearInterval(cancelPoll);
         try {
-          this.manager.stopDeviceScan();
+          this.manager.stopDeviceScan().catch(() => {
+            /* ignore */
+          });
         } catch {
           /* ignore */
         }
@@ -263,10 +265,8 @@ export class CheckpointClient {
         reject(new Error('Scan cancelled'));
       }, 200);
       try {
-        this.manager.startDeviceScan(
-          [SERVICE_UUID],
-          { allowDuplicates: false },
-          (error, scanned) => {
+        this.manager
+          .startDeviceScan([SERVICE_UUID], { allowDuplicates: false }, (error, scanned) => {
             if (error) {
               this.log(`[ble] scan failed: ${describeScanError(error.errorCode, error.message)}`);
               return;
@@ -288,8 +288,12 @@ export class CheckpointClient {
               seenIds.add(id);
               this.log(`[ble] ignoring non-target device: ${name || '?'} [${id}]`);
             }
-          },
-        );
+          })
+          .catch((error: unknown) => {
+            finish(() => {
+              reject(error instanceof Error ? error : new Error('Scan failed'));
+            });
+          });
       } catch (error) {
         finish(() => {
           reject(error instanceof Error ? error : new Error('Scan failed'));
