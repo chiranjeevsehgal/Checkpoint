@@ -144,7 +144,74 @@ objects remain valid and are never rewritten).
 
 ---
 
-## 7. Stop containers
+## 7. Embedding service
+
+Consumes `EMBEDDING_REQUESTED` events from `embedding.jobs.v1` (published by
+the transcription service after a transcript lands), chunks the text with the
+model's own tokenizer (default 2048 tokens per chunk, 100-token overlap,
+configurable via `EMBEDDING_CHUNK_TOKENS`/`EMBEDDING_CHUNK_OVERLAP_TOKENS`),
+embeds each chunk with [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3)
+(1024-dim, L2-normalized) and upserts into pgvector.
+
+Postgres runs on the `pgvector/pgvector:pg18` image — the same stock
+PostgreSQL 18 with the `vector` extension compiled in. All relational
+metadata tables (`uploads`, `transcripts`, outbox, ...) live unchanged in
+the same database; the migration adds the `vector` extension and one table:
+
+```text
+embeddings(user_id, audio_id, chunk_index, chunk_text, language, model, embedding vector(1024), created_at)
+```
+
+### Namespace (username space)
+
+`user_id` is the namespace. Every vector row carries its owner, and every
+retrieval query must scope by it — one user can never see another's
+vectors:
+
+```bash
+docker-compose exec postgres psql -U <POSTGRES_USER> -d <POSTGRES_DB> -c \
+  "SELECT audio_id, chunk_index, 1 - (embedding <=> (SELECT embedding FROM embeddings WHERE user_id='<USER_A>' LIMIT 1)) AS sim
+   FROM embeddings WHERE user_id='<USER_A>' ORDER BY embedding <=> (SELECT embedding FROM embeddings WHERE user_id='<USER_A>' LIMIT 1) LIMIT 5;"
+```
+
+`embeddings(user_id, audio_id, chunk_index)` is unique, so Kafka
+redeliveries are idempotent; a GIN-free HNSW index over cosine distance
+serves nearest-neighbor queries.
+
+### Build & run
+
+The bge-m3 model (~2.4 GB, CPU torch) is baked into the Docker image — the
+first `docker compose build embedding` downloads it once; no volume or
+internet is needed at runtime. Worker RAM sits around 3–4 GB during
+inference, so give Docker Desktop at least ~6 GB.
+
+Watch progress with plain output — the model step prints a rolling
+`[model] ...` line every 15 s so the big download is never a silent hang:
+
+```bash
+docker compose build --progress=plain embedding
+docker compose up -d embedding
+docker compose logs -f embedding     # "listening on kafka topic embedding.jobs.v1 ..."
+```
+
+The `embedding-migrate` job builds from a separate slim stage (psycopg
+only) and does not pull the model layers.
+
+Delivery semantics mirror the transcription service: offsets commit only
+after a message is embedded and stored; poison messages (bad JSON, empty
+text) go to `embedding.jobs.v1.dlq` with the standard envelope
+(`EMBEDDING_FAILED`); transient failures (pg down) retry with backoff.
+
+Verify end-to-end after an upload flows through transcription:
+
+```bash
+docker-compose exec postgres psql -U <POSTGRES_USER> -d <POSTGRES_DB> -c \
+  "SELECT user_id, count(*) FROM embeddings GROUP BY user_id;"
+```
+
+---
+
+## 8. Stop containers
 
 Stop and remove containers:
 
