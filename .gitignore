@@ -7,3 +7,4 @@ __pycache__/
 /firmware/examples
 /firmware/host/checkpoint_client/received
 /firmware/checkpoint/build
+/references
