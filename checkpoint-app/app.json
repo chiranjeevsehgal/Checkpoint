@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "checkpoint-app",
+    "name": "Checkpoint",
     "slug": "checkpoint-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -9,13 +9,14 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.checkpoint.pendant",
       "infoPlist": {
         "NSBluetoothAlwaysUsageDescription": "Checkpoint syncs recordings from your pendant over Bluetooth.",
         "NSBluetoothPeripheralUsageDescription": "Checkpoint syncs recordings from your pendant over Bluetooth."
       }
     },
     "android": {
-      "package": "com.boredom1234.checkpointapp",
+      "package": "com.checkpoint.pendant",
       "permissions": [
         "android.permission.BLUETOOTH_SCAN",
         "android.permission.BLUETOOTH_CONNECT",

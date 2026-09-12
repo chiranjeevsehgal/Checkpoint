@@ -10,7 +10,7 @@ import { Text } from '@/components/ui/text';
 import { useBatteryOptimization } from '@/hooks/useBatteryOptimization';
 
 function androidPackage(): string {
-  return Constants.expoConfig?.android?.package ?? 'com.boredom1234.checkpointapp';
+  return Constants.expoConfig?.android?.package ?? 'com.checkpoint.pendant';
 }
 
 async function openBatterySettings(): Promise<void> {
