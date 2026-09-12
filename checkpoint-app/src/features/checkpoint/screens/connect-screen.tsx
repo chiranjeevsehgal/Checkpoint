@@ -4,7 +4,6 @@ import { Animated, Pressable, ScrollView, View } from 'react-native';
 
 import { parseClaimHex } from '../claim.ts';
 import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
-import { LogView } from '../components/log-view.tsx';
 import { Toggle } from '../components/toggle.tsx';
 import { DEVICE_NAME } from '../config.ts';
 import { connectionActivity, formatFingerprint, type ActivityTone } from '../connectionView.ts';
@@ -47,13 +46,11 @@ export function ConnectScreen() {
     setClaimText,
     status,
     transfers,
-    logs,
     settings,
     connect,
     disconnect,
     stopAutoConnect,
     updateSettings,
-    clearLogs,
     refreshStatus,
     refreshStorage,
     needsSettings,
@@ -282,8 +279,6 @@ export function ConnectScreen() {
         </Card>
 
         <BatteryOptimizationCard />
-
-        <LogView logs={logs} onClear={clearLogs} />
       </ScrollView>
     </CheckpointScreen>
   );

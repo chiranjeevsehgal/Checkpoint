@@ -22,7 +22,7 @@ import {
 } from '../settings.ts';
 import { syncEngine, type ListPage, type PreviewSnapshot } from '../syncEngine.ts';
 import type { TransferRecord } from '../transferStore.ts';
-import type { DeviceFileList, DeviceStatus, StorageInfo } from '../types.ts';
+import type { DeviceFileList, DeviceStatus, LogEntry, StorageInfo } from '../types.ts';
 
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { useToast } from '@/providers/toast-provider';
@@ -47,7 +47,7 @@ interface CheckpointContextValue {
   preview: PreviewSnapshot | null;
   deleting: string | null;
   erasing: boolean;
-  logs: string[];
+  logs: LogEntry[];
   settings: CheckpointSettings;
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;

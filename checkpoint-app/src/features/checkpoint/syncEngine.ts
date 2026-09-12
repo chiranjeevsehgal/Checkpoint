@@ -38,7 +38,7 @@ import {
   sortTransfers,
   type TransferRecord,
 } from './transferStore.ts';
-import type { CheckpointEvent, DeviceFileList, DeviceStatus, StorageInfo } from './types.ts';
+import type { CheckpointEvent, DeviceFileList, DeviceStatus, LogEntry, StorageInfo } from './types.ts';
 import { checkSpeech, shouldUpload, vadSkipReason } from './vad.ts';
 
 export interface ListPage {
@@ -69,7 +69,7 @@ export interface EngineSnapshot {
   preview: PreviewSnapshot | null;
   deleting: string | null;
   erasing: boolean;
-  logs: string[];
+  logs: LogEntry[];
   needsSettings: boolean;
   bluetooth: BluetoothStatus;
   deviceId: string | null;
@@ -110,8 +110,8 @@ function mapBluetoothState(state: State): BluetoothStatus {
   }
 }
 
-function pushLog(lines: string[], line: string): string[] {
-  const next = [...lines, line];
+function pushLog(entries: LogEntry[], entry: LogEntry): LogEntry[] {
+  const next = [...entries, entry];
   return next.length > MAX_LOG_LINES ? next.slice(next.length - MAX_LOG_LINES) : next;
 }
 
@@ -405,10 +405,10 @@ class SyncEngine {
     for (const listener of this.listeners) listener();
   }
 
-  private appendLog(line: string): void {
+  private appendLog(text: string): void {
     // Mirrored to logcat so field issues can be diagnosed over adb.
-    console.debug(line);
-    this.setState({ logs: pushLog(this.snapshot.logs, line) });
+    console.debug(text);
+    this.setState({ logs: pushLog(this.snapshot.logs, { at: Date.now(), text }) });
   }
 
   private handlePreviewEvent(event: CheckpointEvent): void {
