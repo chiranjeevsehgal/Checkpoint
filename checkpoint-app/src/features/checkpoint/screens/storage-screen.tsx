@@ -12,8 +12,9 @@ import type { DeviceFileEntry } from '../types.ts';
 import { AppHeader } from '@/components/shared/app-header';
 import { EmptyState } from '@/components/shared/empty-state';
 import { RefreshButton } from '@/components/shared/refresh-button';
+import { Section } from '@/components/shared/section';
 import { Button } from '@/components/ui/button';
-import { Card, CardKicker } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { ProgressBar } from '@/components/ui/progress-bar';
 import { AppRefreshControl } from '@/components/ui/refresh-control';
@@ -52,7 +53,7 @@ function FileRow({
   const playable = state !== 'recording';
 
   return (
-    <View className="flex-row items-center justify-between gap-2.5 bg-surface p-3">
+    <Card className="flex-row items-center justify-between gap-2.5 p-3">
       <View className="min-w-0 flex-1">
         <Text className="font-mono text-[13px]">{item.name}</Text>
         <View className="mt-0.5 flex-row items-center gap-1.5">
@@ -96,6 +97,118 @@ function FileRow({
           )}
         </Pressable>
       </View>
+    </Card>
+  );
+}
+
+function StorageHeader({
+  storage,
+  pct,
+  free,
+  pageLabel,
+  connected,
+  onRefresh,
+}: {
+  storage: { used: number; total: number; files: number; pending: number } | null;
+  pct: number;
+  free: number;
+  pageLabel: string;
+  connected: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <View className="gap-3">
+      <Section title="Pendant storage">
+        <Card>
+          <View className="flex-row items-center justify-between gap-2">
+            <Text className="font-display text-[15px]">
+              {storage
+                ? `${formatBytes(storage.used)} used of ${formatBytes(storage.total)}`
+                : 'No storage info yet.'}
+            </Text>
+            <RefreshButton label="Refresh file list" onPress={onRefresh} disabled={!connected} />
+          </View>
+          <ProgressBar value={pct / 100} className="h-1.5" />
+          <Text variant="muted" className="text-[11px]">
+            {storage ? `${storage.files} files · ${storage.pending} pending` : '—'}
+          </Text>
+          {storage ? (
+            <Text variant="muted" className="text-[11px]">
+              {formatBytes(free)} available
+            </Text>
+          ) : null}
+        </Card>
+      </Section>
+      <View className="flex-row items-baseline justify-between">
+        <Text variant="kicker">Device files</Text>
+        <Text variant="muted" className="text-[11px]">
+          {pageLabel}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function EraseCard({
+  connected,
+  busy,
+  erasing,
+  onErase,
+}: {
+  connected: boolean;
+  busy: boolean;
+  erasing: boolean;
+  onErase: () => void;
+}) {
+  return (
+    <Section title="Erase device storage">
+      <Card>
+        <Text variant="muted" className="text-[12px]">
+          Permanently delete all recordings stored on the pendant. This cannot be undone.
+        </Text>
+        <Button
+          variant="outline"
+          className="border-destructive"
+          disabled={!connected || busy || erasing}
+          onPress={onErase}
+        >
+          {erasing ? (
+            <ActivityIndicator size="small" />
+          ) : (
+            <Text className="text-destructive">Erase all recordings</Text>
+          )}
+        </Button>
+      </Card>
+    </Section>
+  );
+}
+
+function Pagination({
+  page,
+  pages,
+  canPrev,
+  canNext,
+  onPrev,
+  onNext,
+}: {
+  page: number;
+  pages: number;
+  canPrev: boolean;
+  canNext: boolean;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <View className="flex-row items-center justify-between gap-2">
+      <Button variant="ghost" size="sm" disabled={!canPrev} onPress={onPrev}>
+        <Text>‹ Previous</Text>
+      </Button>
+      <Text variant="muted" className="text-[11px]">
+        Page {page} of {pages}
+      </Text>
+      <Button variant="ghost" size="sm" disabled={!canNext} onPress={onNext}>
+        <Text>Next ›</Text>
+      </Button>
     </View>
   );
 }
@@ -137,6 +250,7 @@ export function StorageScreen() {
     storage && storage.total > 0
       ? Math.min(100, Math.round((100 * storage.used) / storage.total))
       : 0;
+  const free = storage ? Math.max(0, storage.total - storage.used) : 0;
   const { refreshing, onRefresh } = useRefresh(refreshStorage);
   const pageLabel =
     listPage.total > 0
@@ -144,6 +258,10 @@ export function StorageScreen() {
       : '—';
   const canPrev = listPage.start > 0;
   const canNext = listPage.start + listPage.count < listPage.total;
+  const count = Math.max(1, listPage.count);
+  const page = Math.floor(listPage.start / count) + 1;
+  const pages = Math.max(1, Math.ceil(listPage.total / count));
+  const showPagination = listPage.count > 0 && listPage.total > listPage.count;
   const files = fileList?.entries ?? [];
 
   return (
@@ -154,34 +272,17 @@ export function StorageScreen() {
         data={files}
         keyExtractor={(item) => item.name}
         refreshControl={<AppRefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        contentContainerStyle={{ gap: 14, paddingBottom: 24 }}
+        contentContainerStyle={{ gap: 12, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
-        ItemSeparatorComponent={() => <View className="h-px bg-divider" />}
         ListHeaderComponent={
-          <View className="gap-3.5">
-            <Card>
-              <View className="flex-row items-baseline justify-between">
-                <Text className="font-display text-[15px]">
-                  {storage
-                    ? `SD: ${formatBytes(storage.used)} / ${formatBytes(storage.total)}`
-                    : 'SD: —'}
-                </Text>
-                <RefreshButton onPress={() => void refreshStorage()} disabled={!connected} />
-              </View>
-              <ProgressBar value={pct / 100} className="h-1.5" />
-              <Text variant="muted" className="text-[11.5px]">
-                {storage
-                  ? `${storage.files} files · ${storage.pending} pending`
-                  : 'No storage info yet.'}
-              </Text>
-            </Card>
-            <View className="flex-row items-baseline justify-between">
-              <CardKicker>Device files</CardKicker>
-              <Text variant="muted" className="text-[11px]">
-                {pageLabel}
-              </Text>
-            </View>
-          </View>
+          <StorageHeader
+            storage={storage}
+            pct={pct}
+            free={free}
+            pageLabel={pageLabel}
+            connected={connected}
+            onRefresh={() => void refreshStorage()}
+          />
         }
         renderItem={({ item }) => {
           const fetching = preview?.path === item.name;
@@ -208,40 +309,34 @@ export function StorageScreen() {
           );
         }}
         ListEmptyComponent={
-          <EmptyState title="No files listed" hint="Refresh to load the pendant file list." />
+          <EmptyState
+            title="No recordings found"
+            hint="Refresh the file list to read recordings currently stored on the pendant."
+            action={
+              <Button variant="outline" onPress={() => void refreshStorage()}>
+                <Text>Refresh</Text>
+              </Button>
+            }
+          />
         }
         ListFooterComponent={
-          <View className="gap-2">
-            <View className="flex-row gap-2">
-              <Button
-                variant="outline"
-                className="flex-1"
-                disabled={!canPrev}
-                onPress={() => void listPrev()}
-              >
-                <Text>‹ Prev</Text>
-              </Button>
-              <Button
-                variant="outline"
-                className="flex-1"
-                disabled={!canNext}
-                onPress={() => void listNext()}
-              >
-                <Text>Next ›</Text>
-              </Button>
-            </View>
-            <Button
-              variant="outline"
-              className="border-destructive"
-              disabled={!connected || deleting !== null || erasing}
-              onPress={requestErase}
-            >
-              {erasing ? (
-                <ActivityIndicator size="small" />
-              ) : (
-                <Text className="text-destructive">Erase all…</Text>
-              )}
-            </Button>
+          <View className="gap-4">
+            {showPagination ? (
+              <Pagination
+                page={page}
+                pages={pages}
+                canPrev={canPrev}
+                canNext={canNext}
+                onPrev={() => void listPrev()}
+                onNext={() => void listNext()}
+              />
+            ) : null}
+            <EraseCard
+              connected={connected}
+              busy={deleting !== null}
+              erasing={erasing}
+              onErase={requestErase}
+            />
           </View>
         }
       />

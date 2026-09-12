@@ -11,9 +11,10 @@ import {
 } from 'react';
 
 import { startSyncService, stopSyncService } from '../backgroundService.ts';
-import { CTRL_OK, DEVICE_NAME } from '../config.ts';
+import { CTRL_OK } from '../config.ts';
 import { networkMonitor } from '../networkMonitor.ts';
-import { ctrlStatusText } from '../parsers.ts';
+import type { HealthProbe } from '../networkStatus.ts';
+import { ctrlStatusText, formatBytes } from '../parsers.ts';
 import {
   defaultSettings,
   loadSettings,
@@ -22,18 +23,19 @@ import {
 } from '../settings.ts';
 import { syncEngine, type ListPage, type PreviewSnapshot } from '../syncEngine.ts';
 import type { TransferRecord } from '../transferStore.ts';
-import type { DeviceFileList, DeviceStatus, StorageInfo } from '../types.ts';
+import type { DeviceFileList, DeviceStatus, LogEntry, StorageInfo } from '../types.ts';
 
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { useToast } from '@/providers/toast-provider';
 
-type DialogState = { kind: 'delete'; path: string } | { kind: 'erase' } | null;
+type DialogState = { kind: 'delete'; path: string } | { kind: 'erase' } | { kind: 'forget' } | null;
 
 interface CheckpointContextValue {
   connected: boolean;
   busy: boolean;
   linkState: string;
   deviceId: string | null;
+  enrolled: boolean;
   autoConnecting: boolean;
   deviceName: string;
   setDeviceName: (name: string) => void;
@@ -47,10 +49,11 @@ interface CheckpointContextValue {
   preview: PreviewSnapshot | null;
   deleting: string | null;
   erasing: boolean;
-  logs: string[];
+  logs: LogEntry[];
   settings: CheckpointSettings;
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
+  forgetDevice: () => Promise<void>;
   stopAutoConnect: () => Promise<void>;
   refreshStatus: () => Promise<void>;
   refreshStorage: () => Promise<void>;
@@ -62,13 +65,14 @@ interface CheckpointContextValue {
   applySync: (enabled: boolean) => Promise<void>;
   requestDelete: (path: string) => void;
   requestErase: () => void;
+  requestForget: () => void;
   previewStorageFile: (path: string) => Promise<number | null>;
-  updateSettings: (settings: CheckpointSettings) => Promise<void>;
+  updateSettings: (settings: CheckpointSettings, options?: { silent?: boolean }) => Promise<void>;
   shareBench: () => Promise<void>;
   clearLogs: () => void;
   needsSettings: boolean;
   openAppSettings: () => Promise<void>;
-  testConnection: () => Promise<void>;
+  testConnection: () => Promise<HealthProbe | null>;
 }
 
 const CheckpointContext = createContext<CheckpointContextValue | null>(null);
@@ -82,7 +86,6 @@ export function useCheckpoint(): CheckpointContextValue {
 export function CheckpointProvider({ children }: PropsWithChildren) {
   const { showToast } = useToast();
   const snapshot = useSyncExternalStore(syncEngine.subscribe, syncEngine.getSnapshot);
-  const [deviceName, setDeviceName] = useState(DEVICE_NAME);
   const [claimText, setClaimText] = useState('');
   const [settings, setSettings] = useState<CheckpointSettings>(defaultSettings);
   const [dialog, setDialog] = useState<DialogState>(null);
@@ -110,12 +113,28 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
 
   const connect = useCallback(async () => {
     syncEngine.configure(settings);
-    await syncEngine.connect(deviceName, claimText);
-  }, [claimText, deviceName, settings]);
+    await syncEngine.connect(settings.deviceName, claimText);
+  }, [claimText, settings]);
 
   const disconnect = useCallback(async () => {
     await syncEngine.disconnect();
   }, []);
+
+  const forgetDevice = useCallback(async () => {
+    await syncEngine.forgetDevice();
+    showToast('Pendant forgotten.');
+  }, [showToast]);
+
+  const setDeviceName = useCallback(
+    (name: string) => {
+      const next = { ...settings, deviceName: name };
+      setSettings(next);
+      void saveSettings(next).catch((error: unknown) => {
+        console.warn(`[ui] save device name failed: ${String(error)}`);
+      });
+    },
+    [settings],
+  );
 
   const applyLed = useCallback(
     async (muted: boolean, brightness: number) => {
@@ -150,20 +169,22 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
   }, [showToast]);
 
   const updateSettings = useCallback(
-    async (next: CheckpointSettings) => {
+    async (next: CheckpointSettings, options?: { silent?: boolean }) => {
+      const autoSyncChanged = next.autoSyncEnabled !== settings.autoSyncEnabled;
       await saveSettings(next);
       setSettings(next);
       syncEngine.configure(next);
       networkMonitor.configure(next.serverUrl);
-      await syncEngine.applyAutoSyncIfConnected();
-      showToast('Saved.');
+      if (autoSyncChanged) await syncEngine.applyAutoSyncIfConnected();
+      if (!options?.silent) showToast('Saved.');
     },
-    [showToast],
+    [settings.autoSyncEnabled, showToast],
   );
 
   const testConnection = useCallback(async () => {
-    const ok = await syncEngine.testConnection();
-    showToast(ok ? 'Server reachable.' : 'Server unreachable — see debug log.');
+    const probe = await syncEngine.testConnection();
+    if (!probe) showToast('No internet connection — see debug log.');
+    return probe;
   }, [showToast]);
 
   const openAppSettings = useCallback(async () => {
@@ -189,6 +210,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
 
   const requestDelete = useCallback((path: string) => setDialog({ kind: 'delete', path }), []);
   const requestErase = useCallback(() => setDialog({ kind: 'erase' }), []);
+  const requestForget = useCallback(() => setDialog({ kind: 'forget' }), []);
   const cancelDialog = useCallback(() => setDialog(null), []);
 
   const confirmDialog = useCallback(() => {
@@ -196,7 +218,8 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     setDialog(null);
     if (pending?.kind === 'delete') void deleteFile(pending.path);
     if (pending?.kind === 'erase') void eraseStorage();
-  }, [dialog, deleteFile, eraseStorage]);
+    if (pending?.kind === 'forget') void forgetDevice();
+  }, [dialog, deleteFile, eraseStorage, forgetDevice]);
 
   const value = useMemo<CheckpointContextValue>(
     () => ({
@@ -204,8 +227,9 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       busy: snapshot.busy,
       linkState: snapshot.linkState,
       deviceId: snapshot.deviceId,
+      enrolled: snapshot.enrolled,
       autoConnecting: snapshot.autoConnecting,
-      deviceName,
+      deviceName: settings.deviceName,
       setDeviceName,
       claimText,
       setClaimText,
@@ -221,6 +245,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       settings,
       connect,
       disconnect,
+      forgetDevice,
       stopAutoConnect: syncEngine.stopAutoConnect,
       refreshStatus: syncEngine.refreshStatus,
       refreshStorage: syncEngine.refreshStorage,
@@ -232,6 +257,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       applySync,
       requestDelete,
       requestErase,
+      requestForget,
       previewStorageFile,
       updateSettings,
       shareBench: syncEngine.shareBench,
@@ -245,12 +271,14 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       applySync,
       claimText,
       connect,
-      deviceName,
       disconnect,
+      forgetDevice,
       openAppSettings,
       previewStorageFile,
       requestDelete,
       requestErase,
+      requestForget,
+      setDeviceName,
       settings,
       snapshot,
       testConnection,
@@ -265,13 +293,27 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       {children}
       <ConfirmDialog
         visible={dialog !== null}
-        title={dialog?.kind === 'erase' ? 'Erase all recordings' : 'Delete file'}
+        title={
+          dialog?.kind === 'erase'
+            ? 'Erase all recordings'
+            : dialog?.kind === 'forget'
+              ? 'Forget pendant'
+              : 'Delete file'
+        }
         body={
           dialog?.kind === 'erase'
-            ? 'Erase ALL recordings from the pendant SD card? This cannot be undone. Type ERASE to confirm.'
-            : `Delete ${dialogFile} from the pendant? This cannot be undone.`
+            ? `Erase ALL recordings from the pendant SD card? This cannot be undone.${
+                snapshot.storage
+                  ? ` Files: ${snapshot.storage.files} · Used: ${formatBytes(snapshot.storage.used)}.`
+                  : ''
+              } Type ERASE to confirm.`
+            : dialog?.kind === 'forget'
+              ? 'Forget this pendant? You will need its claim key to set it up again.'
+              : `Delete ${dialogFile} from the pendant? This cannot be undone.`
         }
-        confirmLabel={dialog?.kind === 'erase' ? 'Erase all' : 'Delete'}
+        confirmLabel={
+          dialog?.kind === 'erase' ? 'Erase all' : dialog?.kind === 'forget' ? 'Forget' : 'Delete'
+        }
         requireText={dialog?.kind === 'erase' ? 'ERASE' : undefined}
         onCancel={cancelDialog}
         onConfirm={confirmDialog}

@@ -1,14 +1,20 @@
-import { Pause, Play, Upload } from 'lucide-react-native';
-import { Fragment, useState } from 'react';
+import { Pause, Play, RefreshCw, Upload } from 'lucide-react-native';
 import { FlatList, Pressable, View } from 'react-native';
 
 import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { playback, usePlayback } from '../playback.ts';
-import { isTerminal, type TransferRecord } from '../transferStore.ts';
-import { transferView, type TransferStage, type TransferView } from '../transferView.ts';
+import { statusDescriptor, TONE_TEXT } from '../status.ts';
+import type { TransferRecord } from '../transferStore.ts';
+import {
+  formatTransferTime,
+  transferView,
+  type TransferStage,
+  type TransferView,
+} from '../transferView.ts';
 
 import { AppHeader } from '@/components/shared/app-header';
+import { DetailRow, DeveloperDetails } from '@/components/shared/developer-details';
 import { EmptyState } from '@/components/shared/empty-state';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -29,40 +35,10 @@ const STAGE_INDEX: Record<TransferStage, number> = {
   done: 3,
 };
 
-function stepBackground(index: number, stageIndex: number): string {
-  if (stageIndex > index) return 'bg-success';
-  if (stageIndex === index) return 'bg-primary';
-  return 'bg-input-bg';
-}
-
-function stepText(index: number, stageIndex: number): string {
-  if (stageIndex > index) return 'text-background';
-  if (stageIndex === index) return 'text-primary-foreground';
-  return 'text-muted-foreground';
-}
-
-function statusTextClass(view: TransferView): string {
-  if (view.failed) return 'text-destructive';
-  if (view.stage === 'receiving' || view.stage === 'uploading') return 'text-primary';
-  if (view.stage === 'analyzing') return 'text-warning';
-  if (view.outcome === 'uploaded') return 'text-success';
-  return 'text-muted-foreground';
-}
-
-function Chip({
-  label,
-  className,
-  textClassName,
-}: {
-  label: string;
-  className?: string;
-  textClassName?: string;
-}) {
-  return (
-    <View className={cn('px-2.5 py-1', className)}>
-      <Text className={cn('text-[11px]', textClassName)}>{label}</Text>
-    </View>
-  );
+function pipelineLabel(view: TransferView): string {
+  if (view.failed) return 'Receive ✓ → Analyze ✓ → Upload ✕';
+  const index = STAGE_INDEX[view.stage];
+  return STEPS.map((step, i) => `${step} ${i < index ? '✓' : i === index ? '…' : '—'}`).join(' → ');
 }
 
 function PlayButton({ uri, label }: { uri: string; label: string }) {
@@ -99,70 +75,55 @@ function PlayButton({ uri, label }: { uri: string; label: string }) {
 
 function TransferRow({
   item,
-  expanded,
-  onToggle,
+  developerMode,
+  onRetry,
 }: {
   item: TransferRecord;
-  expanded: boolean;
-  onToggle: () => void;
+  developerMode: boolean;
+  onRetry: () => void;
 }) {
   const view = transferView(item);
-  const stageIndex = STAGE_INDEX[view.stage];
+  const { tone } = statusDescriptor(view.status);
 
   return (
     <Card>
-      <Pressable onPress={onToggle} accessibilityRole="button" className="gap-2">
-        <View className="flex-row items-baseline justify-between gap-2">
-          <Text className="font-mono text-[13px]">{view.filename}</Text>
-          <Text variant="muted" className="text-[11px]">
-            {view.sizeLabel} · {Math.round(view.pct * 100)}%
-          </Text>
-        </View>
-        <ProgressBar value={view.pct} className="h-1" />
-        <View className="flex-row items-center gap-1.5">
-          {STEPS.map((step, index) => (
-            <Fragment key={step}>
-              {index > 0 ? <View className="h-px flex-1 bg-divider" /> : null}
-              <Text
-                className={cn(
-                  'px-2 py-0.5 text-[10px]',
-                  stepBackground(index, stageIndex),
-                  stepText(index, stageIndex),
-                )}
-              >
-                {step}
-              </Text>
-            </Fragment>
-          ))}
-        </View>
-        <Text className="text-[12px] text-muted-foreground">VAD: {view.vadLabel}</Text>
-        <Text className={cn('text-[12px]', statusTextClass(view))}>Ingest: {view.ingestLabel}</Text>
-        {expanded ? (
-          <Text className="border-t border-divider pt-2 font-mono text-[11px] text-subtle-foreground">
-            fragments {Math.round(view.pct * 100)}% received · stage tracked live from the pendant
-            transfer
-          </Text>
-        ) : null}
-      </Pressable>
-      {item.localUri ? (
-        <View className="mt-2 flex-row justify-end">
-          <PlayButton uri={item.localUri} label={view.filename} />
-        </View>
+      <View className="flex-row items-center justify-between gap-2">
+        <Text className="flex-1 font-display text-[15px]">
+          Recording · {formatTransferTime(item.createdAt)}
+        </Text>
+        {item.localUri ? <PlayButton uri={item.localUri} label={view.filename} /> : null}
+      </View>
+      <Text variant="muted" className="text-[11px]">
+        {view.sizeLabel} · {view.vadLabel}
+      </Text>
+      <Text className={cn('text-[12px]', TONE_TEXT[tone])}>{view.headline}</Text>
+      <ProgressBar value={view.pct} className="h-1" />
+      {view.failed ? (
+        <Button variant="outline" size="sm" onPress={onRetry}>
+          <Icon as={RefreshCw} size={14} />
+          <Text>Retry</Text>
+        </Button>
+      ) : null}
+      {developerMode ? (
+        <DeveloperDetails defaultExpanded>
+          <DetailRow label="Pipeline" value={pipelineLabel(view)} />
+          <DetailRow label="VAD" value={view.vadLabel} />
+          <DetailRow label="Filename" value={view.filename} />
+          <DetailRow label="Server result" value={view.ingestLabel} />
+        </DeveloperDetails>
       ) : null}
     </Card>
   );
 }
 
 export function TransfersScreen() {
-  const { transfers, shareBench, refreshTransfers } = useCheckpoint();
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const { transfers, settings, shareBench, refreshTransfers } = useCheckpoint();
   const { refreshing, onRefresh } = useRefresh(refreshTransfers);
 
   const views = transfers.map(transferView);
   const uploaded = views.filter((view) => view.outcome === 'uploaded').length;
   const filtered = views.filter((view) => view.outcome === 'filtered').length;
   const failed = views.filter((view) => view.outcome === 'failed').length;
-  const queued = transfers.filter((item) => !isTerminal(item) && item.localUri).length;
 
   return (
     <CheckpointScreen>
@@ -175,46 +136,26 @@ export function TransfersScreen() {
         contentContainerStyle={{ gap: 12, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={
-          <View className="gap-3">
-            <Button variant="outline" onPress={() => void shareBench()}>
-              <Icon as={Upload} size={15} />
-              <Text>Share bench CSV</Text>
+          <View className="flex-row items-center justify-between gap-2">
+            <Text variant="muted" className="flex-1 text-[12px]">
+              {transfers.length} total · {uploaded} uploaded · {filtered} filtered · {failed} failed
+            </Text>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={transfers.length === 0}
+              onPress={() => void shareBench()}
+            >
+              <Icon as={Upload} size={14} />
+              <Text>Bench CSV</Text>
             </Button>
-            {transfers.length > 0 ? (
-              <View className="flex-row flex-wrap gap-2">
-                <Chip
-                  label={`${uploaded} uploaded`}
-                  className="bg-success"
-                  textClassName="text-background"
-                />
-                <Chip
-                  label={`${filtered} filtered`}
-                  className="bg-secondary"
-                  textClassName="text-secondary-foreground"
-                />
-                {queued > 0 ? (
-                  <Chip
-                    label={`${queued} queued`}
-                    className="bg-warning"
-                    textClassName="text-background"
-                  />
-                ) : null}
-                <Chip
-                  label={`${failed} failed`}
-                  className="bg-destructive"
-                  textClassName="text-background"
-                />
-              </View>
-            ) : null}
           </View>
         }
         renderItem={({ item }) => (
           <TransferRow
             item={item}
-            expanded={expandedId === item.fileId}
-            onToggle={() =>
-              setExpandedId((current) => (current === item.fileId ? null : item.fileId))
-            }
+            developerMode={settings.developerMode}
+            onRetry={() => void refreshTransfers()}
           />
         )}
         ListEmptyComponent={

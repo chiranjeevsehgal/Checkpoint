@@ -1,22 +1,46 @@
-import { useState } from 'react';
+import * as Clipboard from 'expo-clipboard';
+import Constants from 'expo-constants';
+import { useRouter } from 'expo-router';
+import { Copy, Eye, EyeOff } from 'lucide-react-native';
+import { useCallback, useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
 import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
 import { Toggle } from '../components/toggle.tsx';
+import { useBluetoothState } from '../hooks/useBluetoothState.ts';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
+import { classifyLog, formatLogTime, isErrorLog } from '../logFilter.ts';
 import { isValidUserId } from '../parsers.ts';
 import type { CheckpointSettings } from '../settings.ts';
+import { transferView } from '../transferView.ts';
 
 import { AppHeader } from '@/components/shared/app-header';
 import { BatteryOptimizationCard } from '@/components/shared/battery-optimization-card';
-import { Collapsible } from '@/components/shared/collapsible';
+import { DetailRow, DeveloperDetails } from '@/components/shared/developer-details';
+import { HeaderIconButton } from '@/components/shared/header-icon-button';
+import { Section } from '@/components/shared/section';
 import { Button } from '@/components/ui/button';
-import { Card, CardKicker } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { RangeSlider } from '@/components/ui/slider';
 import { Text } from '@/components/ui/text';
 import { useRefresh } from '@/lib/use-refresh';
+import { cn } from '@/lib/utils';
+import { useToast } from '@/providers/toast-provider';
+
+type Apply = (patch: Partial<CheckpointSettings>) => void;
+
+interface ValueSliderProps {
+  label: string;
+  display: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  hint?: string;
+  onChange: (value: number) => void;
+}
 
 function thresholdHint(value: number): string {
   if (value < 0.35) return 'More sensitive — catches quieter speech, more false positives.';
@@ -24,137 +48,300 @@ function thresholdHint(value: number): string {
   return 'Balanced sensitivity.';
 }
 
-export function CheckpointSettingsScreen() {
-  const { settings, updateSettings, testConnection } = useCheckpoint();
-  const [draft, setDraft] = useState<CheckpointSettings>(settings);
-  const [userIdError, setUserIdError] = useState<string | null>(null);
-  const { refreshing, onRefresh } = useRefresh(testConnection);
+function ValueSlider({ label, display, min, max, step, value, hint, onChange }: ValueSliderProps) {
+  return (
+    <View className="gap-1">
+      <View className="flex-row justify-between">
+        <Text className="text-[12px]">{label}</Text>
+        <Text className="font-mono text-[12px]">{display}</Text>
+      </View>
+      <RangeSlider min={min} max={max} step={step} value={value} onValueChange={onChange} />
+      {hint ? (
+        <Text variant="muted" className="text-[11px]">
+          {hint}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
 
-  const set = <K extends keyof CheckpointSettings>(key: K, value: CheckpointSettings[K]) => {
-    if (key === 'userId') setUserIdError(null);
-    setDraft((prev) => ({ ...prev, [key]: value }));
-  };
+function SpeechSection({ settings, apply }: { settings: CheckpointSettings; apply: Apply }) {
+  return (
+    <Section title="Speech detection">
+      <Card>
+        <Toggle
+          label="Voice activity detection"
+          description="Only process audio that contains speech."
+          value={settings.vadEnabled}
+          onChange={(next) => apply({ vadEnabled: next })}
+        />
+        <ValueSlider
+          label="VAD threshold"
+          display={settings.vadThreshold.toFixed(2)}
+          min={0}
+          max={1}
+          step={0.01}
+          value={settings.vadThreshold}
+          hint={thresholdHint(settings.vadThreshold)}
+          onChange={(value) => apply({ vadThreshold: Number(value.toFixed(2)) })}
+        />
+        <ValueSlider
+          label="Minimum speech duration"
+          display={`${settings.minSpeechS.toFixed(1)}s`}
+          min={0.1}
+          max={3}
+          step={0.1}
+          value={settings.minSpeechS}
+          hint={`Clips shorter than ${settings.minSpeechS.toFixed(1)}s are dropped as noise.`}
+          onChange={(value) => apply({ minSpeechS: Number(value.toFixed(1)) })}
+        />
+      </Card>
+    </Section>
+  );
+}
+
+function TransferSection({ settings, apply }: { settings: CheckpointSettings; apply: Apply }) {
+  return (
+    <Section title="Transfer & sync">
+      <Card>
+        <Toggle
+          label="Auto-discover pendant"
+          description="Look for your pendant and sync automatically when the app opens."
+          value={settings.autoSyncEnabled}
+          onChange={(next) => apply({ autoSyncEnabled: next })}
+        />
+        <Toggle
+          label="Upload recordings"
+          description="Send speech clips to the server for transcription."
+          value={settings.ingestEnabled}
+          onChange={(next) => apply({ ingestEnabled: next })}
+        />
+        <ValueSlider
+          label="Keep completed transfers"
+          display={`${settings.retentionHours}h`}
+          min={1}
+          max={168}
+          step={1}
+          value={settings.retentionHours}
+          hint={`Completed transfers and their local audio are cleaned up after ${settings.retentionHours}h. Pending and failed audio is never deleted.`}
+          onChange={(value) => apply({ retentionHours: Math.round(value) })}
+        />
+      </Card>
+      <BatteryOptimizationCard />
+    </Section>
+  );
+}
+
+function BackendSection({
+  settings,
+  onSave,
+  onTest,
+  testing,
+  probe,
+}: {
+  settings: CheckpointSettings;
+  onSave: (next: { serverUrl: string; userId: string }) => void;
+  onTest: () => void;
+  testing: boolean;
+  probe: { ok: boolean; latencyMs: number; at: number } | null;
+}) {
+  const { showToast } = useToast();
+  const [serverUrl, setServerUrl] = useState(settings.serverUrl);
+  const [userId, setUserId] = useState(settings.userId);
+  const [revealed, setRevealed] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const save = () => {
-    if (!isValidUserId(draft.userId)) {
-      setUserIdError('Enter a valid user ID (UUID like aaaaaaaa-…).');
+    if (!isValidUserId(userId)) {
+      setError('Enter a valid user ID (UUID like aaaaaaaa-…).');
       return;
     }
-    setUserIdError(null);
-    void updateSettings(draft).catch(() => setUserIdError('Save failed — try again.'));
+    setError(null);
+    onSave({ serverUrl: serverUrl.trim(), userId: userId.trim() });
+  };
+
+  const copyUserId = () => {
+    void Clipboard.setStringAsync(userId);
+    showToast('User ID copied.');
   };
 
   return (
+    <Section title="Backend">
+      <Card>
+        <View className="gap-1">
+          <Text className="text-[11px] text-subtle-foreground">
+            Server URL (LAN IP for on-device testing)
+          </Text>
+          <Input
+            value={serverUrl}
+            onChangeText={setServerUrl}
+            autoCapitalize="none"
+            autoCorrect={false}
+            className="font-mono text-[13px]"
+          />
+        </View>
+        <View className="gap-1">
+          <Text className="text-[11px] text-subtle-foreground">Bearer token / User ID</Text>
+          <View className="flex-row gap-2">
+            <Input
+              className="flex-1 font-mono text-[13px]"
+              value={userId}
+              onChangeText={setUserId}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry={!revealed}
+              placeholder="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            />
+            <HeaderIconButton
+              icon={revealed ? EyeOff : Eye}
+              label={revealed ? 'Hide user ID' : 'Reveal user ID'}
+              onPress={() => setRevealed((current) => !current)}
+            />
+            <HeaderIconButton icon={Copy} label="Copy user ID" onPress={copyUserId} />
+          </View>
+          {error ? <Text className="text-[11px] text-destructive">{error}</Text> : null}
+        </View>
+        <View className="flex-row gap-2">
+          <Button variant="outline" className="flex-1" onPress={save}>
+            <Text>Save server</Text>
+          </Button>
+          <Button variant="outline" className="flex-1" disabled={testing} onPress={onTest}>
+            <Text>{testing ? 'Testing…' : 'Test connection'}</Text>
+          </Button>
+        </View>
+        {probe ? (
+          <View className="gap-0.5">
+            <Text className={cn('text-[12px]', probe.ok ? 'text-success' : 'text-destructive')}>
+              {probe.ok ? `✓ Server reachable · ${probe.latencyMs} ms` : '✕ Connection failed'}
+            </Text>
+            <Text variant="muted" className="text-[11px]">
+              Last checked {formatLogTime(probe.at)}
+            </Text>
+          </View>
+        ) : null}
+      </Card>
+    </Section>
+  );
+}
+
+interface Diagnostics {
+  appVersion: string;
+  bluetooth: string;
+  pendantId: string;
+  claim: string;
+  lastServerError: string;
+  lastTransferError: string;
+}
+
+function DeveloperSection({
+  settings,
+  apply,
+  diagnostics,
+  onOpenLog,
+}: {
+  settings: CheckpointSettings;
+  apply: Apply;
+  diagnostics: Diagnostics;
+  onOpenLog: () => void;
+}) {
+  return (
+    <Section title="Developer">
+      <Card>
+        <Toggle
+          label="Developer information"
+          description="Show raw IDs, filenames and pipeline details across the app."
+          value={settings.developerMode}
+          onChange={(next) => apply({ developerMode: next })}
+        />
+        <DeveloperDetails defaultExpanded>
+          <DetailRow label="App version" value={diagnostics.appVersion} />
+          <DetailRow label="Bluetooth" value={diagnostics.bluetooth} />
+          <DetailRow label="Pendant ID" value={diagnostics.pendantId} />
+          <DetailRow label="Claim" value={diagnostics.claim} />
+          <DetailRow label="Last server error" value={diagnostics.lastServerError} />
+          <DetailRow label="Last transfer error" value={diagnostics.lastTransferError} />
+        </DeveloperDetails>
+        <Button variant="outline" onPress={onOpenLog}>
+          <Text>Open debug log</Text>
+        </Button>
+      </Card>
+    </Section>
+  );
+}
+
+export function CheckpointSettingsScreen() {
+  const { settings, updateSettings, testConnection, logs, transfers, deviceId, enrolled } =
+    useCheckpoint();
+  const bluetooth = useBluetoothState();
+  const router = useRouter();
+  const [probe, setProbe] = useState<{ ok: boolean; latencyMs: number; at: number } | null>(null);
+  const [testing, setTesting] = useState(false);
+
+  const apply = useCallback<Apply>(
+    (patch) => {
+      void updateSettings({ ...settings, ...patch }, { silent: true });
+    },
+    [settings, updateSettings],
+  );
+
+  const runTest = useCallback(async () => {
+    setTesting(true);
+    try {
+      setProbe(await testConnection());
+    } finally {
+      setTesting(false);
+    }
+  }, [testConnection]);
+
+  const { refreshing, onRefresh } = useRefresh(runTest);
+
+  const onSaveServer = useCallback(
+    (next: { serverUrl: string; userId: string }) => {
+      void updateSettings({ ...settings, ...next });
+    },
+    [settings, updateSettings],
+  );
+
+  const diagnostics = useMemo<Diagnostics>(() => {
+    const lastServer = [...logs]
+      .reverse()
+      .find((entry) => classifyLog(entry.text) === 'server' && isErrorLog(entry.text));
+    const lastTransfer = transfers.find((record) => record.outcome === 'failed');
+    return {
+      appVersion: Constants.expoConfig?.version ?? '—',
+      bluetooth: bluetooth ?? '—',
+      pendantId: deviceId ?? '—',
+      claim: enrolled ? 'Linked' : 'Not linked',
+      lastServerError: lastServer?.text ?? '—',
+      lastTransferError: lastTransfer ? transferView(lastTransfer).ingestLabel : '—',
+    };
+  }, [bluetooth, deviceId, enrolled, logs, transfers]);
+
+  return (
     <CheckpointScreen>
-      <AppHeader title="Settings" subtitle="Server, identity and VAD" />
+      <AppHeader title="Settings" subtitle="Speech, transfer and server" />
       <ScrollView
         className="flex-1"
         keyboardShouldPersistTaps="handled"
         refreshControl={<AppRefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        contentContainerStyle={{ gap: 14, paddingBottom: 24 }}
+        contentContainerStyle={{ gap: 24, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
       >
-        <Card>
-          <CardKicker>Voice gate</CardKicker>
-          <View className="gap-1">
-            <View className="flex-row justify-between">
-              <Text className="text-[12px]">VAD threshold</Text>
-              <Text className="font-mono text-[12px]">{draft.vadThreshold.toFixed(2)}</Text>
-            </View>
-            <RangeSlider
-              min={0}
-              max={1}
-              step={0.01}
-              value={draft.vadThreshold}
-              onValueChange={(value) => set('vadThreshold', Number(value.toFixed(2)))}
-            />
-            <Text variant="muted" className="text-[11px]">
-              {thresholdHint(draft.vadThreshold)}
-            </Text>
-          </View>
-          <View className="gap-1">
-            <View className="flex-row justify-between">
-              <Text className="text-[12px]">Minimum speech</Text>
-              <Text className="font-mono text-[12px]">{draft.minSpeechS.toFixed(1)}s</Text>
-            </View>
-            <RangeSlider
-              min={0.1}
-              max={3}
-              step={0.1}
-              value={draft.minSpeechS}
-              onValueChange={(value) => set('minSpeechS', Number(value.toFixed(1)))}
-            />
-            <Text variant="muted" className="text-[11px]">
-              Clips shorter than {draft.minSpeechS.toFixed(1)}s are dropped as noise.
-            </Text>
-          </View>
-        </Card>
-
-        <Card>
-          <CardKicker>Synchronization</CardKicker>
-          <Toggle
-            label="Sync automatically"
-            description="Look for your pendant automatically when the app opens."
-            value={draft.autoSyncEnabled}
-            onChange={(next) => set('autoSyncEnabled', next)}
-          />
-          <View className="gap-1">
-            <View className="flex-row justify-between">
-              <Text className="text-[12px]">Keep completed transfers</Text>
-              <Text className="font-mono text-[12px]">{draft.retentionHours}h</Text>
-            </View>
-            <RangeSlider
-              min={1}
-              max={168}
-              step={1}
-              value={draft.retentionHours}
-              onValueChange={(value) => set('retentionHours', Math.round(value))}
-            />
-            <Text variant="muted" className="text-[11px]">
-              Completed transfers and their local audio are cleaned up after {draft.retentionHours}
-              h. Pending and failed audio is never deleted.
-            </Text>
-          </View>
-        </Card>
-
-        <BatteryOptimizationCard />
-
-        <Button variant="outline" onPress={() => void testConnection()}>
-          <Text>Test server connection</Text>
-        </Button>
-
-        <Collapsible title="Advanced — developer">
-          <View className="gap-1">
-            <Text className="text-[11px] text-subtle-foreground">
-              Server URL (LAN IP for on-device testing)
-            </Text>
-            <Input
-              value={draft.serverUrl}
-              onChangeText={(text) => set('serverUrl', text)}
-              autoCapitalize="none"
-              autoCorrect={false}
-              className="font-mono text-[13px]"
-            />
-          </View>
-          <View className="gap-1">
-            <Text className="text-[11px] text-subtle-foreground">User ID (Bearer token)</Text>
-            <Input
-              value={draft.userId}
-              onChangeText={(text) => set('userId', text)}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-              className="font-mono text-[13px]"
-            />
-            {userIdError ? (
-              <Text className="text-[11px] text-destructive">{userIdError}</Text>
-            ) : null}
-          </View>
-        </Collapsible>
-
-        <Button onPress={save} className="h-11">
-          <Text>Save settings</Text>
-        </Button>
+        <SpeechSection settings={settings} apply={apply} />
+        <TransferSection settings={settings} apply={apply} />
+        <BackendSection
+          settings={settings}
+          onSave={onSaveServer}
+          onTest={() => void runTest()}
+          testing={testing}
+          probe={probe}
+        />
+        <DeveloperSection
+          settings={settings}
+          apply={apply}
+          diagnostics={diagnostics}
+          onOpenLog={() => router.push('/debug-log')}
+        />
       </ScrollView>
     </CheckpointScreen>
   );

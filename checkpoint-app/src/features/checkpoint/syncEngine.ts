@@ -15,9 +15,11 @@ import {
   STATUS_POLL_INTERVAL_S,
   TRANSFER_TICK_MS,
 } from './config.ts';
-import { getEnrolledDeviceId } from './credentials.ts';
+import { clearEnrolledDeviceId, deleteCredential, getEnrolledDeviceId } from './credentials.ts';
+import { hexToBytes } from './crypto.ts';
 import { IngestionUploader } from './ingestion.ts';
 import { networkMonitor } from './networkMonitor.ts';
+import type { HealthProbe } from './networkStatus.ts';
 import { ctrlStatusText } from './parsers.ts';
 import { ensureBlePermissions, hasBlePermissions } from './permissions.ts';
 import { playback } from './playback.ts';
@@ -38,7 +40,13 @@ import {
   sortTransfers,
   type TransferRecord,
 } from './transferStore.ts';
-import type { CheckpointEvent, DeviceFileList, DeviceStatus, StorageInfo } from './types.ts';
+import type {
+  CheckpointEvent,
+  DeviceFileList,
+  DeviceStatus,
+  LogEntry,
+  StorageInfo,
+} from './types.ts';
 import { checkSpeech, shouldUpload, vadSkipReason } from './vad.ts';
 
 export interface ListPage {
@@ -69,10 +77,11 @@ export interface EngineSnapshot {
   preview: PreviewSnapshot | null;
   deleting: string | null;
   erasing: boolean;
-  logs: string[];
+  logs: LogEntry[];
   needsSettings: boolean;
   bluetooth: BluetoothStatus;
   deviceId: string | null;
+  enrolled: boolean;
   autoConnecting: boolean;
 }
 
@@ -92,6 +101,7 @@ const INITIAL_SNAPSHOT: EngineSnapshot = {
   needsSettings: false,
   bluetooth: null,
   deviceId: null,
+  enrolled: false,
   autoConnecting: false,
 };
 
@@ -110,8 +120,8 @@ function mapBluetoothState(state: State): BluetoothStatus {
   }
 }
 
-function pushLog(lines: string[], line: string): string[] {
-  const next = [...lines, line];
+function pushLog(entries: LogEntry[], entry: LogEntry): LogEntry[] {
+  const next = [...entries, entry];
   return next.length > MAX_LOG_LINES ? next.slice(next.length - MAX_LOG_LINES) : next;
 }
 
@@ -169,6 +179,7 @@ class SyncEngine {
       void this.drainQueue();
     }, TRANSFER_TICK_MS);
     this.autoConnectGaveUp = false;
+    this.setState({ enrolled: (await getEnrolledDeviceId()) !== null });
     await this.maybeAutoConnect();
   }
 
@@ -194,15 +205,15 @@ class SyncEngine {
     await this.applyDesiredSync(this.client);
   }
 
-  async testConnection(): Promise<boolean> {
+  async testConnection(): Promise<HealthProbe | null> {
     this.appendLog(`[net] testing ${this.settings.serverUrl} …`);
     const probe = await networkMonitor.probeNow();
     if (!probe) {
       this.appendLog('[net] test skipped: no internet connection');
-      return false;
+      return null;
     }
     this.appendLog(`[net] ${probe.ok ? 'reachable' : 'unreachable'} in ${probe.latencyMs}ms`);
-    return probe.ok;
+    return probe;
   }
 
   private ensureManager(): BleManager {
@@ -405,10 +416,10 @@ class SyncEngine {
     for (const listener of this.listeners) listener();
   }
 
-  private appendLog(line: string): void {
+  private appendLog(text: string): void {
     // Mirrored to logcat so field issues can be diagnosed over adb.
-    console.debug(line);
-    this.setState({ logs: pushLog(this.snapshot.logs, line) });
+    console.debug(text);
+    this.setState({ logs: pushLog(this.snapshot.logs, { at: Date.now(), text }) });
   }
 
   private handlePreviewEvent(event: CheckpointEvent): void {
@@ -643,7 +654,7 @@ class SyncEngine {
             reachedReady = true;
             this.autoConnectGaveUp = false;
             this.setState({ connected: true, busy: false, autoConnecting: false });
-            this.setState({ deviceId: await getEnrolledDeviceId() });
+            this.setState({ deviceId: await getEnrolledDeviceId(), enrolled: true });
             this.appendLog('[ui] listening for file transfers …');
             await this.applyDesiredSync(client);
             try {
@@ -721,6 +732,23 @@ class SyncEngine {
       deviceId: null,
       preview: null,
     });
+  }
+
+  async forgetDevice(): Promise<void> {
+    await this.disconnect();
+    const enrolled = await getEnrolledDeviceId();
+    if (enrolled) {
+      try {
+        await deleteCredential(hexToBytes(enrolled));
+      } catch (error) {
+        this.appendLog(
+          `[ui] forget credential failed: ${error instanceof Error ? error.message : 'unknown'}`,
+        );
+      }
+    }
+    await clearEnrolledDeviceId();
+    this.setState({ enrolled: false, deviceId: null });
+    this.appendLog('[ui] pendant forgotten');
   }
 
   refreshStatus = async (): Promise<void> => {

@@ -5,6 +5,11 @@ export interface Packet {
   payload: Uint8Array;
 }
 
+export interface LogEntry {
+  at: number;
+  text: string;
+}
+
 export interface DeviceStatus {
   recording: boolean;
   vadActive: boolean;

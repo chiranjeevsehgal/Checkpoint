@@ -8,7 +8,15 @@ import { Text } from '@/components/ui/text';
 
 const SPIN_DURATION_MS = 600;
 
-export function RefreshButton({ onPress, disabled }: { onPress: () => void; disabled?: boolean }) {
+export function RefreshButton({
+  onPress,
+  disabled,
+  label = 'Refresh',
+}: {
+  onPress: () => void;
+  disabled?: boolean;
+  label?: string;
+}) {
   const spin = useMemo(() => new Animated.Value(0), []);
 
   const handlePress = useCallback(() => {
@@ -28,7 +36,7 @@ export function RefreshButton({ onPress, disabled }: { onPress: () => void; disa
       <Animated.View style={{ transform: [{ rotate }] }}>
         <Icon as={RefreshCw} size={14} />
       </Animated.View>
-      <Text>Refresh</Text>
+      <Text>{label}</Text>
     </Button>
   );
 }
