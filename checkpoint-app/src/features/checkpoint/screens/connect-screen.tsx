@@ -201,11 +201,7 @@ export function ConnectScreen() {
                   <Button variant="ghost" className="flex-1" onPress={() => void disconnect()}>
                     <Text>Disconnect</Text>
                   </Button>
-                  <Button
-                    variant="outline"
-                    className="flex-1"
-                    onPress={() => setSheetOpen(true)}
-                  >
+                  <Button variant="outline" className="flex-1" onPress={() => setSheetOpen(true)}>
                     <Text>Manage device</Text>
                   </Button>
                 </>

@@ -126,11 +126,7 @@ function StorageHeader({
                 ? `${formatBytes(storage.used)} used of ${formatBytes(storage.total)}`
                 : 'No storage info yet.'}
             </Text>
-            <RefreshButton
-              label="Refresh file list"
-              onPress={onRefresh}
-              disabled={!connected}
-            />
+            <RefreshButton label="Refresh file list" onPress={onRefresh} disabled={!connected} />
           </View>
           <ProgressBar value={pct / 100} className="h-1.5" />
           <Text variant="muted" className="text-[11px]">

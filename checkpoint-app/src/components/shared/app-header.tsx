@@ -32,7 +32,7 @@ export function AppHeader({
             onPress={onBack}
             accessibilityRole="button"
             accessibilityLabel="Go back"
-            className="active:opacity-70 pt-0.5"
+            className="pt-0.5 active:opacity-70"
           >
             <Icon as={ArrowLeft} size={22} />
           </Pressable>

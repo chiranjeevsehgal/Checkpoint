@@ -48,16 +48,7 @@ function thresholdHint(value: number): string {
   return 'Balanced sensitivity.';
 }
 
-function ValueSlider({
-  label,
-  display,
-  min,
-  max,
-  step,
-  value,
-  hint,
-  onChange,
-}: ValueSliderProps) {
+function ValueSlider({ label, display, min, max, step, value, hint, onChange }: ValueSliderProps) {
   return (
     <View className="gap-1">
       <View className="flex-row justify-between">
@@ -220,9 +211,7 @@ function BackendSection({
         </View>
         {probe ? (
           <View className="gap-0.5">
-            <Text
-              className={cn('text-[12px]', probe.ok ? 'text-success' : 'text-destructive')}
-            >
+            <Text className={cn('text-[12px]', probe.ok ? 'text-success' : 'text-destructive')}>
               {probe.ok ? `✓ Server reachable · ${probe.latencyMs} ms` : '✕ Connection failed'}
             </Text>
             <Text variant="muted" className="text-[11px]">

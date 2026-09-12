@@ -15,11 +15,7 @@ import {
   STATUS_POLL_INTERVAL_S,
   TRANSFER_TICK_MS,
 } from './config.ts';
-import {
-  clearEnrolledDeviceId,
-  deleteCredential,
-  getEnrolledDeviceId,
-} from './credentials.ts';
+import { clearEnrolledDeviceId, deleteCredential, getEnrolledDeviceId } from './credentials.ts';
 import { hexToBytes } from './crypto.ts';
 import { IngestionUploader } from './ingestion.ts';
 import { networkMonitor } from './networkMonitor.ts';
@@ -44,7 +40,13 @@ import {
   sortTransfers,
   type TransferRecord,
 } from './transferStore.ts';
-import type { CheckpointEvent, DeviceFileList, DeviceStatus, LogEntry, StorageInfo } from './types.ts';
+import type {
+  CheckpointEvent,
+  DeviceFileList,
+  DeviceStatus,
+  LogEntry,
+  StorageInfo,
+} from './types.ts';
 import { checkSpeech, shouldUpload, vadSkipReason } from './vad.ts';
 
 export interface ListPage {

@@ -28,11 +28,7 @@ import type { DeviceFileList, DeviceStatus, LogEntry, StorageInfo } from '../typ
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { useToast } from '@/providers/toast-provider';
 
-type DialogState =
-  | { kind: 'delete'; path: string }
-  | { kind: 'erase' }
-  | { kind: 'forget' }
-  | null;
+type DialogState = { kind: 'delete'; path: string } | { kind: 'erase' } | { kind: 'forget' } | null;
 
 interface CheckpointContextValue {
   connected: boolean;
@@ -315,7 +311,9 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
               ? 'Forget this pendant? You will need its claim key to set it up again.'
               : `Delete ${dialogFile} from the pendant? This cannot be undone.`
         }
-        confirmLabel={dialog?.kind === 'erase' ? 'Erase all' : dialog?.kind === 'forget' ? 'Forget' : 'Delete'}
+        confirmLabel={
+          dialog?.kind === 'erase' ? 'Erase all' : dialog?.kind === 'forget' ? 'Forget' : 'Delete'
+        }
         requireText={dialog?.kind === 'erase' ? 'ERASE' : undefined}
         onCancel={cancelDialog}
         onConfirm={confirmDialog}

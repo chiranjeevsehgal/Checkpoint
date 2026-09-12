@@ -91,9 +91,6 @@ describe('formatTransferTime', () => {
   it('shows a clock time for today and a date for older items', () => {
     const now = new Date(2026, 4, 10, 20, 0, 0).getTime();
     assert.equal(formatTransferTime(new Date(2026, 4, 10, 20, 42, 0).getTime(), now), '8:42 PM');
-    assert.notEqual(
-      formatTransferTime(new Date(2026, 4, 9, 20, 42, 0).getTime(), now),
-      '8:42 PM',
-    );
+    assert.notEqual(formatTransferTime(new Date(2026, 4, 9, 20, 42, 0).getTime(), now), '8:42 PM');
   });
 });

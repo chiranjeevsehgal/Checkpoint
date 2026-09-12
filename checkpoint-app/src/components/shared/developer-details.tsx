@@ -43,7 +43,9 @@ export function DetailRow({ label, value }: { label: string; value: string }) {
       <Text variant="muted" className="text-[11px]">
         {label}
       </Text>
-      <Text className="flex-1 text-right font-mono text-[11px] text-subtle-foreground">{value}</Text>
+      <Text className="flex-1 text-right font-mono text-[11px] text-subtle-foreground">
+        {value}
+      </Text>
     </View>
   );
 }
