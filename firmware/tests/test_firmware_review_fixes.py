@@ -15,23 +15,17 @@ def read(name):
 # ---- I1: HELLO gated on encryption + version ----
 def test_hello_encrypted_gate():
     ble = read("ble_service.cpp")
-    # must check s_encrypted before sending key (not just defining variable)
     assert "s_encrypted" in ble, "s_encrypted missing"
-    # version check on hello
     assert "PROTO_VER" in ble and "PKT_HELLO" in ble
-    # verify CtrlCallbacks path contains encryption guard before payload build
-    # locate HELLO branch and ensure s_encrypted appears before crypto_get_key
-    hello_idx = ble.find("PKT_HELLO")
+    hello_idx = ble.find("handle_hello")
     assert hello_idx != -1
     segment = ble[hello_idx: hello_idx + 3000]
-    # version guard must be present in same segment
     assert "PROTO_VER" in segment or "v[0]" in segment, "version check missing near HELLO"
-    # encryption guard must precede key copy
     assert "!s_encrypted" in segment or "s_encrypted" in segment, "encryption guard missing near HELLO"
-    assert "crypto_get_key" in segment, "key retrieval should still exist after guard"
-    # must send PKT_ERROR on reject
-    assert "PKT_ERROR" in segment, "should send PKT_ERROR when rejecting unauth HELLO"
-    # must set s_handshaked only after successful encrypted hello
+    assert "auth_begin" in segment, "HELLO must start an auth challenge"
+    assert "crypto_get_key" not in segment, "v3 HELLO must not fetch a key to transmit"
+    assert "PKT_ERROR" in ble and "send_error_locked" in segment, \
+        "should send PKT_ERROR when rejecting unauth HELLO"
     assert "s_handshaked = true" in ble
     print("PASS hello encrypted gate")
 
@@ -39,8 +33,8 @@ def test_hello_version_invalid_path():
     ble = read("ble_service.cpp")
     # invalid version should be rejected with error code 0x02 path
     assert "0x02" in ble or "err = 0x02" in ble, "invalid version error code missing"
-    # empty HELLO (size <2) must not trigger key path – guard v.size() >=2
-    assert "v.size() >= 2" in ble
+    # short/empty input must not reach the challenge path
+    assert "raw_len < 2" in ble or "v.size() >= 2" in ble
     print("PASS hello version invalid path")
 
 def test_hello_empty_and_null_guard():
@@ -183,19 +177,28 @@ def test_rfc5869_hkdf_and_session_key():
     assert "crypto_hkdf_sha256" in cry and "crypto_hkdf_sha256" in hdr
     assert "hmac_sha256" in cry
     assert "checkpoint-file-v1" in cry
-    assert "crypto_derive_session_key" in cry and "crypto_derive_session_key" in hdr
-    assert "checkpoint-session-v1" in cry
+    assert "crypto_derive_session_key_v3" in cry and "crypto_derive_session_key_v3" in hdr
+    assert "crypto_derive_client_key_v3" in cry
+    assert "checkpoint-session-v3" in cry
+    assert "crypto_hmac_sha256" in cry
+    assert "crypto_verify_hmac_ct" in cry
     assert "SHA256(master_key).digest()" not in cry, "custom KDF must be gone"
     print("PASS hkdf session key")
 
 def test_ble_security_and_ready():
     ble = read("ble_service.cpp")
-    assert "setSecurityAuth(true, false, true)" in ble, "MITM must be off"
-    assert "crypto_derive_session_key" in ble, "HELLO_ACK must carry session key"
-    assert "PKT_READY" in ble, "READY completion missing"
+    assert "WRITE_ENC" in ble, "GATT must require encryption"
+    assert "NIMBLE_PROPERTY::READ" not in ble, "GATT READ permissions should be gone"
+    assert "PKT_AUTH" in ble, "v3 AUTH handling missing"
+    assert "PKT_AUTH_OK" in ble, "v3 AUTH_OK missing"
+    assert "PKT_READY_ACK" in ble, "v3 READY_ACK missing"
+    assert "auth_verify_client_proof" in ble, "challenge verification missing"
+    assert "ble_peer_authenticated" in ble
+    assert "crypto_derive_session_key" not in ble, "v2 key transport must be gone"
     assert "s_hello_sent" in ble and "BLE_AUTH_TIMEOUT_MS" in ble
     cfg = read("config.h")
     assert "BLE_AUTH_TIMEOUT_MS 30000" in cfg, "debug-generous auth timeout expected"
+    assert "PROTO_VER 3" in cfg, "must be protocol v3"
     print("PASS ble security ready")
 
 def test_manifest_uid():

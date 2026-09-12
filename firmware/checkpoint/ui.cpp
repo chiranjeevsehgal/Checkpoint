@@ -1,9 +1,13 @@
 #include "ui.h"
 #include "config.h"
+#include "auth.h"
 #include "recorder.h"
 #include "manifest.h"
 #include "log.h"
 #include <Adafruit_NeoPixel.h>
+
+enum LedState : uint8_t { LED_OFF, LED_ON, LED_BOOKMARK, LED_ERROR, LED_FATAL, LED_VAD_IDLE };
+enum LedOverlay : uint8_t { OVERLAY_NONE, OVERLAY_ENROLL, OVERLAY_AUTH_OK, OVERLAY_SLOT_DROP };
 
 static TaskHandle_t s_task = nullptr;
 static volatile uint8_t s_state = 0;
@@ -11,8 +15,10 @@ static volatile bool s_muted = false;
 static volatile uint8_t s_brightness = HW_RGB_BRIGHTNESS;
 static volatile bool s_brightness_dirty = false;
 static volatile uint32_t s_remote_action_ms = 0;
-
-enum LedState : uint8_t { LED_OFF, LED_ON, LED_BOOKMARK, LED_ERROR, LED_FATAL, LED_VAD_IDLE };
+// Temporary indication above the recorder base state: expiry always falls
+// back to s_state, so enrollment can never orphan the recording LED.
+static volatile uint8_t s_overlay = OVERLAY_NONE;
+static volatile uint32_t s_overlay_enter_ms = 0;
 
 static Adafruit_NeoPixel s_rgb(1, HW_RGB_PIN, NEO_GRB + NEO_KHZ800);
 static uint32_t s_last_rgb = 0xFFFFFFFFu; // force first show
@@ -75,15 +81,34 @@ void ui_note_remote_action() {
   s_remote_action_ms = millis();
 }
 
+void ui_signal_enroll(bool on) {
+  if (on) {
+    s_overlay = OVERLAY_ENROLL;
+    s_overlay_enter_ms = millis();
+  } else if (s_overlay == OVERLAY_ENROLL) {
+    s_overlay = OVERLAY_NONE;
+  }
+}
+
+void ui_signal_auth_ok() {
+  s_overlay = OVERLAY_AUTH_OK;
+  s_overlay_enter_ms = millis();
+}
+
 static inline bool ui_stealth_active() {
   return s_muted;
 }
 
 void ui_task(void *arg) {
   (void)arg;
+  // recorder_notify_bookmark() retained for test compat (bookmark removed) - not called
   uint32_t last_change = 0;
   bool last_level = HIGH;
-  bool armed = true;
+  bool pressed = false;
+  uint32_t press_start_ms = 0;
+  bool long_fired = false;
+  bool drop_fired = false;
+  bool drop_removed = false;
   uint32_t state_enter_ms = 0;
   static uint32_t last_toggle_ms = 0;
   while (true) {
@@ -93,32 +118,60 @@ void ui_task(void *arg) {
       last_level = level;
       last_change = now;
     }
-    if (armed && level == LOW && (now - last_change) > UI_DEBOUNCE_MS) {
-      armed = false;
-      // Toggle lockout 800ms to cover close_chunk settle (400+300) and avoid double-toggle.
-      // Also covers a recent remote (BLE) action so the button cannot instantly reverse it.
-      if ((now - last_toggle_ms < 800) || (now - s_remote_action_ms < 800)) {
-      } else {
-        last_toggle_ms = now;
-        if (recorder_is_recording()) {
-          recorder_stop();
-          ui_signal_recording(false);
-        } else {
-          bool ok = recorder_start();
-          if (ok) {
-            ui_signal_recording(true);
-          } else {
-            LOG_E("MIC start fail");
-            ui_signal_error();
-          }
-        }
+    bool debounced_low = (level == LOW && (now - last_change) > UI_DEBOUNCE_MS);
+    bool debounced_high = (level == HIGH && (now - last_change) > UI_DEBOUNCE_MS);
+    if (debounced_low && !pressed) {
+      pressed = true;
+      press_start_ms = now;
+      long_fired = false;
+      drop_fired = false;
+      drop_removed = false;
+    }
+    if (pressed && debounced_low && !long_fired && (now - press_start_ms) >= UI_LONG_PRESS_MS) {
+      long_fired = true;
+      if (auth_open_enrollment(AUTH_ENROLL_WINDOW_MS)) {
+        ui_signal_enroll(true);
+        state_enter_ms = now;
       }
-      // recorder_notify_bookmark() retained for test compat (bookmark removed) - not called
+    }
+    if (pressed && debounced_low && !drop_fired && (now - press_start_ms) >= UI_SLOT_DROP_MS) {
+      drop_fired = true;
+      drop_removed = auth_drop_first_slot();
+      if (drop_removed) {
+        auth_open_enrollment(AUTH_ENROLL_WINDOW_MS);
+      }
+      s_overlay = OVERLAY_SLOT_DROP;
+      s_overlay_enter_ms = now;
       state_enter_ms = now;
     }
-    if (level == HIGH && (now - last_change) > UI_DEBOUNCE_MS) {
-      armed = true;
+    if (pressed && debounced_high) {
+      uint32_t held = now - press_start_ms;
+      pressed = false;
+      if (!long_fired && !drop_fired && held < 1000) {
+        if ((now - last_toggle_ms < 800) || (now - s_remote_action_ms < 800)) {
+        } else {
+          last_toggle_ms = now;
+          if (recorder_is_recording()) {
+            recorder_stop();
+            ui_signal_recording(false);
+          } else {
+            bool ok = recorder_start();
+            if (ok) {
+              ui_signal_recording(true);
+            } else {
+              LOG_E("MIC start fail");
+              ui_signal_error();
+            }
+          }
+        }
+        state_enter_ms = now;
+      } else if (long_fired) {
+        state_enter_ms = now;
+      }
     }
+    if (s_overlay == OVERLAY_ENROLL && !auth_enrollment_active()) s_overlay = OVERLAY_NONE;
+    if (s_overlay == OVERLAY_AUTH_OK && (now - s_overlay_enter_ms) > 1000) s_overlay = OVERLAY_NONE;
+    if (s_overlay == OVERLAY_SLOT_DROP && (now - s_overlay_enter_ms) > 720) s_overlay = OVERLAY_NONE;
     // Track state entry for non-blocking blinks
     static uint8_t prev_state = 255;
     if (s_state != prev_state) {
@@ -136,7 +189,18 @@ void ui_task(void *arg) {
       }
     }
     const bool stealth = ui_stealth_active();
-    switch (s_state) {
+    if (s_overlay == OVERLAY_ENROLL) {
+      uint32_t t = (now - s_overlay_enter_ms) % 1000;
+      bool on = (t < 100) || (t >= 250 && t < 350);
+      uint8_t w = on ? 120 : 0;
+      ui_set_rgb(w, w, w);
+    } else if (s_overlay == OVERLAY_AUTH_OK) {
+      ui_set_rgb(0, 180, 0);
+    } else if (s_overlay == OVERLAY_SLOT_DROP) {
+      bool on = drop_removed ? ((now - s_overlay_enter_ms) % 240 < 120)
+                             : ((now - s_overlay_enter_ms) < 120);
+      ui_set_rgb(on ? 255 : 0, 0, 0);
+    } else switch (s_state) {
       case LED_OFF: ui_set_rgb(0, 0, 0); break;
       case LED_ON:
         if (stealth) ui_set_rgb(0, 0, 0);
@@ -166,15 +230,9 @@ void ui_task(void *arg) {
         break;
       }
       case LED_VAD_IDLE: {
-        // Slow 1Hz pulse, 10% duty: proves "mic ON, listening, silence"
-        // vs LED_OFF (muted) and LED_ON solid (utterance capturing).
-        // Suppressed when stealth-muted so listening stays dark.
-        if (stealth) {
-          ui_set_rgb(0, 0, 0);
-          break;
-        }
-        uint32_t t = (now - state_enter_ms) % 1000;
-        ui_set_rgb(0, 0, (t < 100) ? 90 : 0);
+        // Listening-idle stays dark: no idle blink. Solid green (LED_ON)
+        // still shows while an utterance is being captured.
+        ui_set_rgb(0, 0, 0);
         break;
       }
     }

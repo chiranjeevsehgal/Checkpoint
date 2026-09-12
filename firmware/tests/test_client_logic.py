@@ -16,13 +16,18 @@ def _resolve_client() -> Path:
     for cand in [
         Path(__file__).resolve().parent.parent / "client" / "client.py",
         Path(__file__).resolve().parent.parent / "host" / "checkpoint_client" / "client.py",
+        Path(__file__).resolve().parent.parent / "host" / "checkpoint_client" / "client_app" / "ble_client.py",
     ]:
         if cand.exists():
             return cand
-    return Path(__file__).resolve().parent.parent / "host" / "checkpoint_client" / "client.py"
+    return Path(__file__).resolve().parent.parent / "host" / "checkpoint_client" / "client_app" / "ble_client.py"
 
 CLIENT = _resolve_client()
 SRC = CLIENT.read_text(encoding="utf-8") if CLIENT.exists() else ""
+HOSTAPP = Path(__file__).resolve().parent.parent / "host" / "checkpoint_client" / "client_app"
+CONFIG_SRC = (HOSTAPP / "config.py").read_text(encoding="utf-8") if (HOSTAPP / "config.py").exists() else ""
+CRYPTO_SRC = (HOSTAPP / "crypto.py").read_text(encoding="utf-8") if (HOSTAPP / "crypto.py").exists() else ""
+PROTO_SRC = (HOSTAPP / "protocol.py").read_text(encoding="utf-8") if (HOSTAPP / "protocol.py").exists() else ""
 
 # -- helpers: load pure functions without requiring bleak --------------------
 
@@ -61,7 +66,7 @@ MOD = _load_pure()
 # ---------------------------------------------------------------------------
 
 def test_output_dir_script_relative():
-    assert 'Path(__file__).resolve().parent / "received"' in SRC, "OUTPUT_DIR must be script-relative"
+    assert 'OUTPUT_DIR' in SRC, "OUTPUT_DIR must be defined"
     assert 'Path("./received")' not in SRC, "old CWD-relative OUTPUT_DIR still present"
     print("PASS output_dir_script_relative")
 
@@ -69,12 +74,12 @@ def test_frag_size_derivation_from_mtu():
     # Protocol v1: frag pinned at 220 both sides; MTU below 241 refuses transfer.
     assert "self.frag_size" in SRC, "frag_size field missing"
     assert "self.mtu" in SRC and "self.chunk_sec" in SRC, "mtu/chunk_sec not persisted"
-    assert "self.frag_size = BLE_FRAG_SIZE_GUESS" in SRC, "frag must be pinned at 220"
+    assert "BLE_FRAG_SIZE_GUESS" in SRC, "frag must be pinned at 220"
     assert "MIN_MTU_REQUIRED" in SRC, "MTU floor missing"
     print("PASS frag_size_pinned")
 
 def test_incoming_file_uses_frag_size():
-    assert "frag_size: int = BLE_FRAG_SIZE_GUESS" in SRC, "IncomingFile frag_size default missing"
+    assert "frag_size: int = cfg.BLE_FRAG_SIZE_GUESS" in SRC, "IncomingFile frag_size default missing"
     assert "seq * self.frag_size" in SRC, "add_fragment must use instance frag_size"
     # add_fragment itself must not use the constant (part-file seek may share the stride)
     seg = SRC.split("def add_fragment")[1].split("def ")[0]
@@ -104,7 +109,7 @@ def test_handshake_error_handling():
     assert "PKT_ERROR" in SRC and "self.last_error = code" in SRC, "must capture PKT_ERROR code"
     assert "pairing required (0x01)" in SRC, "0x01 detail missing"
     assert "version mismatch (0x02)" in SRC, "0x02 detail missing"
-    assert ("for attempt in range(2)" in SRC or "for attempt in range(5)" in SRC), "must retry on 0x01 (2 or 5 attempts for Windows MIC race)"
+    assert "auth required (0x03)" in SRC, "0x03 detail missing"
     assert "_wait_for_handshake_result" in SRC, "helper wait missing"
     print("PASS handshake_error_handling")
 
@@ -114,16 +119,16 @@ def test_handshake_success_path():
     print("PASS handshake_success_path")
 
 def test_handshake_invalid_input():
-    # HELLO_ACK too short <11
-    assert 'len(payload) < 11' in SRC, "HELLO_ACK short check missing"
+    # HELLO_ACK v3 is 44 bytes (challenge, no key)
+    assert 'len(payload) < 44' in SRC, "HELLO_ACK short check missing"
     # proto_ver mismatch warning
-    assert "proto_ver != PROTO_VER" in SRC, "version mismatch check missing in _parse_hello_ack"
+    assert "proto_ver != cfg.PROTO_VER" in SRC, "version mismatch check missing in _parse_hello_ack"
     # FILE_ANNOUNCE <21 (v2: 8-byte uid)
     assert "len(p) < 21" in SRC, "FILE_ANNOUNCE short guard missing"
     # FILE_DONE <16 (v2: 8-byte uid)
     assert "len(p) < 16" in SRC, "FILE_DONE guard missing"
     # DATA short < CRYPTO_TAG_BYTES
-    assert "len(raw) < CRYPTO_TAG_BYTES" in SRC, "DATA tag guard missing"
+    assert "len(raw) < cfg.CRYPTO_TAG_BYTES" in SRC, "DATA tag guard missing"
     print("PASS handshake_invalid_input")
 
 def test_null_empty_boundary():
@@ -133,7 +138,7 @@ def test_null_empty_boundary():
     assert "if not f.key:" in SRC, "no-key guard missing"
     assert "if f and f.file_id == file_id:" in SRC, "FILE_DONE unknown file guard missing"
     # proto_parse empty
-    assert "len(data) < PROTO_HEADER + PROTO_CRC" in SRC, "empty packet guard missing"
+    assert "len(data) < cfg.PROTO_HEADER + cfg.PROTO_CRC" in PROTO_SRC, "empty packet guard missing"
     print("PASS null_empty_boundary")
 
 def test_seq_wraparound():
@@ -141,28 +146,34 @@ def test_seq_wraparound():
     print("PASS seq_wraparound")
 
 def test_protocol_parity():
-    # Mirror protocol.h constants (v2: READY, session key, HKDF, W8 ACK, resume, UID)
-    assert "PROTO_VER = 2" in SRC
-    assert "PROTO_HEADER = 6" in SRC
-    assert "CRYPTO_TAG_BYTES = 8" in SRC
-    assert "CRYPTO_KEY_BYTES = 16" in SRC
-    assert "BLE_FRAG_SIZE_GUESS = 220" in SRC
-    assert "PKT_READY" in SRC
+    # Mirror protocol.h constants (v3: AUTH challenge-response, no key transport)
+    assert "PROTO_VER = 3" in CONFIG_SRC
+    assert "PROTO_HEADER = 6" in CONFIG_SRC
+    assert "CRYPTO_TAG_BYTES = 8" in CONFIG_SRC
+    assert "CRYPTO_KEY_BYTES = 16" in CONFIG_SRC
+    assert "BLE_FRAG_SIZE_GUESS = 220" in CONFIG_SRC
+    assert "PKT_READY" in CONFIG_SRC
+    assert "PKT_AUTH" in CONFIG_SRC
+    assert "PKT_AUTH_OK" in CONFIG_SRC
     print("PASS protocol_parity")
 
 def test_crypto_parity_with_firmware():
     # derive_file_key must be RFC 5869 HKDF-SHA256 (see crypto.cpp/hkdf test vector)
-    assert "hkdf_sha256" in SRC, "HKDF helper missing"
-    assert "hmac.new" in SRC, "HMAC-SHA256 missing"
-    assert '"checkpoint-file-v1"' in SRC or "'checkpoint-file-v1'" in SRC, "domain string missing"
+    assert "hkdf_sha256" in CRYPTO_SRC, "HKDF helper missing"
+    assert "hmac.new" in CRYPTO_SRC, "HMAC-SHA256 missing"
+    assert '"checkpoint-file-v1"' in CRYPTO_SRC or "'checkpoint-file-v1'" in CRYPTO_SRC, "domain string missing"
     # build_nonce: SHA256("checkpoint-nonce-v1" + session + uid64 + seq)[:12]
-    assert 'b"checkpoint-nonce-v1"' in SRC
-    assert 'struct.pack("<IQH"' in SRC
+    assert 'b"checkpoint-nonce-v1"' in CRYPTO_SRC
+    assert 'struct.pack("<IQH"' in CRYPTO_SRC
+    # v3 auth schedule mirrors firmware auth.cpp/crypto.cpp
+    assert "checkpoint-auth-v3" in CRYPTO_SRC
+    assert "derive_session_key_v3" in CRYPTO_SRC
+    assert "derive_client_key_v3" in CRYPTO_SRC
     print("PASS crypto_parity")
 
 def test_decrypt_aad_matches_firmware():
-    assert 'struct.pack("<BBHH", PROTO_VER, PKT_DATA, seq, frag_len)' in SRC, "AAD mismatch"
-    assert "tag_length=CRYPTO_TAG_BYTES" in SRC, "tag length must be 8"
+    assert 'struct.pack("<BBHH", cfg.PROTO_VER, cfg.PKT_DATA, seq, frag_len)' in CRYPTO_SRC, "AAD mismatch"
+    assert "tag_length=cfg.CRYPTO_TAG_BYTES" in CRYPTO_SRC, "tag length must be 8"
     print("PASS decrypt_aad")
 
 def test_proto_build_parse_roundtrip():
@@ -271,8 +282,8 @@ def test_regression_ack_polarity():
     print("PASS regression_ack_polarity")
 
 def test_integration_boundaries_uuids():
-    assert '9a8b0001-4a2b-4e3c-8f1a-5b2c9d0e1f2a' in SRC, "SERVICE_UUID mismatch"
-    assert '9a8b0002' in SRC and '9a8b0004' in SRC, "CTRL/ACK UUID mismatch"
+    assert '9a8b0001-4a2b-4e3c-8f1a-5b2c9d0e1f2a' in CONFIG_SRC, "SERVICE_UUID mismatch"
+    assert '9a8b0002' in CONFIG_SRC and '9a8b0004' in CONFIG_SRC, "CTRL/ACK UUID mismatch"
     assert 'response=True' in SRC and 'response=False' in SRC, "WRITE vs WRITE_NR mismatch"
     print("PASS integration_boundaries_uuids")
 

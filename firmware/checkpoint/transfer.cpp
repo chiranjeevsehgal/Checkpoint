@@ -104,6 +104,7 @@ static void signal_ack(uint16_t seq, bool ok) {
 void transfer_on_packet(const uint8_t *data, size_t len) {
   Packet pkt;
   if (!proto_parse(data, len, &pkt)) return;
+  if (!ble_peer_authenticated()) return;
   if (pkt.type == PKT_ACK) {
     if (pkt.len < 3) return;
     uint16_t seq = pkt.payload[0] | (pkt.payload[1] << 8);
@@ -147,7 +148,7 @@ static bool wait_ack(uint16_t seq, uint32_t timeout_ms) {
       // For single-wait paths (announce/done) this suffices
       continue;
     }
-    if (!ble_is_connected() || !ble_is_handshaked()) return false;
+    if (!ble_is_connected() || !ble_is_handshaked() || !ble_peer_authenticated()) return false;
   }
   return false;
 }
@@ -186,7 +187,7 @@ void transfer_task(void *arg) {
   (void)arg;
   uint16_t seq_gen = 1;
   while (true) {
-    if (!ble_is_connected() || !ble_is_handshaked() || !control_sync_enabled()) {
+    if (!ble_is_connected() || !ble_is_handshaked() || !ble_peer_authenticated() || !control_sync_enabled()) {
       // Sync off behaves like link-down for picking new files: the in-flight
       // file (if any) finishes first, then the task idles here. No retry
       // accounting, no deletes — resume state is already persisted.
@@ -299,21 +300,19 @@ void transfer_task(void *arg) {
     uint16_t next = s_resume_seq;
     if (next > total_frags) next = start_seq;
 
-    // Per-file derived key (optional, restores master after file).
-    // Mirrors the host: master -> session key -> file key (never master -> file).
-    uint8_t master[CRYPTO_KEY_BYTES];
+    // Per-file derived key from the authenticated v3 session key.
+    // The session key lives in auth RAM, is never transmitted, and is
+    // cleared on disconnect. File key restores the legacy master slot after.
     uint8_t session_key[CRYPTO_KEY_BYTES];
     uint8_t file_key[CRYPTO_KEY_BYTES];
     bool use_derived = false;
-    if (crypto_get_key(master)) {
-      if (crypto_derive_session_key(master, ble_session_id(), session_key) &&
-          crypto_derive_file_key(session_key, ble_session_id(), file_uid, file_key)) {
+    if (ble_get_session_key(session_key)) {
+      if (crypto_derive_file_key(session_key, ble_session_id(), file_uid, file_key)) {
         crypto_set_key(file_key);
         use_derived = true;
         memset(file_key, 0, sizeof(file_key));
       }
       memset(session_key, 0, sizeof(session_key));
-      memset(master, 0, sizeof(master));
     }
 
     bool failed = false;
@@ -464,7 +463,7 @@ void transfer_task(void *arg) {
           base_acked = window[0].acked;
           continue;
         }
-        if (!ble_is_connected() || !ble_is_handshaked()) { failed = true; break; }
+        if (!ble_is_connected() || !ble_is_handshaked() || !ble_peer_authenticated()) { failed = true; break; }
       }
       if (failed) break;
       if (!ble_is_connected()) { failed = true; break; }

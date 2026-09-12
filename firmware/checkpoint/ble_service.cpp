@@ -1,6 +1,8 @@
 #include "ble_service.h"
 #include "protocol.h"
 #include "crypto.h"
+#include "auth.h"
+#include "ui.h"
 #include <NimBLEDevice.h>
 #ifndef BLE_GAP_LE_PHY_2M_MASK
 #define BLE_GAP_LE_PHY_2M_MASK 0x02
@@ -17,6 +19,7 @@ static bool s_hello_sent = false; // HELLO_ACK transmitted, READY pending
 static uint32_t s_final_diag_due_ms = 0;
 static uint16_t s_conn_handle = 0xFFFF;
 static void (*s_packet_cb)(const uint8_t *, size_t) = nullptr;
+static uint8_t s_device_nonce[16];
 
 static NimBLEServer *s_server = nullptr;
 static NimBLEService *s_service = nullptr;
@@ -63,6 +66,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     s_handshake_start_ms = millis();
     s_last_handshake_ms = s_handshake_start_ms;
     s_hello_sent = false;
+    memset(s_device_nonce, 0, sizeof(s_device_nonce));
+    auth_clear_session();
     // Existing bond: actively restore encryption. New peer: leave pairing
     // initiation to the host (Windows/Bleak) so two sides don't race.
     bool bonded = connInfo.isBonded();
@@ -81,8 +86,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     // Do NOT delete the bond here. Reason 534 accompanies routine
     // host-initiated disconnects — it is not proof of a stale/corrupt key.
     // Deleting our copy orphans the Windows-side bond and forces a full
-    // re-pair on every reconnect. Genuine staleness is recovered host-side
-    // by CheckpointClient._rebond(), so the bond must be left intact.
+    // re-pair on every reconnect. Lost bonds are recovered over USB
+    // (`auth forget`) + physical re-enrollment, never automatically.
     (void)connInfo;
     Serial.printf("BLE disconnect reason=%d\n", reason);
     s_connected = false;
@@ -94,6 +99,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     s_hello_sent = false;
     s_final_diag_due_ms = 0;
     s_conn_handle = 0xFFFF;
+    memset(s_device_nonce, 0, sizeof(s_device_nonce));
+    auth_clear_session();
     // Restore master key if a derived file key was active when link dropped.
     crypto_load_or_gen_key();
     pServer->startAdvertising();
@@ -106,86 +113,180 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   }
 };
 
+static void send_error_locked(uint8_t code) {
+  uint8_t buf[PROTO_MAX_PACKET];
+  size_t bl = sizeof(buf);
+  if (proto_build(PKT_ERROR, 0, &code, 1, buf, &bl) && s_ctrl) {
+    ctrl_indicate_locked(buf, bl);
+  }
+}
+
+static void send_ready_ack() {
+  uint8_t ack_payload[4];
+  memcpy(ack_payload, &s_session, 4);
+  uint8_t resp[PROTO_MAX_PACKET];
+  size_t rl = sizeof(resp);
+  if (proto_build(PKT_READY_ACK, 0, ack_payload, sizeof(ack_payload), resp, &rl)) {
+    ctrl_indicate_locked(resp, rl);
+  }
+}
+
+static void handle_hello(const uint8_t *raw, size_t raw_len) {
+  if (raw_len >= 1 && raw[0] != PROTO_VER) {
+    send_error_locked(0x02);
+    return;
+  }
+  if (!s_encrypted || !s_connected) {
+    send_error_locked(0x01);
+    return;
+  }
+  Packet hello;
+  if (!proto_parse(raw, raw_len, &hello) || hello.len != 1) {
+    send_error_locked(0x03);
+    return;
+  }
+  bool enroll_requested = (hello.payload[0] & 0x01) != 0;
+  if (!crypto_random_bytes(s_device_nonce, sizeof(s_device_nonce))) {
+    send_error_locked(0x03);
+    return;
+  }
+  if (!auth_begin(s_session, enroll_requested, s_device_nonce)) {
+    send_error_locked(0x03);
+    return;
+  }
+  uint8_t device_id[16];
+  if (!auth_get_device_id(device_id)) {
+    send_error_locked(0x03);
+    return;
+  }
+  uint8_t payload[44];
+  payload[0] = PROTO_VER;
+  memcpy(payload + 1, &s_session, 4);
+  uint16_t mtu = ble_mtu_negotiated();
+  memcpy(payload + 5, &mtu, 2);
+  uint32_t chunk = REC_CHUNK_SEC;
+  memcpy(payload + 7, &chunk, 4);
+  memcpy(payload + 11, device_id, 16);
+  memcpy(payload + 27, s_device_nonce, 16);
+  payload[43] = (enroll_requested && auth_enrollment_active()) ? 1 : 0;
+  memset(device_id, 0, sizeof(device_id));
+  uint8_t resp[PROTO_MAX_PACKET];
+  size_t rl = sizeof(resp);
+  if (proto_build(PKT_HELLO_ACK, 0, payload, sizeof(payload), resp, &rl)) {
+    memset(payload, 0, sizeof(payload));
+    if (ctrl_indicate_locked(resp, rl)) {
+      s_hello_sent = true;
+      s_last_handshake_ms = millis();
+    }
+    if (s_server && s_conn_handle != 0xFFFF) {
+      s_server->updateConnParams(s_conn_handle, 12, 12, 0, 400);
+      s_server->setDataLen(s_conn_handle, 251);
+      s_server->updatePhy(s_conn_handle, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK, 0);
+      s_final_diag_due_ms = millis() + 600;
+    }
+  } else {
+    memset(payload, 0, sizeof(payload));
+  }
+}
+
+static void handle_auth(const uint8_t *raw, size_t raw_len) {
+  if (!s_encrypted || !s_connected) {
+    send_error_locked(0x01);
+    return;
+  }
+  Packet pkt;
+  if (!s_hello_sent || !proto_parse(raw, raw_len, &pkt) || pkt.len != 64) {
+    send_error_locked(0x03);
+    return;
+  }
+  uint8_t client_nonce[16];
+  memcpy(client_nonce, pkt.payload + 16, 16);
+  bool is_enroll = false;
+  uint8_t server_proof[32];
+  if (!auth_verify_client_proof(pkt.payload, client_nonce, pkt.payload + 32, &is_enroll, server_proof)) {
+    memset(client_nonce, 0, sizeof(client_nonce));
+    send_error_locked(0x03);
+    if (s_server && s_conn_handle != 0xFFFF) s_server->disconnect(s_conn_handle);
+    return;
+  }
+  memset(client_nonce, 0, sizeof(client_nonce));
+  uint8_t resp[PROTO_MAX_PACKET];
+  size_t rl = sizeof(resp);
+  if (proto_build(PKT_AUTH_OK, 0, server_proof, sizeof(server_proof), resp, &rl)) {
+    ctrl_indicate_locked(resp, rl);
+    s_last_handshake_ms = millis();
+  }
+  memset(server_proof, 0, sizeof(server_proof));
+}
+
+static void handle_ready(const uint8_t *raw, size_t raw_len) {
+  if (!s_encrypted || !s_connected) {
+    send_error_locked(0x01);
+    return;
+  }
+  Packet ready;
+  if (!s_hello_sent || !proto_parse(raw, raw_len, &ready) || ready.len != 36) {
+    send_error_locked(0x03);
+    return;
+  }
+  uint32_t echo = 0;
+  memcpy(&echo, ready.payload, 4);
+  if (echo != s_session) {
+    send_error_locked(0x03);
+    return;
+  }
+  if (s_handshaked && auth_is_authenticated()) {
+    send_ready_ack();
+    return;
+  }
+  if (s_handshaked) {
+    send_error_locked(0x03);
+    return;
+  }
+  if (!auth_verify_client_finish(ready.payload + 4)) {
+    send_error_locked(0x03);
+    if (s_server && s_conn_handle != 0xFFFF) s_server->disconnect(s_conn_handle);
+    return;
+  }
+  s_handshaked = true;
+  s_handshake_start_ms = 0;
+  s_state = BLE_READY;
+  ui_signal_auth_ok();
+  send_ready_ack();
+}
+
 class CtrlCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo &connInfo) override {
     (void)connInfo;
     std::string v = pCharacteristic->getValue();
-    if (v.empty() || !s_packet_cb) return;
-    s_packet_cb((const uint8_t *)v.data(), v.size());
-    if (v.size() >= 2 && (uint8_t)v[1] == PKT_READY) {
-      // Host confirms HELLO_ACK processed (session/mtu/crypto installed).
-      // Only the handshake completes here — transfers stay gated until now.
-      Packet ready;
-      if (s_hello_sent && !s_handshaked &&
-          proto_parse((const uint8_t *)v.data(), v.size(), &ready) &&
-          ready.len >= 4) {
-        uint32_t echo = 0;
-        memcpy(&echo, ready.payload, 4);
-        if (echo == s_session) {
-          s_handshaked = true;
-          s_handshake_start_ms = 0;
-          s_state = BLE_READY;
-        }
-      }
+    if (v.empty()) return;
+    const uint8_t *raw = (const uint8_t *)v.data();
+    size_t raw_len = v.size();
+    if (raw_len < 2) return;
+    uint8_t ver = raw[0];
+    uint8_t type = raw[1];
+    if (ver != PROTO_VER) {
+      if (type == PKT_HELLO) send_error_locked(0x02);
       return;
     }
-    if (v.size() >= 2 && (uint8_t)v[1] == PKT_HELLO) {
-      if ((uint8_t)v[0] != PROTO_VER) {
-        uint8_t err = 0x02;
-        uint8_t buf[PROTO_MAX_PACKET];
-        size_t bl = sizeof(buf);
-        if (proto_build(PKT_ERROR, 0, &err, 1, buf, &bl) && s_ctrl) {
-          ctrl_indicate_locked(buf, bl);
-        }
-        return;
-      }
-      if (!s_encrypted || !s_connected) {
-        uint8_t err = 0x01;
-        uint8_t buf[PROTO_MAX_PACKET];
-        size_t bl = sizeof(buf);
-        if (proto_build(PKT_ERROR, 0, &err, 1, buf, &bl) && s_ctrl) {
-          ctrl_indicate_locked(buf, bl);
-        }
-        return;
-      }
-      uint8_t resp[64];
-      size_t rl = sizeof(resp);
-      uint8_t payload[32];
-      payload[0] = PROTO_VER;
-      memcpy(payload + 1, &s_session, 4);
-      uint16_t mtu = ble_mtu_negotiated();
-      memcpy(payload + 5, &mtu, 2);
-      uint32_t chunk = REC_CHUNK_SEC;
-      memcpy(payload + 7, &chunk, 4);
-      size_t plen = 11;
-      // Per-session key: the permanent master never leaves the device.
-      uint8_t master[CRYPTO_KEY_BYTES];
-      uint8_t sess_key[CRYPTO_KEY_BYTES];
-      if (crypto_get_key(master) &&
-          crypto_derive_session_key(master, s_session, sess_key)) {
-        memcpy(payload + 11, sess_key, CRYPTO_KEY_BYTES);
-        plen = 27;
-        memset(sess_key, 0, sizeof(sess_key));
-      }
-      memset(master, 0, sizeof(master));
-      if (proto_build(PKT_HELLO_ACK, 0, payload, plen, resp, &rl)) {
-        // Handshake completes only when the host answers PKT_READY
-        // (proves session/mtu/crypto installed). Transfers stay gated.
-        if (ctrl_indicate_locked(resp, rl)) {
-          s_hello_sent = true;
-          s_last_handshake_ms = millis(); // fresh 5s budget for the READY reply
-        }
-        // hybrid: 15ms iOS-safe, DLE 251, try 2M
-        if (s_server && s_conn_handle != 0xFFFF) {
-          s_server->updateConnParams(s_conn_handle, 12, 12, 0, 400);
-          s_server->setDataLen(s_conn_handle, 251);
-          // Request 2M PHY — phone may reject
-          // Use named mask instead of literal 0x02 per review
-          s_server->updatePhy(s_conn_handle, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK, 0);
-          s_final_diag_due_ms = millis() + 600;
-        }
-      }
+    if (type == PKT_HELLO) {
+      handle_hello(raw, raw_len);
+      return;
     }
+    if (type == PKT_AUTH) {
+      handle_auth(raw, raw_len);
+      return;
+    }
+    if (type == PKT_READY) {
+      handle_ready(raw, raw_len);
+      return;
+    }
+    if (!s_packet_cb) return;
+    if (!auth_is_authenticated()) {
+      send_error_locked(0x03);
+      return;
+    }
+    s_packet_cb(raw, raw_len);
   }
 };
 
@@ -194,7 +295,10 @@ class AckCallbacks : public NimBLECharacteristicCallbacks {
     (void)connInfo;
     std::string v = pCharacteristic->getValue();
     if (v.empty() || !s_packet_cb) return;
-    s_packet_cb((const uint8_t *)v.data(), v.size());
+    const uint8_t *raw = (const uint8_t *)v.data();
+    if (v.size() < 2 || raw[0] != PROTO_VER) return;
+    if (!auth_is_authenticated()) return;
+    s_packet_cb(raw, v.size());
   }
 };
 
@@ -211,9 +315,9 @@ bool ble_init() {
   pGattSvc->createCharacteristic("2A05", NIMBLE_PROPERTY::INDICATE);
   pGattSvc->start();
   s_service = s_server->createService(BLE_SERVICE_UUID);
-  s_ctrl = s_service->createCharacteristic(BLE_CTRL_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::INDICATE | NIMBLE_PROPERTY::READ);
-  s_data = s_service->createCharacteristic(BLE_DATA_UUID, NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ);
-  s_ack = s_service->createCharacteristic(BLE_ACK_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+  s_ctrl = s_service->createCharacteristic(BLE_CTRL_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC | NIMBLE_PROPERTY::INDICATE);
+  s_data = s_service->createCharacteristic(BLE_DATA_UUID, NIMBLE_PROPERTY::NOTIFY);
+  s_ack = s_service->createCharacteristic(BLE_ACK_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_ENC);
   s_ctrl->setCallbacks(new CtrlCallbacks());
   s_ack->setCallbacks(new AckCallbacks());
   s_service->start();
@@ -240,6 +344,9 @@ bool ble_init() {
 bool ble_is_connected() { return s_connected; }
 bool ble_is_handshaked() { return s_handshaked; }
 bool ble_is_encrypted() { return s_encrypted && s_connected; }
+bool ble_peer_authenticated() { return auth_is_authenticated(); }
+bool ble_get_session_key(uint8_t out[CRYPTO_KEY_BYTES]) { return auth_get_session_key(out); }
+bool ble_enrollment_active() { return auth_enrollment_active(); }
 BleState ble_state() { return s_state; }
 uint32_t ble_session_id() { return s_session; }
 
@@ -277,7 +384,7 @@ void ble_disconnect() {
 }
 
 bool ble_send_raw(const uint8_t *data, size_t len) {
-  if (!s_connected || !s_handshaked) return false;
+  if (!s_connected || !s_handshaked || !auth_is_authenticated()) return false;
   if (!s_data) return false;
   if (!ble_tx_lock()) return false;
   s_data->setValue(data, len);

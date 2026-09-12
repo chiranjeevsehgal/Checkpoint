@@ -45,6 +45,9 @@ def proto_parse(data: bytes) -> Packet | None:
 PKT_NAMES = {
     cfg.PKT_HELLO: "HELLO",
     cfg.PKT_HELLO_ACK: "HELLO_ACK",
+    cfg.PKT_AUTH: "AUTH",
+    cfg.PKT_AUTH_OK: "AUTH_OK",
+    cfg.PKT_READY_ACK: "READY_ACK",
     cfg.PKT_FILE_ANNOUNCE: "FILE_ANNOUNCE",
     cfg.PKT_FILE_ANNOUNCE_ACK: "FILE_ANNOUNCE_ACK",
     cfg.PKT_DATA: "DATA",
