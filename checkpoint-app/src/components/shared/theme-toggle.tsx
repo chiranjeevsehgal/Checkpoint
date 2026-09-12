@@ -12,7 +12,7 @@ export function ThemeToggle() {
       onPress={toggleTheme}
       accessibilityRole="button"
       accessibilityLabel="Toggle theme"
-      className="border-border active:bg-foreground/10 h-9 w-9 flex-none items-center justify-center border"
+      className="active:bg-foreground/10 h-9 w-9 flex-none items-center justify-center border border-border"
     >
       <Icon as={scheme === 'dark' ? Sun : Moon} size={18} />
     </Pressable>

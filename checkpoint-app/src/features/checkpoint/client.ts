@@ -1,11 +1,7 @@
-import {
-  BleManager,
-  type Characteristic,
-  type Device,
-} from "react-native-ble-plx";
+import { BleManager, type Characteristic, type Device } from 'react-native-ble-plx';
 
-import { base64Decode, base64Encode } from "./base64.ts";
-import { BenchRecorder } from "./bench.ts";
+import { base64Decode, base64Encode } from './base64.ts';
+import { BenchRecorder } from './bench.ts';
 import {
   ACK_TIMEOUT_MS,
   ACK_UUID,
@@ -44,7 +40,7 @@ import {
   READY_RETRIES,
   RECONNECT_DELAY_MS,
   SERVICE_UUID,
-} from "./config.ts";
+} from './config.ts';
 import {
   deleteCredential,
   isCredentialPending,
@@ -52,8 +48,8 @@ import {
   markCredentialActive,
   saveCredential,
   setEnrolledDeviceId,
-} from "./credentials.ts";
-import { describeScanError } from "./permissionPolicy.ts";
+} from './credentials.ts';
+import { describeScanError } from './permissionPolicy.ts';
 import {
   CLIENT_DOMAIN,
   SERVER_DOMAIN,
@@ -67,7 +63,7 @@ import {
   deriveSessionKeyV3,
   finishProof,
   newId,
-} from "./crypto.ts";
+} from './crypto.ts';
 import {
   buildFileDeletePayload,
   buildLedSetPayload,
@@ -79,7 +75,7 @@ import {
   parseStatus,
   parseStorage,
   type CmdResponse,
-} from "./parsers.ts";
+} from './parsers.ts';
 import {
   buildAnnounceAckPayload,
   buildFileDoneAckPayload,
@@ -88,7 +84,7 @@ import {
   crc32,
   packetName,
   parsePacket,
-} from "./protocol.ts";
+} from './protocol.ts';
 import {
   IncomingFile,
   contigOf,
@@ -97,7 +93,7 @@ import {
   resumeFrom,
   shouldSendAck,
   validateSidecar,
-} from "./transfer.ts";
+} from './transfer.ts';
 import {
   deletePart,
   deleteSaved,
@@ -108,13 +104,8 @@ import {
   saveCompleted,
   writeSidecar,
   type PartWriter,
-} from "./store.ts";
-import type {
-  CheckpointEvent,
-  DeviceFileList,
-  DeviceStatus,
-  StorageInfo,
-} from "./types.ts";
+} from './store.ts';
+import type { CheckpointEvent, DeviceFileList, DeviceStatus, StorageInfo } from './types.ts';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -150,7 +141,7 @@ interface CompletedEntry {
 
 export class CheckpointClient {
   readonly bench = new BenchRecorder();
-  linkState: "up" | "down" = "down";
+  linkState: 'up' | 'down' = 'down';
   linkLost = true;
 
   private device: Device | null = null;
@@ -212,18 +203,18 @@ export class CheckpointClient {
   }): void {
     this.bench.updateIngest(
       result.fileId,
-      result.uploadId ?? "",
+      result.uploadId ?? '',
       result.ingestStatus,
-      result.ingestError ?? "",
+      result.ingestError ?? '',
       result.vadStatus,
       result.vadSpeechS,
     );
     this.emit({
-      type: "ingest",
+      type: 'ingest',
       fileId: result.fileId,
-      uploadId: result.uploadId ?? "",
+      uploadId: result.uploadId ?? '',
       ingestStatus: result.ingestStatus,
-      ingestError: result.ingestError ?? "",
+      ingestError: result.ingestError ?? '',
       vadStatus: result.vadStatus,
       vadSpeechS: result.vadSpeechS,
     });
@@ -269,7 +260,7 @@ export class CheckpointClient {
         settled = true;
         clearTimeout(timer);
         cleanup();
-        reject(new Error("Scan cancelled"));
+        reject(new Error('Scan cancelled'));
       }, 200);
       try {
         this.manager.startDeviceScan(
@@ -282,28 +273,26 @@ export class CheckpointClient {
             }
             if (!scanned) return;
             seenCount += 1;
-            const id = scanned.id ?? "";
-            const name = scanned.name ?? "";
-            const localName = scanned.localName ?? "";
+            const id = scanned.id ?? '';
+            const name = scanned.name ?? '';
+            const localName = scanned.localName ?? '';
             const named =
-              id.toUpperCase() === want.toUpperCase() ||
-              name === want ||
-              localName === want;
+              id.toUpperCase() === want.toUpperCase() || name === want || localName === want;
             // Scan is already filtered by SERVICE_UUID, so any hit advertises
             // our service; a missing name (common on some stacks when the
             // scan response is absent) must not veto the match.
-            if (named || (name === "" && localName === "")) {
-              this.log(`Found: ${name || "?"} [${scanned.id}]`);
+            if (named || (name === '' && localName === '')) {
+              this.log(`Found: ${name || '?'} [${scanned.id}]`);
               finish(() => resolve(scanned));
             } else if (!seenIds.has(id)) {
               seenIds.add(id);
-              this.log(`[ble] ignoring non-target device: ${name || "?"} [${id}]`);
+              this.log(`[ble] ignoring non-target device: ${name || '?'} [${id}]`);
             }
           },
         );
       } catch (error) {
         finish(() => {
-          reject(error instanceof Error ? error : new Error("Scan failed"));
+          reject(error instanceof Error ? error : new Error('Scan failed'));
         });
       }
     });
@@ -330,23 +319,15 @@ export class CheckpointClient {
         /* ignore malformed notify */
       }
     };
-    this.device.monitorCharacteristicForService(
-      SERVICE_UUID,
-      CTRL_UUID,
-      onNotify,
-    );
-    this.device.monitorCharacteristicForService(
-      SERVICE_UUID,
-      DATA_UUID,
-      onNotify,
-    );
+    this.device.monitorCharacteristicForService(SERVICE_UUID, CTRL_UUID, onNotify);
+    this.device.monitorCharacteristicForService(SERVICE_UUID, DATA_UUID, onNotify);
     this.log(`Connected to ${device.id}`);
   }
 
   async disconnect(): Promise<void> {
     const device = this.device;
     this.device = null;
-    this.linkState = "down";
+    this.linkState = 'down';
     this.closePart();
     if (device) {
       try {
@@ -355,23 +336,23 @@ export class CheckpointClient {
         /* already gone */
       }
     }
-    this.emit({ type: "link", state: "down" });
+    this.emit({ type: 'link', state: 'down' });
   }
 
   private handleLinkLost(): void {
-    this.linkState = "down";
+    this.linkState = 'down';
     this.sessionKey = null;
     this.sessionId = null;
     this.currentFile = null;
     this.closePart();
     for (const [, waiter] of this.pending) {
       clearTimeout(waiter.timer);
-      waiter.reject(new Error("BLE disconnected"));
+      waiter.reject(new Error('BLE disconnected'));
     }
     this.pending.clear();
     this.linkLost = true;
-    this.emit({ type: "link", state: "down" });
-    this.log("[ble] link disappeared");
+    this.emit({ type: 'link', state: 'down' });
+    this.log('[ble] link disappeared');
   }
 
   private async writeCtrl(
@@ -379,7 +360,7 @@ export class CheckpointClient {
     seq: number,
     payload: Uint8Array = new Uint8Array(0),
   ): Promise<void> {
-    if (!this.device) throw new Error("Not connected");
+    if (!this.device) throw new Error('Not connected');
     await this.device.writeCharacteristicWithResponseForService(
       SERVICE_UUID,
       CTRL_UUID,
@@ -387,11 +368,7 @@ export class CheckpointClient {
     );
   }
 
-  private async writeAck(
-    type: number,
-    seq: number,
-    payload: Uint8Array,
-  ): Promise<boolean> {
+  private async writeAck(type: number, seq: number, payload: Uint8Array): Promise<boolean> {
     if (!this.device) return false;
     const encoded = base64Encode(buildPacket(type, seq, payload));
     try {
@@ -424,13 +401,13 @@ export class CheckpointClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(seq);
-        reject(new Error("Command timed out"));
+        reject(new Error('Command timed out'));
       }, timeoutMs);
       this.pending.set(seq, { resolve, reject, timer });
       this.writeCtrl(type, seq, payload).catch((error: unknown) => {
         clearTimeout(timer);
         this.pending.delete(seq);
-        reject(error instanceof Error ? error : new Error("Write failed"));
+        reject(error instanceof Error ? error : new Error('Write failed'));
       });
     });
   }
@@ -469,39 +446,31 @@ export class CheckpointClient {
     const helloSeq = this.nextSeq();
     this.helloDone = null;
     this.lastError = null;
-    await this.writeCtrl(
-      PKT_HELLO,
-      helloSeq,
-      new Uint8Array([enroll ? 1 : 0]),
-    );
-    const helloOk = await this.waitForFlag(
-      () => this.helloDone,
-      ACK_TIMEOUT_MS,
-      "HELLO timed out",
-    );
+    await this.writeCtrl(PKT_HELLO, helloSeq, new Uint8Array([enroll ? 1 : 0]));
+    const helloOk = await this.waitForFlag(() => this.helloDone, ACK_TIMEOUT_MS, 'HELLO timed out');
     if (!helloOk) {
       const code = this.lastErrorCode();
       if (code === 0x02) {
-        throw new Error("HELLO rejected: version mismatch (error 0x02)");
+        throw new Error('HELLO rejected: version mismatch (error 0x02)');
       }
       if (code === 0x01) {
         throw new Error(
-          "HELLO rejected: link not encrypted (error 0x01) — pair/bond first, then retry (enroll mode only)",
+          'HELLO rejected: link not encrypted (error 0x01) — pair/bond first, then retry (enroll mode only)',
         );
       }
       throw new Error(
         code !== null
-          ? `HELLO rejected with error 0x${code.toString(16).padStart(2, "0")}`
-          : "HELLO rejected",
+          ? `HELLO rejected with error 0x${code.toString(16).padStart(2, '0')}`
+          : 'HELLO rejected',
       );
     }
     if (enroll && this.authMode !== 1) {
       throw new Error(
-        "Enrollment window is not active. Hold the Checkpoint button for 5 seconds and retry.",
+        'Enrollment window is not active. Hold the Checkpoint button for 5 seconds and retry.',
       );
     }
     if (!this.deviceId || this.sessionId === null || !this.deviceNonce) {
-      throw new Error("AUTH without HELLO_ACK challenge");
+      throw new Error('AUTH without HELLO_ACK challenge');
     }
     this.clientNonce = newId();
     let authKey: Uint8Array;
@@ -518,7 +487,7 @@ export class CheckpointClient {
       const found = await loadCredential(this.deviceId);
       if (!found) {
         throw new Error(
-          "Unknown Checkpoint — no stored credential. Hold the button 5s and enroll with the claim key.",
+          'Unknown Checkpoint — no stored credential. Hold the button 5s and enroll with the claim key.',
         );
       }
       this.clientId = found.clientId;
@@ -553,22 +522,18 @@ export class CheckpointClient {
     authPayload.set(this.clientNonce, this.clientId.length);
     authPayload.set(proof, this.clientId.length + this.clientNonce.length);
     await this.writeCtrl(PKT_AUTH, this.nextSeq(), authPayload);
-    const authOk = await this.waitForFlag(
-      () => this.authDone,
-      ACK_TIMEOUT_MS,
-      "AUTH timed out",
-    );
+    const authOk = await this.waitForFlag(() => this.authDone, ACK_TIMEOUT_MS, 'AUTH timed out');
     if (!authOk) {
       const code = this.lastErrorCode();
       throw new Error(
         code !== null
-          ? `AUTH rejected with error 0x${code.toString(16).padStart(2, "0")}`
-          : "AUTH rejected",
+          ? `AUTH rejected with error 0x${code.toString(16).padStart(2, '0')}`
+          : 'AUTH rejected',
       );
     }
     const expectServer = finishProof(expectSession, SERVER_DOMAIN, transcript);
     if (!this.serverProof || !constantTimeEqual(expectServer, this.serverProof)) {
-      throw new Error("Server proof mismatch — possible MITM");
+      throw new Error('Server proof mismatch — possible MITM');
     }
     this.sessionKey = expectSession;
     if (enroll) {
@@ -583,7 +548,7 @@ export class CheckpointClient {
         const readyOk = await this.waitForFlag(
           () => this.readyDone,
           ACK_TIMEOUT_MS,
-          "READY timed out",
+          'READY timed out',
         );
         if (readyOk) break;
         if (attempt === READY_RETRIES) {
@@ -591,8 +556,8 @@ export class CheckpointClient {
           const code = this.lastErrorCode();
           throw new Error(
             code !== null
-              ? `READY rejected with error 0x${code.toString(16).padStart(2, "0")}`
-              : "READY rejected",
+              ? `READY rejected with error 0x${code.toString(16).padStart(2, '0')}`
+              : 'READY rejected',
           );
         }
       } catch (error) {
@@ -604,8 +569,8 @@ export class CheckpointClient {
     if (this.deviceId) await setEnrolledDeviceId(bytesToHex(this.deviceId));
     this.clientKey = enroll ? authKey : this.clientKey;
     this.authTranscript = null;
-    this.linkState = "up";
-    this.emit({ type: "link", state: "up" });
+    this.linkState = 'up';
+    this.emit({ type: 'link', state: 'up' });
     this.log(
       `Handshake complete. session_id=${this.sessionId}, mtu=${this.mtu}, frag_size=${this.fragSize}`,
     );
@@ -613,7 +578,7 @@ export class CheckpointClient {
 
   private async sendReady(): Promise<void> {
     if (!this.sessionKey || !this.authTranscript || this.sessionId === null) {
-      throw new Error("READY without session key");
+      throw new Error('READY without session key');
     }
     const finish = finishProof(this.sessionKey, CLIENT_DOMAIN, this.authTranscript);
     const payload = new Uint8Array(4 + finish.length);
@@ -697,21 +662,21 @@ export class CheckpointClient {
       const info = parseStatus(packet.payload);
       if (!info) return;
       this.completePending(packet.seq, info);
-      this.emit({ type: "rec_status", ...info });
+      this.emit({ type: 'rec_status', ...info });
       return;
     }
     if (packet.type === PKT_STORAGE_RESP) {
       const info = parseStorage(packet.payload);
       if (!info) return;
       this.completePending(packet.seq, info);
-      this.emit({ type: "storage", ...info });
+      this.emit({ type: 'storage', ...info });
       return;
     }
     if (packet.type === PKT_LIST_RESP) {
       const info = parseFileList(packet.payload);
       if (!info) return;
       this.completePending(packet.seq, info);
-      this.emit({ type: "file_list", ...info });
+      this.emit({ type: 'file_list', ...info });
     }
   }
 
@@ -724,10 +689,7 @@ export class CheckpointClient {
     this.partWriter = null;
   }
 
-  private async handleAnnounce(
-    pktSeq: number,
-    payload: Uint8Array,
-  ): Promise<void> {
+  private async handleAnnounce(pktSeq: number, payload: Uint8Array): Promise<void> {
     if (payload.length < 21) return;
     const view = viewOf(payload);
     const total = view.getUint32(1, true);
@@ -794,10 +756,10 @@ export class CheckpointClient {
       buildAnnounceAckPayload(pktSeq, resume),
     );
     if (!sent) {
-      this.log("  [!] ANNOUNCE_ACK write failed — keeping state for firmware retry");
+      this.log('  [!] ANNOUNCE_ACK write failed — keeping state for firmware retry');
       return;
     }
-    this.emit({ type: "announce", fileId: idHex, totalBytes: total, totalFrags });
+    this.emit({ type: 'announce', fileId: idHex, totalBytes: total, totalFrags });
   }
 
   private async handleData(seq: number, raw: Uint8Array): Promise<void> {
@@ -822,7 +784,7 @@ export class CheckpointClient {
       const count = file.received.size;
       if (count % 20 === 0 || count === file.totalFrags) {
         this.emit({
-          type: "progress",
+          type: 'progress',
           fileId: fileIdHex(file.fileId),
           received: count,
           totalFrags: file.totalFrags,
@@ -845,25 +807,16 @@ export class CheckpointClient {
     this.bench.noteDataArrival();
   }
 
-  private async completedOk(
-    fileId: bigint,
-    fileCrc: number,
-    total: number,
-  ): Promise<boolean> {
+  private async completedOk(fileId: bigint, fileCrc: number, total: number): Promise<boolean> {
     const entry = this.completed.get(fileIdHex(fileId));
     if (!entry || entry.crcHex !== crcHex(fileCrc) || entry.size !== total) {
       return false;
     }
     const saved = await readSavedBytes(entry.uri);
-    return saved !== null && crc32(saved) === (fileCrc >>> 0);
+    return saved !== null && crc32(saved) === fileCrc >>> 0;
   }
 
-  private rememberCompleted(
-    fileId: bigint,
-    fileCrc: number,
-    total: number,
-    uri: string,
-  ): void {
+  private rememberCompleted(fileId: bigint, fileCrc: number, total: number, uri: string): void {
     this.completed.set(fileIdHex(fileId), {
       crcHex: crcHex(fileCrc),
       size: total,
@@ -876,10 +829,7 @@ export class CheckpointClient {
     }
   }
 
-  private async handleFileDone(
-    pktSeq: number,
-    payload: Uint8Array,
-  ): Promise<void> {
+  private async handleFileDone(pktSeq: number, payload: Uint8Array): Promise<void> {
     if (payload.length < 16) return;
     const view = viewOf(payload);
     const fileId = view.getBigUint64(0, true);
@@ -894,8 +844,7 @@ export class CheckpointClient {
     if (file && file.fileId === fileId) {
       data = file.data();
       const actual = crc32(data);
-      ok =
-        actual === (fileCrc >>> 0) && file.received.size === file.totalFrags;
+      ok = actual === fileCrc >>> 0 && file.received.size === file.totalFrags;
       if (!ok && (await this.completedOk(fileId, fileCrc, total))) {
         ok = true;
         fromCache = true;
@@ -904,12 +853,12 @@ export class CheckpointClient {
       if (ok && !fromCache && data) {
         const ext =
           data.length >= 4 &&
-            data[0] === 0x4f &&
-            data[1] === 0x67 &&
-            data[2] === 0x67 &&
-            data[3] === 0x53
-            ? ".ogg"
-            : ".wav";
+          data[0] === 0x4f &&
+          data[1] === 0x67 &&
+          data[2] === 0x67 &&
+          data[3] === 0x53
+            ? '.ogg'
+            : '.wav';
         const uri = saveCompleted(idHex, ext, data, {
           file_id: idHex,
           total,
@@ -925,7 +874,7 @@ export class CheckpointClient {
           this.rememberCompleted(fileId, fileCrc, total, uri);
           savedNow = true;
         } else {
-          this.log("  [!] saving completed file failed");
+          this.log('  [!] saving completed file failed');
         }
       }
     }
@@ -935,7 +884,7 @@ export class CheckpointClient {
       buildFileDoneAckPayload(pktSeq, ok),
     );
     if (!sent) {
-      this.log("  [!] FILE_DONE_ACK write failed — keeping state for firmware retry");
+      this.log('  [!] FILE_DONE_ACK write failed — keeping state for firmware retry');
       return;
     }
     if (ok) {
@@ -949,37 +898,30 @@ export class CheckpointClient {
       data[1] === 0x67 &&
       data[2] === 0x67 &&
       data[3] === 0x53;
-    let ingestStatus = "";
-    let vadStatus = "";
+    let ingestStatus = '';
+    let vadStatus = '';
     if (ok && savedNow && data) {
       if (!isOgg) {
-        ingestStatus = "skipped-wav";
-        vadStatus = "skipped";
+        ingestStatus = 'skipped-wav';
+        vadStatus = 'skipped';
       } else if (total > INGEST_MAX_BYTES) {
-        ingestStatus = "skipped-too-large";
-        vadStatus = "skipped";
+        ingestStatus = 'skipped-too-large';
+        vadStatus = 'skipped';
       } else {
-        ingestStatus = "pending";
-        vadStatus = "pending";
+        ingestStatus = 'pending';
+        vadStatus = 'pending';
       }
     }
-    this.bench.finalize(
-      ok,
-      total,
-      this.mtu ?? 0,
-      this.fragSize,
-      ingestStatus,
-      vadStatus,
-    );
+    this.bench.finalize(ok, total, this.mtu ?? 0, this.fragSize, ingestStatus, vadStatus);
     this.emit({
-      type: "file_done",
+      type: 'file_done',
       fileId: idHex,
       crcOk: ok,
       totalBytes: total,
       ingestStatus,
       vadStatus,
     });
-    if (ok && !fromCache && data && ingestStatus === "pending") {
+    if (ok && !fromCache && data && ingestStatus === 'pending') {
       try {
         this.callbacks.onFile?.({ fileIdHex: idHex, bytes: data, totalBytes: total });
       } catch {
@@ -990,18 +932,12 @@ export class CheckpointClient {
   }
 
   async cmdRecStart(): Promise<number> {
-    const res = (await this.ctrlRoundtrip(
-      PKT_CMD,
-      new Uint8Array([0x01]),
-    )) as CmdResponse;
+    const res = (await this.ctrlRoundtrip(PKT_CMD, new Uint8Array([0x01]))) as CmdResponse;
     return res.status ?? CTRL_ERR_NOT_READY;
   }
 
   async cmdRecStop(): Promise<number> {
-    const res = (await this.ctrlRoundtrip(
-      PKT_CMD,
-      new Uint8Array([0x02]),
-    )) as CmdResponse;
+    const res = (await this.ctrlRoundtrip(PKT_CMD, new Uint8Array([0x02]))) as CmdResponse;
     return res.status ?? CTRL_ERR_NOT_READY;
   }
 
@@ -1014,53 +950,38 @@ export class CheckpointClient {
   }
 
   async cmdLedGet(): Promise<CmdResponse> {
-    return (await this.ctrlRoundtrip(
-      PKT_CMD,
-      new Uint8Array([0x11]),
-    )) as CmdResponse;
+    return (await this.ctrlRoundtrip(PKT_CMD, new Uint8Array([0x11]))) as CmdResponse;
   }
 
   async cmdSyncSet(enabled: boolean): Promise<number> {
-    const res = (await this.ctrlRoundtrip(
-      PKT_CMD,
-      buildSyncSetPayload(enabled),
-    )) as CmdResponse;
+    const res = (await this.ctrlRoundtrip(PKT_CMD, buildSyncSetPayload(enabled))) as CmdResponse;
     return res.status ?? CTRL_ERR_NOT_READY;
   }
 
   async cmdSyncGet(): Promise<CmdResponse> {
-    return (await this.ctrlRoundtrip(
-      PKT_CMD,
-      new Uint8Array([0x13]),
-    )) as CmdResponse;
+    return (await this.ctrlRoundtrip(PKT_CMD, new Uint8Array([0x13]))) as CmdResponse;
   }
 
   async reqStatus(): Promise<DeviceStatus> {
     const res = await this.ctrlRoundtrip(PKT_STATUS_REQ, new Uint8Array(0));
-    if (!("recording" in res)) throw new Error("Bad STATUS_RESP");
+    if (!('recording' in res)) throw new Error('Bad STATUS_RESP');
     return res as DeviceStatus;
   }
 
   async reqStorage(): Promise<StorageInfo> {
     const res = await this.ctrlRoundtrip(PKT_STORAGE_REQ, new Uint8Array(0));
-    if (!("total" in res)) throw new Error("Bad STORAGE_RESP");
+    if (!('total' in res)) throw new Error('Bad STORAGE_RESP');
     return res as StorageInfo;
   }
 
   async reqList(start = 0): Promise<DeviceFileList> {
-    const res = await this.ctrlRoundtrip(
-      PKT_LIST_REQ,
-      buildListReqPayload(start),
-    );
-    if (!("entries" in res)) throw new Error("Bad LIST_RESP");
+    const res = await this.ctrlRoundtrip(PKT_LIST_REQ, buildListReqPayload(start));
+    if (!('entries' in res)) throw new Error('Bad LIST_RESP');
     return res as DeviceFileList;
   }
 
   async cmdFileDelete(path: string): Promise<number> {
-    const res = (await this.ctrlRoundtrip(
-      PKT_CMD,
-      buildFileDeletePayload(path),
-    )) as CmdResponse;
+    const res = (await this.ctrlRoundtrip(PKT_CMD, buildFileDeletePayload(path))) as CmdResponse;
     return res.status ?? CTRL_ERR_NOT_READY;
   }
 
@@ -1104,16 +1025,12 @@ export class CheckpointClient {
         device = await this.scanForDevice(target, 8000);
       } catch (error) {
         if (hooks.stopped() || this.stopRequested) return;
-        const reason = error instanceof Error ? error.message : "unknown";
+        const reason = error instanceof Error ? error.message : 'unknown';
         if (await retryOrGiveUp(`[ble] scan error: ${reason}`)) return;
         continue;
       }
       if (!device) {
-        if (
-          await retryOrGiveUp(
-            "[ble] Checkpoint offline — waiting for power/advertising...",
-          )
-        )
+        if (await retryOrGiveUp('[ble] Checkpoint offline — waiting for power/advertising...'))
           return;
         continue;
       }
@@ -1121,17 +1038,17 @@ export class CheckpointClient {
         await this.connect(device);
         await this.doHandshake(claimKey);
         if (!this.device || !(await this.device.isConnected())) {
-          throw new Error("BLE disappeared during handshake");
+          throw new Error('BLE disappeared during handshake');
         }
       } catch (error) {
-        this.linkState = "down";
+        this.linkState = 'down';
         try {
           await this.disconnect();
         } catch {
           /* ignore */
         }
         if (hooks.stopped() || this.stopRequested) return;
-        const reason = error instanceof Error ? error.message : "unknown";
+        const reason = error instanceof Error ? error.message : 'unknown';
         if (await retryOrGiveUp(`[ble] setup failed: ${reason}`)) return;
         continue;
       }
@@ -1156,7 +1073,7 @@ export class CheckpointClient {
         await sleep(500);
       }
       if (hooks.stopped()) return;
-      this.log("[ble] link disappeared — rediscovering...");
+      this.log('[ble] link disappeared — rediscovering...');
       try {
         await this.disconnect();
       } catch {
@@ -1165,10 +1082,7 @@ export class CheckpointClient {
     }
   }
 
-  private async sleepOrStopped(
-    ms: number,
-    stopped: () => boolean,
-  ): Promise<boolean> {
+  private async sleepOrStopped(ms: number, stopped: () => boolean): Promise<boolean> {
     let waited = 0;
     while (waited < ms) {
       if (stopped() || this.stopRequested) return true;

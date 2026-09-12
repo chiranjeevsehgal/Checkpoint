@@ -124,7 +124,9 @@ export function CheckpointSettingsScreen() {
 
         <Collapsible title="Advanced — developer">
           <View className="gap-1">
-            <Text className="text-[11px] text-subtle-foreground">Server URL (LAN IP for on-device testing)</Text>
+            <Text className="text-[11px] text-subtle-foreground">
+              Server URL (LAN IP for on-device testing)
+            </Text>
             <Input
               value={draft.serverUrl}
               onChangeText={(text) => set('serverUrl', text)}
@@ -143,7 +145,9 @@ export function CheckpointSettingsScreen() {
               placeholder="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
               className="font-mono text-[13px]"
             />
-            {userIdError ? <Text className="text-destructive text-[11px]">{userIdError}</Text> : null}
+            {userIdError ? (
+              <Text className="text-[11px] text-destructive">{userIdError}</Text>
+            ) : null}
           </View>
         </Collapsible>
 

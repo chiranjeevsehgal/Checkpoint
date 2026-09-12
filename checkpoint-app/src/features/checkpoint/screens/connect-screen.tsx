@@ -75,14 +75,14 @@ export function ConnectScreen() {
         showToast('Not a valid claim QR.');
       }
     },
-    [setClaimText, showToast]
+    [setClaimText, showToast],
   );
   const handleScanError = useCallback(() => {
     showToast('Could not open the scanner.');
   }, [showToast]);
   const { available: scannerAvailable, start: startScanner } = useClaimScanner(
     handleScannedClaim,
-    handleScanError
+    handleScanError,
   );
 
   const refresh = useCallback(async () => {
@@ -101,7 +101,7 @@ export function ConnectScreen() {
       Animated.sequence([
         Animated.timing(pulse, { toValue: 0.45, duration: 550, useNativeDriver: true }),
         Animated.timing(pulse, { toValue: 1, duration: 550, useNativeDriver: true }),
-      ])
+      ]),
     );
     loop.start();
     return () => loop.stop();
@@ -126,7 +126,7 @@ export function ConnectScreen() {
       Animated.sequence([
         Animated.timing(livePulse, { toValue: 0.25, duration: 700, useNativeDriver: true }),
         Animated.timing(livePulse, { toValue: 1, duration: 700, useNativeDriver: true }),
-      ])
+      ]),
     );
     loop.start();
     return () => loop.stop();
@@ -151,7 +151,7 @@ export function ConnectScreen() {
               style={{ opacity: busy ? pulse : 1 }}
               className={cn(
                 'h-[52px] w-[52px] flex-none items-center justify-center',
-                connected ? 'bg-success' : busy ? 'bg-primary' : 'bg-input-bg'
+                connected ? 'bg-success' : busy ? 'bg-primary' : 'bg-input-bg',
               )}
             >
               <Icon
@@ -174,7 +174,7 @@ export function ConnectScreen() {
 
           {connected ? (
             <View className="flex-row items-center justify-between gap-2">
-              <Text className="font-mono text-primary-text text-[12px] tracking-[0.15em]">
+              <Text className="font-mono text-[12px] tracking-[0.15em] text-primary-text">
                 {fingerprint || '—'}
               </Text>
               <View className="flex-row items-center gap-1.5">
@@ -189,7 +189,7 @@ export function ConnectScreen() {
             </View>
           ) : null}
 
-          <View className="bg-divider h-0.5" />
+          <View className="h-0.5 bg-divider" />
 
           {autoConnecting ? (
             <View className="flex-row items-center justify-between gap-2">
@@ -201,7 +201,7 @@ export function ConnectScreen() {
                 accessibilityRole="button"
                 className="active:opacity-60"
               >
-                <Text className="font-display text-primary-text text-[12px]">Stop</Text>
+                <Text className="font-display text-[12px] text-primary-text">Stop</Text>
               </Pressable>
             </View>
           ) : null}
@@ -220,7 +220,9 @@ export function ConnectScreen() {
             />
           </View>
           <View className="gap-1">
-            <Text className="text-[11px] text-subtle-foreground">Claim key (enroll only, 64 hex or claim URI)</Text>
+            <Text className="text-[11px] text-subtle-foreground">
+              Claim key (enroll only, 64 hex or claim URI)
+            </Text>
             <View className="flex-row gap-2">
               <Input
                 className="flex-1"

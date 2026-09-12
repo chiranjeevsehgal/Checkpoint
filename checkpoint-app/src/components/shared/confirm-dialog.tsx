@@ -17,14 +17,21 @@ interface ConfirmDialogProps {
 
 type DialogBodyProps = Omit<ConfirmDialogProps, 'visible'>;
 
-function DialogBody({ title, body, confirmLabel, requireText, onCancel, onConfirm }: DialogBodyProps) {
+function DialogBody({
+  title,
+  body,
+  confirmLabel,
+  requireText,
+  onCancel,
+  onConfirm,
+}: DialogBodyProps) {
   const [typed, setTyped] = useState('');
   const ready = !requireText || typed.trim().toUpperCase() === requireText.toUpperCase();
 
   return (
-    <View className="bg-popover w-full gap-3 p-4">
+    <View className="w-full gap-3 bg-popover p-4">
       <Text className="font-display text-[17px] leading-tight">{title}</Text>
-      <Text className="text-muted-foreground text-[13px]">{body}</Text>
+      <Text className="text-[13px] text-muted-foreground">{body}</Text>
       {requireText ? (
         <Input
           value={typed}

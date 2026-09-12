@@ -29,9 +29,11 @@ export function ConnectivityBanner() {
   if (state === 'online') return null;
   const banner = BANNERS[state];
   return (
-    <View className={cn('mb-3 flex-row items-center justify-center gap-2 px-3 py-2', banner.className)}>
+    <View
+      className={cn('mb-3 flex-row items-center justify-center gap-2 px-3 py-2', banner.className)}
+    >
       <Icon as={banner.icon} size={14} className="text-background" />
-      <Text className="text-background text-[12px]">{banner.label}</Text>
+      <Text className="text-[12px] text-background">{banner.label}</Text>
     </View>
   );
 }

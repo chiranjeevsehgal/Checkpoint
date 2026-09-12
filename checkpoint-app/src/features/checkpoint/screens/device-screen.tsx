@@ -25,7 +25,7 @@ interface DeviceControls {
 
 function StatCell({ value, label }: { value: number; label: string }) {
   return (
-    <View className="bg-input-bg flex-1 items-center p-2.5">
+    <View className="flex-1 items-center bg-input-bg p-2.5">
       <Text className="font-display text-lg">{value}</Text>
       <Text variant="muted" className="text-[10px]">
         {label}
@@ -90,7 +90,11 @@ export function DeviceScreen() {
 
           <Card>
             <CardKicker>LED</CardKicker>
-            <Toggle label="LED muted" value={muted} onChange={(next) => updateControls({ muted: next })} />
+            <Toggle
+              label="LED muted"
+              value={muted}
+              onChange={(next) => updateControls({ muted: next })}
+            />
             <View className="gap-1">
               <View className="flex-row justify-between">
                 <Text className="text-[12px]">Brightness</Text>

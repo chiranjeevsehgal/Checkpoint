@@ -8,30 +8,30 @@ const buttonVariants = cva(
     'group font-display active:scale-[0.97] active:opacity-90 shrink-0 flex-row items-center justify-start gap-1.5 rounded-none',
     Platform.select({
       web: 'outline-none transition-colors',
-    })
+    }),
   ),
   {
     variants: {
       variant: {
         default: cn(
           'bg-primary text-primary-foreground active:bg-primary-pressed',
-          Platform.select({ web: 'hover:bg-primary-pressed' })
+          Platform.select({ web: 'hover:bg-primary-pressed' }),
         ),
         destructive: cn(
           'bg-destructive text-destructive-foreground',
-          Platform.select({ web: 'hover:opacity-90' })
+          Platform.select({ web: 'hover:opacity-90' }),
         ),
         outline: cn(
           'border-border text-foreground active:bg-secondary border bg-transparent',
-          Platform.select({ web: 'hover:bg-secondary' })
+          Platform.select({ web: 'hover:bg-secondary' }),
         ),
         secondary: cn(
           'bg-secondary text-secondary-foreground',
-          Platform.select({ web: 'hover:bg-muted' })
+          Platform.select({ web: 'hover:bg-muted' }),
         ),
         ghost: cn(
           'text-primary-text active:bg-secondary',
-          Platform.select({ web: 'hover:bg-secondary' })
+          Platform.select({ web: 'hover:bg-secondary' }),
         ),
         link: 'text-primary-text p-0',
       },
@@ -46,7 +46,7 @@ const buttonVariants = cva(
       variant: 'default',
       size: 'default',
     },
-  }
+  },
 );
 
 const buttonTextVariants = cva('font-display text-sm', {

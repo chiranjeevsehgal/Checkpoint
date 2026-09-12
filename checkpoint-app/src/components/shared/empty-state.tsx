@@ -12,7 +12,11 @@ export function EmptyState({
   return (
     <View className="items-center justify-center gap-1 px-4 py-12">
       <Text className="font-display text-[15px]">{title}</Text>
-      {hint ? <Text variant="muted" className="text-center">{hint}</Text> : null}
+      {hint ? (
+        <Text variant="muted" className="text-center">
+          {hint}
+        </Text>
+      ) : null}
     </View>
   );
 }

@@ -10,10 +10,7 @@ export function Screen({
   ...props
 }: React.ComponentProps<typeof SafeAreaView>) {
   return (
-    <SafeAreaView
-      className={cn('bg-background flex-1 px-5', className)}
-      {...props}
-    >
+    <SafeAreaView className={cn('flex-1 bg-background px-5', className)} {...props}>
       <ConnectivityBanner />
       <BluetoothBanner />
       {children}

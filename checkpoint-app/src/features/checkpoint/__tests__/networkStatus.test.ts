@@ -1,10 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-  classifyConnectivity,
-  type HealthProbe,
-} from '../networkStatus.ts';
+import { classifyConnectivity, type HealthProbe } from '../networkStatus.ts';
 
 const NOW = 1_000_000;
 
@@ -14,48 +11,28 @@ function probe(overrides: Partial<HealthProbe> = {}): HealthProbe {
 
 describe('classifyConnectivity', () => {
   it('is offline when the OS reports no internet', () => {
-    assert.equal(
-      classifyConnectivity({ isInternetReachable: false }, [probe()], NOW),
-      'offline',
-    );
-    assert.equal(
-      classifyConnectivity({ isConnected: false }, [probe()], NOW),
-      'offline',
-    );
+    assert.equal(classifyConnectivity({ isInternetReachable: false }, [probe()], NOW), 'offline');
+    assert.equal(classifyConnectivity({ isConnected: false }, [probe()], NOW), 'offline');
   });
 
   it('is online before any probe has landed', () => {
-    assert.equal(
-      classifyConnectivity({ isInternetReachable: true }, [], NOW),
-      'online',
-    );
+    assert.equal(classifyConnectivity({ isInternetReachable: true }, [], NOW), 'online');
   });
 
   it('is online after a fast success', () => {
-    assert.equal(
-      classifyConnectivity({ isInternetReachable: true }, [probe()], NOW),
-      'online',
-    );
+    assert.equal(classifyConnectivity({ isInternetReachable: true }, [probe()], NOW), 'online');
   });
 
   it('is unstable after a slow success', () => {
     assert.equal(
-      classifyConnectivity(
-        { isInternetReachable: true },
-        [probe({ latencyMs: 5_000 })],
-        NOW,
-      ),
+      classifyConnectivity({ isInternetReachable: true }, [probe({ latencyMs: 5_000 })], NOW),
       'unstable',
     );
   });
 
   it('is server-unavailable after a single failure', () => {
     assert.equal(
-      classifyConnectivity(
-        { isInternetReachable: true },
-        [probe({ ok: false })],
-        NOW,
-      ),
+      classifyConnectivity({ isInternetReachable: true }, [probe({ ok: false })], NOW),
       'server-unavailable',
     );
   });

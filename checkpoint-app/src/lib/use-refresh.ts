@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState } from 'react';
 
 export function useRefresh(action: () => Promise<unknown> | unknown) {
   const [refreshing, setRefreshing] = useState(false);

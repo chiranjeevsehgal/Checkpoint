@@ -18,7 +18,10 @@ export function Toggle({ label, description, value, onChange, disabled }: Toggle
       accessibilityState={{ checked: value, disabled }}
       disabled={disabled}
       onPress={() => onChange(!value)}
-      className={cn('active:opacity-80 flex-row items-start justify-between gap-3', disabled && 'opacity-45')}
+      className={cn(
+        'flex-row items-start justify-between gap-3 active:opacity-80',
+        disabled && 'opacity-45',
+      )}
     >
       <View className="flex-1 gap-0.5">
         <Text className="font-label text-sm">{label}</Text>
@@ -31,10 +34,10 @@ export function Toggle({ label, description, value, onChange, disabled }: Toggle
       <View
         className={cn(
           'h-6 w-11 flex-none justify-center',
-          value ? 'bg-primary items-end' : 'bg-border items-start'
+          value ? 'items-end bg-primary' : 'items-start bg-border',
         )}
       >
-        <View className="bg-switch-thumb m-0.5 h-[18px] w-[18px]" />
+        <View className="m-0.5 h-[18px] w-[18px] bg-switch-thumb" />
       </View>
     </Pressable>
   );

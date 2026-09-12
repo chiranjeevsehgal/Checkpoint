@@ -40,7 +40,7 @@ export function BatteryOptimizationCard() {
   return (
     <Card>
       <CardKicker>Background sync</CardKicker>
-      <Text className="text-muted-foreground text-[12px]">
+      <Text className="text-[12px] text-muted-foreground">
         Android may pause Bluetooth and uploads when the screen is off. Allow Checkpoint to run
         without battery optimization so recordings keep syncing in the background.
       </Text>

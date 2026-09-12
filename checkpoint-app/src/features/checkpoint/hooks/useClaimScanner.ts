@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from 'react';
 
-import { claimScannerAvailable, startClaimScanner } from "../claimScanner.ts";
+import { claimScannerAvailable, startClaimScanner } from '../claimScanner.ts';
 
 export function useClaimScanner(
   onResult: (data: string) => void,

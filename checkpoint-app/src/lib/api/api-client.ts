@@ -9,11 +9,7 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiFetch<T>(
-  path: string,
-  init?: RequestInit,
-  token?: string
-): Promise<T> {
+export async function apiFetch<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
   const url = path.startsWith('http') ? path : `${env.apiUrl}${path}`;
   const { headers: initHeaders, ...restInit } = init ?? {};
   const res = await fetch(url, {
@@ -35,7 +31,7 @@ export async function apiPutBytes(
   url: string,
   bytes: Uint8Array,
   contentType: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<number> {
   const res = await fetch(url, {
     method: 'PUT',

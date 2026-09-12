@@ -38,7 +38,7 @@ describe('transferView', () => {
 
   it('is done with an upload id when accepted', () => {
     const view = transferView(
-      input({ received: 10, vad: 'speech 3.20s', ingest: 'READY ab12cd34' })
+      input({ received: 10, vad: 'speech 3.20s', ingest: 'READY ab12cd34' }),
     );
     assert.equal(view.stage, 'done');
     assert.equal(view.outcome, 'uploaded');
@@ -48,7 +48,7 @@ describe('transferView', () => {
 
   it('labels filtered silence', () => {
     const view = transferView(
-      input({ received: 10, vad: 'no-speech 0.00s', ingest: 'skipped-no-speech' })
+      input({ received: 10, vad: 'no-speech 0.00s', ingest: 'skipped-no-speech' }),
     );
     assert.equal(view.vadLabel, 'No speech detected');
     assert.equal(view.ingestLabel, 'Filtered — silence');
@@ -57,7 +57,7 @@ describe('transferView', () => {
 
   it('surfaces a failure reason', () => {
     const view = transferView(
-      input({ received: 10, vad: 'speech 1.0s', ingest: 'failed: network timeout' })
+      input({ received: 10, vad: 'speech 1.0s', ingest: 'failed: network timeout' }),
     );
     assert.equal(view.failed, true);
     assert.equal(view.outcome, 'failed');

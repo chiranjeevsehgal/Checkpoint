@@ -47,7 +47,15 @@ function statusTextClass(view: TransferView): string {
   return 'text-muted-foreground';
 }
 
-function Chip({ label, className, textClassName }: { label: string; className?: string; textClassName?: string }) {
+function Chip({
+  label,
+  className,
+  textClassName,
+}: {
+  label: string;
+  className?: string;
+  textClassName?: string;
+}) {
   return (
     <View className={cn('px-2.5 py-1', className)}>
       <Text className={cn('text-[11px]', textClassName)}>{label}</Text>
@@ -55,7 +63,15 @@ function Chip({ label, className, textClassName }: { label: string; className?: 
   );
 }
 
-function TransferRow({ item, expanded, onToggle }: { item: TransferRecord; expanded: boolean; onToggle: () => void }) {
+function TransferRow({
+  item,
+  expanded,
+  onToggle,
+}: {
+  item: TransferRecord;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const view = transferView(item);
   const stageIndex = STAGE_INDEX[view.stage];
 
@@ -72,18 +88,25 @@ function TransferRow({ item, expanded, onToggle }: { item: TransferRecord; expan
         <View className="flex-row items-center gap-1.5">
           {STEPS.map((step, index) => (
             <Fragment key={step}>
-              {index > 0 ? <View className="bg-divider h-px flex-1" /> : null}
-              <Text className={cn('px-2 py-0.5 text-[10px]', stepBackground(index, stageIndex), stepText(index, stageIndex))}>
+              {index > 0 ? <View className="h-px flex-1 bg-divider" /> : null}
+              <Text
+                className={cn(
+                  'px-2 py-0.5 text-[10px]',
+                  stepBackground(index, stageIndex),
+                  stepText(index, stageIndex),
+                )}
+              >
                 {step}
               </Text>
             </Fragment>
           ))}
         </View>
-        <Text className="text-muted-foreground text-[12px]">VAD: {view.vadLabel}</Text>
+        <Text className="text-[12px] text-muted-foreground">VAD: {view.vadLabel}</Text>
         <Text className={cn('text-[12px]', statusTextClass(view))}>Ingest: {view.ingestLabel}</Text>
         {expanded ? (
-          <Text className="border-divider text-subtle-foreground border-t pt-2 font-mono text-[11px]">
-            fragments {Math.round(view.pct * 100)}% received · stage tracked live from the pendant transfer
+          <Text className="border-t border-divider pt-2 font-mono text-[11px] text-subtle-foreground">
+            fragments {Math.round(view.pct * 100)}% received · stage tracked live from the pendant
+            transfer
           </Text>
         ) : null}
       </Pressable>
@@ -137,7 +160,11 @@ export function TransfersScreen() {
                     textClassName="text-background"
                   />
                 ) : null}
-                <Chip label={`${failed} failed`} className="bg-destructive" textClassName="text-background" />
+                <Chip
+                  label={`${failed} failed`}
+                  className="bg-destructive"
+                  textClassName="text-background"
+                />
               </View>
             ) : null}
           </View>
@@ -146,11 +173,16 @@ export function TransfersScreen() {
           <TransferRow
             item={item}
             expanded={expandedId === item.fileId}
-            onToggle={() => setExpandedId((current) => (current === item.fileId ? null : item.fileId))}
+            onToggle={() =>
+              setExpandedId((current) => (current === item.fileId ? null : item.fileId))
+            }
           />
         )}
         ListEmptyComponent={
-          <EmptyState title="No transfers yet" hint="Connect and sync the pendant to receive audio." />
+          <EmptyState
+            title="No transfers yet"
+            hint="Connect and sync the pendant to receive audio."
+          />
         }
       />
     </Screen>

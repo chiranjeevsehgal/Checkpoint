@@ -1,5 +1,5 @@
-import type { CheckpointEvent } from "./types.ts";
-import { classifyOutcome, isPendingValue, type TransferOutcome } from "./transferView.ts";
+import type { CheckpointEvent } from './types.ts';
+import { classifyOutcome, isPendingValue, type TransferOutcome } from './transferView.ts';
 
 export type { TransferOutcome };
 
@@ -20,10 +20,10 @@ export interface TransferRecord {
 }
 
 const TERMINAL_OUTCOMES: ReadonlySet<TransferOutcome> = new Set<TransferOutcome>([
-  "uploaded",
-  "filtered",
-  "skipped",
-  "disabled",
+  'uploaded',
+  'filtered',
+  'skipped',
+  'disabled',
 ]);
 
 export function isTerminal(record: TransferRecord): boolean {
@@ -31,14 +31,18 @@ export function isTerminal(record: TransferRecord): boolean {
 }
 
 export function isInProgress(record: TransferRecord): boolean {
-  return record.outcome === "pending";
+  return record.outcome === 'pending';
 }
 
 export function isComplete(record: TransferRecord): boolean {
   return record.totalFrags > 0 && record.received >= record.totalFrags;
 }
 
-function withOutcome(record: TransferRecord, now: number, patch: Partial<TransferRecord>): TransferRecord {
+function withOutcome(
+  record: TransferRecord,
+  now: number,
+  patch: Partial<TransferRecord>,
+): TransferRecord {
   const next = { ...record, ...patch, updatedAt: now };
   next.outcome = classifyOutcome(isComplete(next) && !isPendingValue(next.ingest), next.ingest);
   return next;
@@ -62,7 +66,7 @@ export function applyEventToRecords(
   localUri?: string,
 ): TransferRecord[] {
   switch (event.type) {
-    case "announce": {
+    case 'announce': {
       if (records.some((record) => record.fileId === event.fileId)) return records;
       return [
         ...records,
@@ -73,40 +77,38 @@ export function applyEventToRecords(
           totalBytes: event.totalBytes,
           received: 0,
           totalFrags: event.totalFrags,
-          vad: "—",
-          ingest: "pending",
-          outcome: "pending",
+          vad: '—',
+          ingest: 'pending',
+          outcome: 'pending',
           attempts: 0,
         },
       ];
     }
-    case "progress":
+    case 'progress':
       return patchTransfer(records, event.fileId, now, { received: event.received });
-    case "file_done":
+    case 'file_done':
       return records.map((record) =>
         record.fileId === event.fileId
           ? withOutcome(record, now, {
               received: record.totalFrags,
-              ingest: event.ingestStatus || "pending",
-              vad: event.vadStatus || "—",
+              ingest: event.ingestStatus || 'pending',
+              vad: event.vadStatus || '—',
               ...(localUri ? { localUri } : {}),
             })
           : record,
       );
-    case "vad":
+    case 'vad':
       return patchTransfer(records, event.fileId, now, {
         vad: `${event.vadStatus} ${event.vadSpeechS}s`.trim(),
       });
-    case "ingest": {
+    case 'ingest': {
       const ingest = event.ingestError
         ? `${event.ingestStatus}: ${event.ingestError.slice(0, 60)}`
         : `${event.ingestStatus} ${event.uploadId.slice(0, 8)}`.trim();
       return patchTransfer(records, event.fileId, now, {
         ingest,
         ...(event.uploadId ? { uploadId: event.uploadId } : {}),
-        ...(event.vadStatus
-          ? { vad: `${event.vadStatus} ${event.vadSpeechS ?? ""}s`.trim() }
-          : {}),
+        ...(event.vadStatus ? { vad: `${event.vadStatus} ${event.vadSpeechS ?? ''}s`.trim() } : {}),
       });
     }
     default:
@@ -115,9 +117,7 @@ export function applyEventToRecords(
 }
 
 export function sortTransfers(records: TransferRecord[]): TransferRecord[] {
-  return [...records].sort(
-    (a, b) => b.createdAt - a.createdAt || b.fileId.localeCompare(a.fileId),
-  );
+  return [...records].sort((a, b) => b.createdAt - a.createdAt || b.fileId.localeCompare(a.fileId));
 }
 
 export function pruneExpired(
@@ -126,7 +126,5 @@ export function pruneExpired(
   retentionMs: number,
 ): TransferRecord[] {
   if (retentionMs <= 0) return records;
-  return records.filter(
-    (record) => !(isTerminal(record) && now - record.createdAt >= retentionMs),
-  );
+  return records.filter((record) => !(isTerminal(record) && now - record.createdAt >= retentionMs));
 }

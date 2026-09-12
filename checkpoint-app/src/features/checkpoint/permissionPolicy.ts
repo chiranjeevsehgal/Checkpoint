@@ -1,8 +1,8 @@
-export type GateResult = "granted" | "denied" | "needs-settings";
+export type GateResult = 'granted' | 'denied' | 'needs-settings';
 
-const BLUETOOTH_SCAN = "android.permission.BLUETOOTH_SCAN";
-const BLUETOOTH_CONNECT = "android.permission.BLUETOOTH_CONNECT";
-const FINE_LOCATION = "android.permission.ACCESS_FINE_LOCATION";
+const BLUETOOTH_SCAN = 'android.permission.BLUETOOTH_SCAN';
+const BLUETOOTH_CONNECT = 'android.permission.BLUETOOTH_CONNECT';
+const FINE_LOCATION = 'android.permission.ACCESS_FINE_LOCATION';
 
 // Numeric copies of react-native-ble-plx BleErrorCode, kept as plain numbers
 // so this module stays importable (and unit-testable) without the BLE stack.
@@ -12,7 +12,7 @@ const SCAN_LOCATION_DISABLED = 601;
 
 /** Runtime permissions needed for BLE scanning. Empty outside Android. */
 export function requiredPermissions(platform: string, apiLevel: number): string[] {
-  if (platform !== "android") return [];
+  if (platform !== 'android') return [];
   // NOTE: our manifest declares BLUETOOTH_SCAN *without* neverForLocation,
   // so on API 31+ the OS treats scanning as location-deriving and also
   // requires FINE_LOCATION (enforced strictly on Samsung devices).
@@ -26,19 +26,19 @@ export function requiredPermissions(platform: string, apiLevel: number): string[
  * system Settings screen can recover it.
  */
 export function summarizeGrants(granted: boolean[], blocked: boolean[]): GateResult {
-  if (blocked.some(Boolean)) return "needs-settings";
-  return granted.every(Boolean) ? "granted" : "denied";
+  if (blocked.some(Boolean)) return 'needs-settings';
+  return granted.every(Boolean) ? 'granted' : 'denied';
 }
 
 /** Human cause for a ble-plx scan-callback failure. Never throws. */
 export function describeScanError(errorCode: number, fallback: string): string {
   switch (errorCode) {
     case SCAN_BT_POWERED_OFF:
-      return "Bluetooth is off — turn it on and retry";
+      return 'Bluetooth is off — turn it on and retry';
     case SCAN_BT_UNAUTHORIZED:
-      return "missing Bluetooth permission — grant Nearby devices and retry";
+      return 'missing Bluetooth permission — grant Nearby devices and retry';
     case SCAN_LOCATION_DISABLED:
-      return "Location services are off — turn them on and retry";
+      return 'Location services are off — turn them on and retry';
     default:
       return fallback || `scan error ${errorCode}`;
   }

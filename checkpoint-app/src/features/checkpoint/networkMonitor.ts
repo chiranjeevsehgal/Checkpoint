@@ -1,17 +1,17 @@
-import * as Network from "expo-network";
+import * as Network from 'expo-network';
 
 import {
   HEALTH_PATH,
   HEALTH_POLL_DOWN_MS,
   HEALTH_POLL_OK_MS,
   HEALTH_TIMEOUT_MS,
-} from "./config.ts";
+} from './config.ts';
 import {
   classifyConnectivity,
   type Connectivity,
   type HealthProbe,
   type NetworkReachability,
-} from "./networkStatus.ts";
+} from './networkStatus.ts';
 
 export interface NetworkSnapshot {
   state: Connectivity;
@@ -20,7 +20,7 @@ export interface NetworkSnapshot {
 }
 
 const INITIAL_SNAPSHOT: NetworkSnapshot = {
-  state: "online",
+  state: 'online',
   latencyMs: null,
   lastCheckedAt: null,
 };
@@ -32,7 +32,7 @@ class NetworkMonitor {
   private listeners = new Set<() => void>();
   private subscription: { remove: () => void } | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private baseUrl = "http://localhost:8080";
+  private baseUrl = 'http://localhost:8080';
   private started = false;
   private probing = false;
 
@@ -46,7 +46,7 @@ class NetworkMonitor {
   getSnapshot = (): NetworkSnapshot => this.snapshot;
 
   configure(baseUrl: string): void {
-    this.baseUrl = baseUrl.trim().replace(/\/+$/, "");
+    this.baseUrl = baseUrl.trim().replace(/\/+$/, '');
   }
 
   async start(): Promise<void> {
@@ -116,7 +116,7 @@ class NetworkMonitor {
 
   private scheduleNext(): void {
     this.clearTimer();
-    const delay = this.snapshot.state === "online" ? HEALTH_POLL_OK_MS : HEALTH_POLL_DOWN_MS;
+    const delay = this.snapshot.state === 'online' ? HEALTH_POLL_OK_MS : HEALTH_POLL_DOWN_MS;
     this.timer = setTimeout(() => void this.probeNow(), delay);
   }
 
