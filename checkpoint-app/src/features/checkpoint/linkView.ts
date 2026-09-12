@@ -44,7 +44,7 @@ const VIEWS: Record<string, LinkView> = {
 
 export function linkView(state: string, deviceName: string): LinkView {
   const view = VIEWS[state] ?? VIEWS.idle!;
-  if (state === 'connecting') return { ...view, sub: `Looking for "${deviceName}"` };
-  if (state === 'listening') return { ...view, sub: `Linked to ${deviceName}` };
+  if (state === 'connecting') return { ...view, sub: `Looking for "${deviceName}" Pendant` };
+  if (state === 'listening') return { ...view, sub: `Linked to ${deviceName} Pendant` };
   return view;
 }
