@@ -1,7 +1,8 @@
-import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 
 import { PKT_CMD, PKT_STATUS_REQ } from '../config.ts';
+import { hexToBytes } from '../crypto.ts';
 import {
   buildAnnounceAckPayload,
   buildFileDoneAckPayload,
@@ -11,7 +12,6 @@ import {
   packetName,
   parsePacket,
 } from '../protocol.ts';
-import { hexToBytes } from '../crypto.ts';
 
 function hex(bytes: Uint8Array): string {
   return Array.from(bytes)

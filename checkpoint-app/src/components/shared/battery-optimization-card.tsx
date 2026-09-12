@@ -1,7 +1,7 @@
+import Constants from 'expo-constants';
+import { openSettings } from 'expo-linking';
 import { BatteryCharging } from 'lucide-react-native';
 import { Linking, Platform } from 'react-native';
-import { openSettings } from 'expo-linking';
-import Constants from 'expo-constants';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';

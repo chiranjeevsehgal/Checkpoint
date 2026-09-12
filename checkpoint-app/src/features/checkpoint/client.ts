@@ -1,4 +1,4 @@
-import { BleManager, type Characteristic, type Device } from 'react-native-ble-plx';
+import type { BleManager, Characteristic, Device } from 'react-native-ble-plx';
 
 import { base64Decode, base64Encode } from './base64.ts';
 import { BenchRecorder } from './bench.ts';
@@ -49,7 +49,6 @@ import {
   saveCredential,
   setEnrolledDeviceId,
 } from './credentials.ts';
-import { describeScanError } from './permissionPolicy.ts';
 import {
   CLIENT_DOMAIN,
   SERVER_DOMAIN,
@@ -76,6 +75,7 @@ import {
   parseStorage,
   type CmdResponse,
 } from './parsers.ts';
+import { describeScanError } from './permissionPolicy.ts';
 import {
   buildAnnounceAckPayload,
   buildFileDoneAckPayload,
@@ -85,15 +85,6 @@ import {
   packetName,
   parsePacket,
 } from './protocol.ts';
-import {
-  IncomingFile,
-  contigOf,
-  crcHex,
-  fileIdHex,
-  resumeFrom,
-  shouldSendAck,
-  validateSidecar,
-} from './transfer.ts';
 import {
   deletePart,
   deleteSaved,
@@ -105,6 +96,15 @@ import {
   writeSidecar,
   type PartWriter,
 } from './store.ts';
+import {
+  IncomingFile,
+  contigOf,
+  crcHex,
+  fileIdHex,
+  resumeFrom,
+  shouldSendAck,
+  validateSidecar,
+} from './transfer.ts';
 import type { CheckpointEvent, DeviceFileList, DeviceStatus, StorageInfo } from './types.ts';
 
 function sleep(ms: number): Promise<void> {
@@ -764,7 +764,7 @@ export class CheckpointClient {
 
   private async handleData(seq: number, raw: Uint8Array): Promise<void> {
     const file = this.currentFile;
-    if (!file || !file.key) return;
+    if (!file?.key) return;
     if (raw.length < CRYPTO_TAG_BYTES) return;
     const plain = decryptFragment(file.key, file.sessionId, file.fileId, seq, raw);
     let ackSeq: number | null = null;

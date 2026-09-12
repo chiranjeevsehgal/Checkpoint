@@ -2,19 +2,6 @@ import { Bluetooth, ScanLine } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo } from 'react';
 import { Animated, Pressable, ScrollView, View } from 'react-native';
 
-import { AppHeader } from '@/components/shared/app-header';
-import { BatteryOptimizationCard } from '@/components/shared/battery-optimization-card';
-import { Screen } from '@/components/shared/screen';
-import { Button } from '@/components/ui/button';
-import { Card, CardKicker } from '@/components/ui/card';
-import { Icon } from '@/components/ui/icon';
-import { Input } from '@/components/ui/input';
-import { AppRefreshControl } from '@/components/ui/refresh-control';
-import { Text } from '@/components/ui/text';
-import { cn } from '@/lib/utils';
-import { useRefresh } from '@/lib/use-refresh';
-import { useToast } from '@/providers/toast-provider';
-
 import { parseClaimHex } from '../claim.ts';
 import { LogView } from '../components/log-view.tsx';
 import { Toggle } from '../components/toggle.tsx';
@@ -24,6 +11,19 @@ import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { useClaimScanner } from '../hooks/useClaimScanner.ts';
 import { linkView } from '../linkView.ts';
 import { isInProgress } from '../transferStore.ts';
+
+import { AppHeader } from '@/components/shared/app-header';
+import { BatteryOptimizationCard } from '@/components/shared/battery-optimization-card';
+import { Screen } from '@/components/shared/screen';
+import { Button } from '@/components/ui/button';
+import { Card, CardKicker } from '@/components/ui/card';
+import { Icon } from '@/components/ui/icon';
+import { Input } from '@/components/ui/input';
+import { AppRefreshControl } from '@/components/ui/refresh-control';
+import { Text } from '@/components/ui/text';
+import { useRefresh } from '@/lib/use-refresh';
+import { cn } from '@/lib/utils';
+import { useToast } from '@/providers/toast-provider';
 
 const ACTIVITY_DOT: Record<ActivityTone, string> = {
   recording: 'bg-primary',

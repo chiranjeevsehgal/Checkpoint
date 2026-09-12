@@ -2,6 +2,10 @@ import { Upload } from 'lucide-react-native';
 import { Fragment, useState } from 'react';
 import { FlatList, Pressable, View } from 'react-native';
 
+import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
+import { isTerminal, type TransferRecord } from '../transferStore.ts';
+import { transferView, type TransferStage, type TransferView } from '../transferView.ts';
+
 import { AppHeader } from '@/components/shared/app-header';
 import { EmptyState } from '@/components/shared/empty-state';
 import { Screen } from '@/components/shared/screen';
@@ -11,12 +15,8 @@ import { Icon } from '@/components/ui/icon';
 import { ProgressBar } from '@/components/ui/progress-bar';
 import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { Text } from '@/components/ui/text';
-import { cn } from '@/lib/utils';
 import { useRefresh } from '@/lib/use-refresh';
-
-import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
-import { isTerminal, type TransferRecord } from '../transferStore.ts';
-import { transferView, type TransferStage, type TransferView } from '../transferView.ts';
+import { cn } from '@/lib/utils';
 
 const STEPS = ['Receive', 'Analyze', 'Upload'] as const;
 

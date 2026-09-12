@@ -1,5 +1,5 @@
-import type { CheckpointEvent } from './types.ts';
 import { classifyOutcome, isPendingValue, type TransferOutcome } from './transferView.ts';
+import type { CheckpointEvent } from './types.ts';
 
 export type { TransferOutcome };
 

@@ -1,6 +1,10 @@
 import { Trash2 } from 'lucide-react-native';
 import { FlatList, Pressable, View } from 'react-native';
 
+import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
+import { fileStateLabel, formatBytes } from '../parsers.ts';
+import type { DeviceFileEntry } from '../types.ts';
+
 import { AppHeader } from '@/components/shared/app-header';
 import { EmptyState } from '@/components/shared/empty-state';
 import { Screen } from '@/components/shared/screen';
@@ -10,12 +14,8 @@ import { Icon } from '@/components/ui/icon';
 import { ProgressBar } from '@/components/ui/progress-bar';
 import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { Text } from '@/components/ui/text';
-import { cn } from '@/lib/utils';
 import { useRefresh } from '@/lib/use-refresh';
-
-import { fileStateLabel, formatBytes } from '../parsers.ts';
-import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
-import type { DeviceFileEntry } from '../types.ts';
+import { cn } from '@/lib/utils';
 
 const STATE_TAG: Record<string, string> = {
   recording: 'bg-primary text-primary-foreground',

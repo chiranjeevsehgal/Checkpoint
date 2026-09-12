@@ -2,6 +2,9 @@ import { Play, RefreshCw, Square } from 'lucide-react-native';
 import { useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
+import { Toggle } from '../components/toggle.tsx';
+import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
+
 import { AppHeader } from '@/components/shared/app-header';
 import { EmptyState } from '@/components/shared/empty-state';
 import { Screen } from '@/components/shared/screen';
@@ -13,9 +16,6 @@ import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { RangeSlider } from '@/components/ui/slider';
 import { Text } from '@/components/ui/text';
 import { useRefresh } from '@/lib/use-refresh';
-
-import { Toggle } from '../components/toggle.tsx';
-import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 
 interface DeviceControls {
   session: boolean;

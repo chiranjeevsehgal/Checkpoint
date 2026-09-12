@@ -1,13 +1,13 @@
-import { storage } from '@/lib/storage';
-import { settingsKey } from '@/lib/storage/keys';
-import { env } from '@/lib/env';
-
 import {
   INGEST_USER_ID_DEFAULT,
   TRANSFER_RETENTION_HOURS,
   VAD_MIN_SPEECH_S_DEFAULT,
   VAD_THRESHOLD_DEFAULT,
 } from './config.ts';
+
+import { env } from '@/lib/env';
+import { storage } from '@/lib/storage';
+import { settingsKey } from '@/lib/storage/keys';
 
 export interface CheckpointSettings {
   serverUrl: string;

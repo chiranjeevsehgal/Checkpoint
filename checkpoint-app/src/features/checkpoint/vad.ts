@@ -1,6 +1,6 @@
+import { Asset } from 'expo-asset';
 import { InferenceSession, Tensor } from 'onnxruntime-react-native';
 import { decodeAudioData } from 'react-native-audio-api';
-import { Asset } from 'expo-asset';
 
 import {
   VAD_MIN_SILENCE_MS,

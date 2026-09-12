@@ -1,12 +1,10 @@
-import { AppState } from 'react-native';
-import { BleManager, State } from 'react-native-ble-plx';
 import { Directory, File, Paths } from 'expo-file-system';
 import { isAvailableAsync, shareAsync } from 'expo-sharing';
+import { AppState } from 'react-native';
+import { BleManager, State } from 'react-native-ble-plx';
 
-import { CheckpointClient, type CompletedFile } from './client.ts';
 import { parseClaimHex } from './claim.ts';
-import { getEnrolledDeviceId } from './credentials.ts';
-import { ensureBlePermissions, hasBlePermissions } from './permissions.ts';
+import { CheckpointClient, type CompletedFile } from './client.ts';
 import {
   CTRL_ERASE_ARM,
   CTRL_ERASE_CONFIRM,
@@ -17,9 +15,11 @@ import {
   STATUS_POLL_INTERVAL_S,
   TRANSFER_TICK_MS,
 } from './config.ts';
+import { getEnrolledDeviceId } from './credentials.ts';
 import { IngestionUploader } from './ingestion.ts';
 import { networkMonitor } from './networkMonitor.ts';
 import { ctrlStatusText } from './parsers.ts';
+import { ensureBlePermissions, hasBlePermissions } from './permissions.ts';
 import { nextRetryDelayMs } from './retry.ts';
 import { defaultSettings, type CheckpointSettings } from './settings.ts';
 import {
@@ -29,7 +29,6 @@ import {
   receivedFile,
   saveTransfers,
 } from './store.ts';
-import { checkSpeech, shouldUpload, vadSkipReason } from './vad.ts';
 import {
   applyEventToRecords,
   isTerminal,
@@ -39,6 +38,7 @@ import {
   type TransferRecord,
 } from './transferStore.ts';
 import type { CheckpointEvent, DeviceFileList, DeviceStatus, StorageInfo } from './types.ts';
+import { checkSpeech, shouldUpload, vadSkipReason } from './vad.ts';
 
 export interface ListPage {
   start: number;

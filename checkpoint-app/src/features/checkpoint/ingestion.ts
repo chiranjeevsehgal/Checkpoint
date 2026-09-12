@@ -1,7 +1,5 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 
-import { apiFetch, apiPutBytes } from '@/lib/api/api-client';
-
 import {
   INGEST_MAX_BYTES,
   INGEST_POLL_INTERVAL_S,
@@ -10,6 +8,8 @@ import {
 } from './config.ts';
 import { bytesToHex } from './crypto.ts';
 import { isValidUserId } from './parsers.ts';
+
+import { apiFetch, apiPutBytes } from '@/lib/api/api-client';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

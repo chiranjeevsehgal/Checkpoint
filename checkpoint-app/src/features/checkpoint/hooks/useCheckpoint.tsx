@@ -1,3 +1,5 @@
+import { openSettings } from 'expo-linking';
+import type { PropsWithChildren } from 'react';
 import {
   createContext,
   useCallback,
@@ -7,11 +9,6 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import type { PropsWithChildren } from 'react';
-import { openSettings } from 'expo-linking';
-
-import { ConfirmDialog } from '@/components/shared/confirm-dialog';
-import { useToast } from '@/providers/toast-provider';
 
 import { CTRL_OK, DEVICE_NAME } from '../config.ts';
 import { networkMonitor } from '../networkMonitor.ts';
@@ -24,6 +21,9 @@ import {
 import { syncEngine, type ListPage } from '../syncEngine.ts';
 import type { TransferRecord } from '../transferStore.ts';
 import type { DeviceFileList, DeviceStatus, StorageInfo } from '../types.ts';
+
+import { ConfirmDialog } from '@/components/shared/confirm-dialog';
+import { useToast } from '@/providers/toast-provider';
 
 type DialogState = { kind: 'delete'; path: string } | { kind: 'erase' } | null;
 

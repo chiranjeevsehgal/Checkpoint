@@ -1,7 +1,7 @@
+import { bytesToHex, hexToBytes } from './crypto.ts';
+
 import { storage } from '@/lib/storage';
 import { credentialKey } from '@/lib/storage/keys';
-
-import { bytesToHex, hexToBytes } from './crypto.ts';
 
 const ENROLLED_DEVICE_KEY = 'checkpoint.enrolledDeviceId';
 

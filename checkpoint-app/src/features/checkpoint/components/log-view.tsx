@@ -1,3 +1,4 @@
+import * as Clipboard from 'expo-clipboard';
 import { useCallback, useRef } from 'react';
 import {
   Pressable,
@@ -6,7 +7,6 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
-import * as Clipboard from 'expo-clipboard';
 
 import { Collapsible } from '@/components/shared/collapsible';
 import { Text } from '@/components/ui/text';
