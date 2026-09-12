@@ -18,6 +18,7 @@ import {
 import { getEnrolledDeviceId } from './credentials.ts';
 import { IngestionUploader } from './ingestion.ts';
 import { networkMonitor } from './networkMonitor.ts';
+import type { HealthProbe } from './networkStatus.ts';
 import { ctrlStatusText } from './parsers.ts';
 import { ensureBlePermissions, hasBlePermissions } from './permissions.ts';
 import { playback } from './playback.ts';
@@ -73,6 +74,7 @@ export interface EngineSnapshot {
   needsSettings: boolean;
   bluetooth: BluetoothStatus;
   deviceId: string | null;
+  enrolled: boolean;
   autoConnecting: boolean;
 }
 
@@ -92,6 +94,7 @@ const INITIAL_SNAPSHOT: EngineSnapshot = {
   needsSettings: false,
   bluetooth: null,
   deviceId: null,
+  enrolled: false,
   autoConnecting: false,
 };
 
@@ -169,6 +172,7 @@ class SyncEngine {
       void this.drainQueue();
     }, TRANSFER_TICK_MS);
     this.autoConnectGaveUp = false;
+    this.setState({ enrolled: (await getEnrolledDeviceId()) !== null });
     await this.maybeAutoConnect();
   }
 
@@ -194,15 +198,15 @@ class SyncEngine {
     await this.applyDesiredSync(this.client);
   }
 
-  async testConnection(): Promise<boolean> {
+  async testConnection(): Promise<HealthProbe | null> {
     this.appendLog(`[net] testing ${this.settings.serverUrl} …`);
     const probe = await networkMonitor.probeNow();
     if (!probe) {
       this.appendLog('[net] test skipped: no internet connection');
-      return false;
+      return null;
     }
     this.appendLog(`[net] ${probe.ok ? 'reachable' : 'unreachable'} in ${probe.latencyMs}ms`);
-    return probe.ok;
+    return probe;
   }
 
   private ensureManager(): BleManager {
@@ -643,7 +647,7 @@ class SyncEngine {
             reachedReady = true;
             this.autoConnectGaveUp = false;
             this.setState({ connected: true, busy: false, autoConnecting: false });
-            this.setState({ deviceId: await getEnrolledDeviceId() });
+            this.setState({ deviceId: await getEnrolledDeviceId(), enrolled: true });
             this.appendLog('[ui] listening for file transfers …');
             await this.applyDesiredSync(client);
             try {

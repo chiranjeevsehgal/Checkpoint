@@ -11,8 +11,9 @@ import {
 } from 'react';
 
 import { startSyncService, stopSyncService } from '../backgroundService.ts';
-import { CTRL_OK, DEVICE_NAME } from '../config.ts';
+import { CTRL_OK } from '../config.ts';
 import { networkMonitor } from '../networkMonitor.ts';
+import type { HealthProbe } from '../networkStatus.ts';
 import { ctrlStatusText } from '../parsers.ts';
 import {
   defaultSettings,
@@ -34,6 +35,7 @@ interface CheckpointContextValue {
   busy: boolean;
   linkState: string;
   deviceId: string | null;
+  enrolled: boolean;
   autoConnecting: boolean;
   deviceName: string;
   setDeviceName: (name: string) => void;
@@ -63,12 +65,12 @@ interface CheckpointContextValue {
   requestDelete: (path: string) => void;
   requestErase: () => void;
   previewStorageFile: (path: string) => Promise<number | null>;
-  updateSettings: (settings: CheckpointSettings) => Promise<void>;
+  updateSettings: (settings: CheckpointSettings, options?: { silent?: boolean }) => Promise<void>;
   shareBench: () => Promise<void>;
   clearLogs: () => void;
   needsSettings: boolean;
   openAppSettings: () => Promise<void>;
-  testConnection: () => Promise<void>;
+  testConnection: () => Promise<HealthProbe | null>;
 }
 
 const CheckpointContext = createContext<CheckpointContextValue | null>(null);
@@ -82,7 +84,6 @@ export function useCheckpoint(): CheckpointContextValue {
 export function CheckpointProvider({ children }: PropsWithChildren) {
   const { showToast } = useToast();
   const snapshot = useSyncExternalStore(syncEngine.subscribe, syncEngine.getSnapshot);
-  const [deviceName, setDeviceName] = useState(DEVICE_NAME);
   const [claimText, setClaimText] = useState('');
   const [settings, setSettings] = useState<CheckpointSettings>(defaultSettings);
   const [dialog, setDialog] = useState<DialogState>(null);
@@ -110,12 +111,23 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
 
   const connect = useCallback(async () => {
     syncEngine.configure(settings);
-    await syncEngine.connect(deviceName, claimText);
-  }, [claimText, deviceName, settings]);
+    await syncEngine.connect(settings.deviceName, claimText);
+  }, [claimText, settings]);
 
   const disconnect = useCallback(async () => {
     await syncEngine.disconnect();
   }, []);
+
+  const setDeviceName = useCallback(
+    (name: string) => {
+      const next = { ...settings, deviceName: name };
+      setSettings(next);
+      void saveSettings(next).catch((error: unknown) => {
+        console.warn(`[ui] save device name failed: ${String(error)}`);
+      });
+    },
+    [settings],
+  );
 
   const applyLed = useCallback(
     async (muted: boolean, brightness: number) => {
@@ -150,20 +162,22 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
   }, [showToast]);
 
   const updateSettings = useCallback(
-    async (next: CheckpointSettings) => {
+    async (next: CheckpointSettings, options?: { silent?: boolean }) => {
+      const autoSyncChanged = next.autoSyncEnabled !== settings.autoSyncEnabled;
       await saveSettings(next);
       setSettings(next);
       syncEngine.configure(next);
       networkMonitor.configure(next.serverUrl);
-      await syncEngine.applyAutoSyncIfConnected();
-      showToast('Saved.');
+      if (autoSyncChanged) await syncEngine.applyAutoSyncIfConnected();
+      if (!options?.silent) showToast('Saved.');
     },
-    [showToast],
+    [settings.autoSyncEnabled, showToast],
   );
 
   const testConnection = useCallback(async () => {
-    const ok = await syncEngine.testConnection();
-    showToast(ok ? 'Server reachable.' : 'Server unreachable — see debug log.');
+    const probe = await syncEngine.testConnection();
+    if (!probe) showToast('No internet connection — see debug log.');
+    return probe;
   }, [showToast]);
 
   const openAppSettings = useCallback(async () => {
@@ -204,8 +218,9 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       busy: snapshot.busy,
       linkState: snapshot.linkState,
       deviceId: snapshot.deviceId,
+      enrolled: snapshot.enrolled,
       autoConnecting: snapshot.autoConnecting,
-      deviceName,
+      deviceName: settings.deviceName,
       setDeviceName,
       claimText,
       setClaimText,
@@ -245,12 +260,12 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       applySync,
       claimText,
       connect,
-      deviceName,
       disconnect,
       openAppSettings,
       previewStorageFile,
       requestDelete,
       requestErase,
+      setDeviceName,
       settings,
       snapshot,
       testConnection,

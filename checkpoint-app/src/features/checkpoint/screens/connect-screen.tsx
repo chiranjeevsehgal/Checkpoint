@@ -4,7 +4,6 @@ import { Animated, Pressable, ScrollView, View } from 'react-native';
 
 import { parseClaimHex } from '../claim.ts';
 import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
-import { Toggle } from '../components/toggle.tsx';
 import { DEVICE_NAME } from '../config.ts';
 import { connectionActivity, formatFingerprint, type ActivityTone } from '../connectionView.ts';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
@@ -13,7 +12,6 @@ import { linkView } from '../linkView.ts';
 import { isInProgress } from '../transferStore.ts';
 
 import { AppHeader } from '@/components/shared/app-header';
-import { BatteryOptimizationCard } from '@/components/shared/battery-optimization-card';
 import { PendantLogo } from '@/components/shared/pendant-logo';
 import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
@@ -46,11 +44,9 @@ export function ConnectScreen() {
     setClaimText,
     status,
     transfers,
-    settings,
     connect,
     disconnect,
     stopAutoConnect,
-    updateSettings,
     refreshStatus,
     refreshStorage,
     needsSettings,
@@ -261,24 +257,6 @@ export function ConnectScreen() {
             ) : null}
           </View>
         </Card>
-
-        <Card>
-          <CardKicker>Options</CardKicker>
-          <Toggle
-            label="Upload to ingestion"
-            description="Send speech clips to the server for transcription."
-            value={settings.ingestEnabled}
-            onChange={(next) => void updateSettings({ ...settings, ingestEnabled: next })}
-          />
-          <Toggle
-            label="Voice-activity gate"
-            description="Filter out silence before it's uploaded."
-            value={settings.vadEnabled}
-            onChange={(next) => void updateSettings({ ...settings, vadEnabled: next })}
-          />
-        </Card>
-
-        <BatteryOptimizationCard />
       </ScrollView>
     </CheckpointScreen>
   );
