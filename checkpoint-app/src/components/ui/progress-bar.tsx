@@ -12,7 +12,7 @@ export function ProgressBar({ value, className }: ProgressBarProps) {
 
   return (
     <View className={cn('bg-divider w-full overflow-hidden', className)}>
-      <View className="bg-primary h-full" style={{ width: `${pct}%` }} />
+      <View className="bg-muted-foreground h-full" style={{ width: `${pct}%` }} />
     </View>
   );
 }

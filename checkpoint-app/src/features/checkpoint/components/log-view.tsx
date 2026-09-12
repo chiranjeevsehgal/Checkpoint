@@ -62,10 +62,10 @@ export function LogView({ logs, onClear }: LogViewProps) {
       </ScrollView>
       <View className="flex-row gap-3">
         <Pressable onPress={copyLogs} accessibilityRole="button" className="self-start">
-          <Text className="font-display text-primary text-xs">Copy logs</Text>
+          <Text className="font-display text-primary-text text-xs">Copy logs</Text>
         </Pressable>
         <Pressable onPress={onClear} accessibilityRole="button" className="self-start">
-          <Text className="font-display text-primary text-xs">Clear</Text>
+          <Text className="font-display text-primary-text text-xs">Clear</Text>
         </Pressable>
       </View>
     </Collapsible>

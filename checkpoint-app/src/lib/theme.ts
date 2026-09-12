@@ -11,65 +11,86 @@ export interface Palette {
   inputBg: string;
   primary: string;
   primaryForeground: string;
+  primaryPressed: string;
+  primaryText: string;
   secondary: string;
   secondaryForeground: string;
   muted: string;
   mutedForeground: string;
+  subtleForeground: string;
   accent: string;
   accentForeground: string;
+  success: string;
+  warning: string;
   destructive: string;
   destructiveForeground: string;
   border: string;
+  borderStrong: string;
   divider: string;
+  switchThumb: string;
   ring: string;
 }
 
 export const THEME: Record<'light' | 'dark', Palette> = {
   light: {
-    background: '#f3f2f2',
-    foreground: '#201e1d',
-    card: '#eae9e9',
-    cardForeground: '#201e1d',
-    popover: '#eae9e9',
-    popoverForeground: '#201e1d',
-    surface: '#eae9e9',
-    inputBg: '#eae9e9',
-    primary: '#ec3013',
-    primaryForeground: '#f3f2f2',
-    secondary: '#eae9e9',
-    secondaryForeground: '#201e1d',
-    muted: '#eae9e9',
-    mutedForeground: '#7f7d7d',
-    accent: '#eae9e9',
-    accentForeground: '#201e1d',
-    destructive: '#ae1800',
-    destructiveForeground: '#f3f2f2',
-    border: '#9f9d9d',
-    divider: '#9f9d9d',
-    ring: '#ec3013',
+    background: '#f7f6f3',
+    foreground: '#1d1b1a',
+    card: '#ffffff',
+    cardForeground: '#1d1b1a',
+    popover: '#f0ede9',
+    popoverForeground: '#1d1b1a',
+    surface: '#ffffff',
+    inputBg: '#faf9f7',
+    primary: '#ff6b57',
+    primaryForeground: '#1d1b1a',
+    primaryPressed: '#e95a47',
+    primaryText: '#c83d2d',
+    secondary: '#f0ede9',
+    secondaryForeground: '#1d1b1a',
+    muted: '#f0ede9',
+    mutedForeground: '#625e59',
+    subtleForeground: '#77716b',
+    accent: '#f0ede9',
+    accentForeground: '#1d1b1a',
+    success: '#247a50',
+    warning: '#9a6700',
+    destructive: '#c63e3e',
+    destructiveForeground: '#f7f5f2',
+    border: '#d8d3cd',
+    borderStrong: '#bdb7b0',
+    divider: '#d8d3cd',
+    switchThumb: '#f7f5f2',
+    ring: '#ff6b57',
   },
   dark: {
-    background: '#1b1918',
-    foreground: '#f3f2f2',
-    card: '#262322',
-    cardForeground: '#f3f2f2',
-    popover: '#262322',
-    popoverForeground: '#f3f2f2',
-    surface: '#262322',
-    inputBg: '#2f2c2b',
-    primary: '#ff6b52',
-    primaryForeground: '#1b1918',
-    secondary: '#2f2c2b',
-    secondaryForeground: '#f3f2f2',
-    muted: '#2f2c2b',
-    mutedForeground: '#929090',
-    accent: '#2f2c2b',
-    accentForeground: '#f3f2f2',
-    destructive: '#ff6b52',
-    destructiveForeground: '#1b1918',
-    border: '#575655',
-    divider: '#575655',
-    ring: '#ff6b52',
+    background: '#151514',
+    foreground: '#f7f5f2',
+    card: '#211e1d',
+    cardForeground: '#f7f5f2',
+    popover: '#292524',
+    popoverForeground: '#f7f5f2',
+    surface: '#211e1d',
+    inputBg: '#1b1918',
+    primary: '#ff6b57',
+    primaryForeground: '#1d1b1a',
+    primaryPressed: '#e95a47',
+    primaryText: '#ff8272',
+    secondary: '#292524',
+    secondaryForeground: '#f7f5f2',
+    muted: '#292524',
+    mutedForeground: '#b7b2ad',
+    subtleForeground: '#88837f',
+    accent: '#292524',
+    accentForeground: '#f7f5f2',
+    success: '#55c58a',
+    warning: '#e5b85c',
+    destructive: '#f06464',
+    destructiveForeground: '#1d1b1a',
+    border: '#3d3937',
+    borderStrong: '#57514d',
+    divider: '#3d3937',
+    switchThumb: '#f7f5f2',
+    ring: '#ff6b57',
   },
 };
 

@@ -16,7 +16,7 @@ import { useRefresh } from '@/lib/use-refresh';
 
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { isTerminal, type TransferRecord } from '../transferStore.ts';
-import { transferView, type TransferStage } from '../transferView.ts';
+import { transferView, type TransferStage, type TransferView } from '../transferView.ts';
 
 const STEPS = ['Receive', 'Analyze', 'Upload'] as const;
 
@@ -28,14 +28,22 @@ const STAGE_INDEX: Record<TransferStage, number> = {
 };
 
 function stepBackground(index: number, stageIndex: number): string {
-  if (stageIndex > index) return 'bg-accent-300 dark:bg-accent-800';
+  if (stageIndex > index) return 'bg-success';
   if (stageIndex === index) return 'bg-primary';
   return 'bg-input-bg';
 }
 
 function stepText(index: number, stageIndex: number): string {
-  if (stageIndex > index) return 'text-foreground';
+  if (stageIndex > index) return 'text-background';
   if (stageIndex === index) return 'text-primary-foreground';
+  return 'text-muted-foreground';
+}
+
+function statusTextClass(view: TransferView): string {
+  if (view.failed) return 'text-destructive';
+  if (view.stage === 'receiving' || view.stage === 'uploading') return 'text-primary';
+  if (view.stage === 'analyzing') return 'text-warning';
+  if (view.outcome === 'uploaded') return 'text-success';
   return 'text-muted-foreground';
 }
 
@@ -71,10 +79,10 @@ function TransferRow({ item, expanded, onToggle }: { item: TransferRecord; expan
             </Fragment>
           ))}
         </View>
-        <Text className="text-[12px] opacity-75">VAD: {view.vadLabel}</Text>
-        <Text className="text-[12px] opacity-75">Ingest: {view.ingestLabel}</Text>
+        <Text className="text-muted-foreground text-[12px]">VAD: {view.vadLabel}</Text>
+        <Text className={cn('text-[12px]', statusTextClass(view))}>Ingest: {view.ingestLabel}</Text>
         {expanded ? (
-          <Text className="border-divider border-t pt-2 font-mono text-[11px] opacity-60">
+          <Text className="border-divider text-subtle-foreground border-t pt-2 font-mono text-[11px]">
             fragments {Math.round(view.pct * 100)}% received · stage tracked live from the pendant transfer
           </Text>
         ) : null}
@@ -114,22 +122,22 @@ export function TransfersScreen() {
               <View className="flex-row flex-wrap gap-2">
                 <Chip
                   label={`${uploaded} uploaded`}
-                  className="bg-accent-100 dark:bg-accent-900"
-                  textClassName="text-accent-800 dark:text-accent-300"
+                  className="bg-success"
+                  textClassName="text-background"
                 />
                 <Chip
                   label={`${filtered} filtered`}
-                  className="bg-neutral-200 dark:bg-neutral-800"
-                  textClassName="text-neutral-800 dark:text-neutral-200"
+                  className="bg-secondary"
+                  textClassName="text-secondary-foreground"
                 />
                 {queued > 0 ? (
                   <Chip
                     label={`${queued} queued`}
-                    className="bg-neutral-200 dark:bg-neutral-800"
-                    textClassName="text-neutral-800 dark:text-neutral-200"
+                    className="bg-warning"
+                    textClassName="text-background"
                   />
                 ) : null}
-                <Chip label={`${failed} failed`} className="bg-primary" textClassName="text-primary-foreground" />
+                <Chip label={`${failed} failed`} className="bg-destructive" textClassName="text-background" />
               </View>
             ) : null}
           </View>

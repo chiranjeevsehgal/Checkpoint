@@ -10,17 +10,17 @@ const BANNERS = {
   offline: {
     icon: WifiOff,
     label: 'Offline — no internet connection',
-    className: 'bg-primary',
+    className: 'bg-destructive',
   },
   'server-unavailable': {
     icon: ServerOff,
     label: 'Server unavailable — audio saved, will sync later',
-    className: 'bg-primary',
+    className: 'bg-destructive',
   },
   unstable: {
     icon: TriangleAlert,
     label: 'Unstable connection — retrying',
-    className: 'bg-accent-600',
+    className: 'bg-warning',
   },
 } as const;
 
@@ -30,8 +30,8 @@ export function ConnectivityBanner() {
   const banner = BANNERS[state];
   return (
     <View className={cn('mb-3 flex-row items-center justify-center gap-2 px-3 py-2', banner.className)}>
-      <Icon as={banner.icon} size={14} className="text-primary-foreground" />
-      <Text className="text-primary-foreground text-[12px]">{banner.label}</Text>
+      <Icon as={banner.icon} size={14} className="text-background" />
+      <Text className="text-background text-[12px]">{banner.label}</Text>
     </View>
   );
 }

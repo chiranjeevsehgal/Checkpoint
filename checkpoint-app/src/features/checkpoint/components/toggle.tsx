@@ -30,11 +30,11 @@ export function Toggle({ label, description, value, onChange, disabled }: Toggle
       </View>
       <View
         className={cn(
-          'border-border h-6 w-11 flex-none justify-center border',
-          value ? 'bg-primary items-end' : 'bg-input-bg items-start'
+          'h-6 w-11 flex-none justify-center',
+          value ? 'bg-primary items-end' : 'bg-border items-start'
         )}
       >
-        <View className="bg-background m-0.5 h-[18px] w-[18px]" />
+        <View className="bg-switch-thumb m-0.5 h-[18px] w-[18px]" />
       </View>
     </Pressable>
   );

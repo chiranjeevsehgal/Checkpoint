@@ -19,11 +19,19 @@ import { parseClaimHex } from '../claim.ts';
 import { LogView } from '../components/log-view.tsx';
 import { Toggle } from '../components/toggle.tsx';
 import { DEVICE_NAME } from '../config.ts';
-import { connectionActivity, formatFingerprint } from '../connectionView.ts';
+import { connectionActivity, formatFingerprint, type ActivityTone } from '../connectionView.ts';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { useClaimScanner } from '../hooks/useClaimScanner.ts';
 import { linkView } from '../linkView.ts';
 import { isInProgress } from '../transferStore.ts';
+
+const ACTIVITY_DOT: Record<ActivityTone, string> = {
+  recording: 'bg-primary',
+  capturing: 'bg-primary',
+  syncing: 'bg-warning',
+  connected: 'bg-success',
+  disconnected: 'bg-muted-foreground',
+};
 
 export function ConnectScreen() {
   const {
@@ -107,9 +115,10 @@ export function ConnectScreen() {
     syncing,
   });
   const fingerprint = formatFingerprint(deviceId);
+  const activityLive = activity.tone === 'recording' || activity.tone === 'capturing';
 
   useEffect(() => {
-    if (activity.tone !== 'live') {
+    if (!activityLive) {
       livePulse.setValue(1);
       return;
     }
@@ -121,9 +130,8 @@ export function ConnectScreen() {
     );
     loop.start();
     return () => loop.stop();
-  }, [activity.tone, livePulse]);
+  }, [activityLive, livePulse]);
 
-  const heroActive = connected || busy;
   const showSettings = view.openSettings || needsSettings;
 
   return (
@@ -143,13 +151,19 @@ export function ConnectScreen() {
               style={{ opacity: busy ? pulse : 1 }}
               className={cn(
                 'h-[52px] w-[52px] flex-none items-center justify-center',
-                heroActive ? 'bg-primary' : 'bg-input-bg'
+                connected ? 'bg-success' : busy ? 'bg-primary' : 'bg-input-bg'
               )}
             >
               <Icon
                 as={Bluetooth}
                 size={26}
-                className={heroActive ? 'text-primary-foreground' : 'text-muted-foreground'}
+                className={
+                  connected
+                    ? 'text-background'
+                    : busy
+                      ? 'text-primary-foreground'
+                      : 'text-muted-foreground'
+                }
               />
             </Animated.View>
             <View className="flex-1 gap-0.5">
@@ -160,16 +174,13 @@ export function ConnectScreen() {
 
           {connected ? (
             <View className="flex-row items-center justify-between gap-2">
-              <Text className="font-mono text-primary text-[12px] tracking-[0.15em]">
+              <Text className="font-mono text-primary-text text-[12px] tracking-[0.15em]">
                 {fingerprint || '—'}
               </Text>
               <View className="flex-row items-center gap-1.5">
                 <Animated.View
-                  style={{ opacity: activity.tone === 'live' ? livePulse : 1 }}
-                  className={cn(
-                    'h-2 w-2',
-                    activity.tone === 'live' ? 'bg-primary' : 'bg-muted-foreground'
-                  )}
+                  style={{ opacity: activityLive ? livePulse : 1 }}
+                  className={cn('h-2 w-2', ACTIVITY_DOT[activity.tone])}
                 />
                 <Text variant="muted" className="text-[11px]">
                   {activity.label}
@@ -190,13 +201,13 @@ export function ConnectScreen() {
                 accessibilityRole="button"
                 className="active:opacity-60"
               >
-                <Text className="font-display text-primary text-[12px]">Stop</Text>
+                <Text className="font-display text-primary-text text-[12px]">Stop</Text>
               </Pressable>
             </View>
           ) : null}
 
           <View className="gap-1">
-            <Text className="text-[11px] opacity-65">Device name or address</Text>
+            <Text className="text-[11px] text-subtle-foreground">Device name or address</Text>
             <Input
               value={deviceName}
               onChangeText={(text) => {
@@ -209,7 +220,7 @@ export function ConnectScreen() {
             />
           </View>
           <View className="gap-1">
-            <Text className="text-[11px] opacity-65">Claim key (enroll only, 64 hex or claim URI)</Text>
+            <Text className="text-[11px] text-subtle-foreground">Claim key (enroll only, 64 hex or claim URI)</Text>
             <View className="flex-row gap-2">
               <Input
                 className="flex-1"

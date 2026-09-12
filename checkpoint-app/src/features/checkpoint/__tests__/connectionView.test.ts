@@ -18,35 +18,35 @@ describe("connectionActivity", () => {
   it("reports not connected", () => {
     assert.deepEqual(
       connectionActivity({ connected: false, recording: true, vadActive: true, syncing: 3 }),
-      { label: "Not connected", tone: "idle" },
+      { label: "Not connected", tone: "disconnected" },
     );
   });
 
   it("prioritizes recording over syncing", () => {
     assert.deepEqual(
       connectionActivity({ connected: true, recording: true, vadActive: false, syncing: 2 }),
-      { label: "Recording now", tone: "live" },
+      { label: "Recording now", tone: "recording" },
     );
   });
 
   it("reports capturing speech while the VAD is active", () => {
     assert.deepEqual(
       connectionActivity({ connected: true, recording: false, vadActive: true, syncing: 0 }),
-      { label: "Capturing speech", tone: "live" },
+      { label: "Capturing speech", tone: "capturing" },
     );
   });
 
   it("reports the number of syncing transfers", () => {
     assert.deepEqual(
       connectionActivity({ connected: true, recording: false, vadActive: false, syncing: 2 }),
-      { label: "Syncing 2", tone: "live" },
+      { label: "Syncing 2", tone: "syncing" },
     );
   });
 
   it("reports idle when connected with no activity", () => {
     assert.deepEqual(
       connectionActivity({ connected: true, recording: false, vadActive: false, syncing: 0 }),
-      { label: "Idle · listening", tone: "idle" },
+      { label: "Idle · listening", tone: "connected" },
     );
   });
 });

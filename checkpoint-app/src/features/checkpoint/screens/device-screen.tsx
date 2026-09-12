@@ -80,7 +80,7 @@ export function DeviceScreen() {
               <StatCell value={status?.utterances ?? 0} label="Utterances" />
             </View>
             <Button
-              className={status?.recording ? 'bg-primary' : 'bg-foreground'}
+              variant={status?.recording ? 'destructive' : 'default'}
               onPress={() => void toggleRec()}
             >
               <Icon as={status?.recording ? Square : Play} size={14} />

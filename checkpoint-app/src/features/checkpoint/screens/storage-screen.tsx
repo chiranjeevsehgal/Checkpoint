@@ -18,15 +18,9 @@ import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import type { DeviceFileEntry } from '../types.ts';
 
 const STATE_TAG: Record<string, string> = {
-  recording: 'bg-primary',
-  pending: 'bg-neutral-400',
-  synced: 'bg-neutral-300 dark:bg-neutral-700',
-};
-
-const STATE_TAG_TEXT: Record<string, string> = {
-  recording: 'text-primary-foreground',
-  pending: 'text-background',
-  synced: 'text-foreground',
+  recording: 'bg-primary text-primary-foreground',
+  pending: 'bg-warning text-background',
+  synced: 'bg-success text-background',
 };
 
 function FileRow({ item, onDelete }: { item: DeviceFileEntry; onDelete: () => void }) {
@@ -40,7 +34,7 @@ function FileRow({ item, onDelete }: { item: DeviceFileEntry; onDelete: () => vo
           <Text variant="muted" className="text-[11px]">
             {formatBytes(item.size)}
           </Text>
-          <Text className={cn('px-1.5 py-px text-[10.5px] capitalize', STATE_TAG[state], STATE_TAG_TEXT[state])}>
+          <Text className={cn('px-1.5 py-px text-[10.5px] capitalize', STATE_TAG[state])}>
             {state}
           </Text>
         </View>
@@ -51,7 +45,7 @@ function FileRow({ item, onDelete }: { item: DeviceFileEntry; onDelete: () => vo
         accessibilityLabel={`Delete ${item.name}`}
         className="border-border active:bg-foreground/10 border p-1.5"
       >
-        <Icon as={Trash2} size={14} className="text-primary" />
+        <Icon as={Trash2} size={14} className="text-destructive" />
       </Pressable>
     </View>
   );
@@ -141,8 +135,8 @@ export function StorageScreen() {
                 <Text>Next ›</Text>
               </Button>
             </View>
-            <Button variant="outline" className="border-primary" disabled={!connected} onPress={requestErase}>
-              <Text className="text-primary">Erase all…</Text>
+            <Button variant="outline" className="border-destructive" disabled={!connected} onPress={requestErase}>
+              <Text className="text-destructive">Erase all…</Text>
             </Button>
           </View>
         }

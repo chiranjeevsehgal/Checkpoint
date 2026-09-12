@@ -124,7 +124,7 @@ export function CheckpointSettingsScreen() {
 
         <Collapsible title="Advanced — developer">
           <View className="gap-1">
-            <Text className="text-[11px] opacity-65">Server URL (LAN IP for on-device testing)</Text>
+            <Text className="text-[11px] text-subtle-foreground">Server URL (LAN IP for on-device testing)</Text>
             <Input
               value={draft.serverUrl}
               onChangeText={(text) => set('serverUrl', text)}
@@ -134,7 +134,7 @@ export function CheckpointSettingsScreen() {
             />
           </View>
           <View className="gap-1">
-            <Text className="text-[11px] opacity-65">User ID (Bearer token)</Text>
+            <Text className="text-[11px] text-subtle-foreground">User ID (Bearer token)</Text>
             <Input
               value={draft.userId}
               onChangeText={(text) => set('userId', text)}
@@ -143,7 +143,7 @@ export function CheckpointSettingsScreen() {
               placeholder="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
               className="font-mono text-[13px]"
             />
-            {userIdError ? <Text className="text-primary text-[11px]">{userIdError}</Text> : null}
+            {userIdError ? <Text className="text-destructive text-[11px]">{userIdError}</Text> : null}
           </View>
         </Collapsible>
 

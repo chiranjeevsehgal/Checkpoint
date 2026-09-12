@@ -32,7 +32,7 @@ const textVariants = cva(
         large: 'font-label text-lg',
         small: 'font-label text-sm',
         muted: 'text-muted-foreground text-[13px]',
-        kicker: 'font-display text-primary text-[10px] uppercase tracking-[0.1em]',
+        kicker: 'font-display text-muted-foreground text-[10px] uppercase tracking-[0.1em]',
       },
     },
     defaultVariants: {

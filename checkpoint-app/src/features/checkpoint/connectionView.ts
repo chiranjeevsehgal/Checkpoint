@@ -1,4 +1,4 @@
-export type ActivityTone = "live" | "idle";
+export type ActivityTone = "recording" | "capturing" | "syncing" | "connected" | "disconnected";
 
 export interface ConnectionActivity {
   label: string;
@@ -17,9 +17,9 @@ export function connectionActivity(input: {
   vadActive: boolean;
   syncing: number;
 }): ConnectionActivity {
-  if (!input.connected) return { label: "Not connected", tone: "idle" };
-  if (input.recording) return { label: "Recording now", tone: "live" };
-  if (input.vadActive) return { label: "Capturing speech", tone: "live" };
-  if (input.syncing > 0) return { label: `Syncing ${input.syncing}`, tone: "live" };
-  return { label: "Idle · listening", tone: "idle" };
+  if (!input.connected) return { label: "Not connected", tone: "disconnected" };
+  if (input.recording) return { label: "Recording now", tone: "recording" };
+  if (input.vadActive) return { label: "Capturing speech", tone: "capturing" };
+  if (input.syncing > 0) return { label: `Syncing ${input.syncing}`, tone: "syncing" };
+  return { label: "Idle · listening", tone: "connected" };
 }

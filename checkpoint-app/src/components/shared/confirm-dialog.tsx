@@ -22,9 +22,9 @@ function DialogBody({ title, body, confirmLabel, requireText, onCancel, onConfir
   const ready = !requireText || typed.trim().toUpperCase() === requireText.toUpperCase();
 
   return (
-    <View className="bg-surface w-full gap-3 p-4">
+    <View className="bg-popover w-full gap-3 p-4">
       <Text className="font-display text-[17px] leading-tight">{title}</Text>
-      <Text className="text-[13px] opacity-85">{body}</Text>
+      <Text className="text-muted-foreground text-[13px]">{body}</Text>
       {requireText ? (
         <Input
           value={typed}
