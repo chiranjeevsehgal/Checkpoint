@@ -1,7 +1,8 @@
 import { Tabs } from 'expo-router';
-import { ArrowDownUp, Bluetooth, HardDrive, Mic, Settings } from 'lucide-react-native';
+import { ArrowDownUp, HardDrive, Mic, Settings } from 'lucide-react-native';
 import { useColorScheme } from 'nativewind';
 
+import { PendantLogo } from '@/components/shared/pendant-logo';
 import { Icon } from '@/components/ui/icon';
 import { PALETTE } from '@/lib/theme';
 
@@ -30,7 +31,7 @@ export default function TabsLayout() {
         name="connect"
         options={{
           title: 'Connect',
-          tabBarIcon: ({ color, size }) => <Icon as={Bluetooth} color={color} size={size} />,
+          tabBarIcon: ({ color, size }) => <PendantLogo height={size} color={color} />,
         }}
       />
       <Tabs.Screen

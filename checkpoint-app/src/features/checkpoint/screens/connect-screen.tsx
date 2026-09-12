@@ -1,4 +1,4 @@
-import { Bluetooth, ScanLine } from 'lucide-react-native';
+import { ScanLine } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo } from 'react';
 import { Animated, Pressable, ScrollView, View } from 'react-native';
 
@@ -15,6 +15,7 @@ import { isInProgress } from '../transferStore.ts';
 
 import { AppHeader } from '@/components/shared/app-header';
 import { BatteryOptimizationCard } from '@/components/shared/battery-optimization-card';
+import { PendantLogo } from '@/components/shared/pendant-logo';
 import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
@@ -150,22 +151,9 @@ export function ConnectScreen() {
           <View className="flex-row items-center gap-3.5">
             <Animated.View
               style={{ opacity: busy ? pulse : 1 }}
-              className={cn(
-                'h-[52px] w-[52px] flex-none items-center justify-center',
-                connected ? 'bg-success' : busy ? 'bg-primary' : 'bg-input-bg',
-              )}
+              className="h-[52px] w-[52px] flex-none items-center justify-center bg-input-bg"
             >
-              <Icon
-                as={Bluetooth}
-                size={26}
-                className={
-                  connected
-                    ? 'text-background'
-                    : busy
-                      ? 'text-primary-foreground'
-                      : 'text-muted-foreground'
-                }
-              />
+              <PendantLogo height={30} dotColor={connected ? '#03fc84' : '#fc2003'} />
             </Animated.View>
             <View className="flex-1 gap-0.5">
               <Text className="font-display text-[17px]">{view.label}</Text>

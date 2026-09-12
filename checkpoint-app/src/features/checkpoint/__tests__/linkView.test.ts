@@ -13,8 +13,8 @@ describe('linkView', () => {
   });
 
   it('includes the device name while connecting and connected', () => {
-    assert.equal(linkView('connecting', 'Pendant-1').sub, 'Looking for "Pendant-1"');
-    assert.equal(linkView('listening', 'Pendant-1').sub, 'Linked to Pendant-1');
+    assert.equal(linkView('connecting', 'Pendant-1').sub, 'Looking for "Pendant-1" Pendant');
+    assert.equal(linkView('listening', 'Pendant-1').sub, 'Linked to Pendant-1 Pendant');
   });
 
   it('flags permission states for the settings action', () => {
