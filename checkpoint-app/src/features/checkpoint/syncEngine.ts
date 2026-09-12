@@ -67,6 +67,8 @@ export interface EngineSnapshot {
   listPage: ListPage;
   transfers: TransferRecord[];
   preview: PreviewSnapshot | null;
+  deleting: string | null;
+  erasing: boolean;
   logs: string[];
   needsSettings: boolean;
   bluetooth: BluetoothStatus;
@@ -84,6 +86,8 @@ const INITIAL_SNAPSHOT: EngineSnapshot = {
   listPage: { start: 0, total: 0, count: 0 },
   transfers: [],
   preview: null,
+  deleting: null,
+  erasing: false,
   logs: [],
   needsSettings: false,
   bluetooth: null,
@@ -729,9 +733,10 @@ class SyncEngine {
   };
 
   refreshStorage = async (): Promise<void> => {
+    const start = this.snapshot.listPage.start;
     await this.withClient('storage', async (client) => {
       await client.reqStorage();
-      await client.reqList(0);
+      await client.reqList(start);
     });
   };
 
@@ -811,32 +816,44 @@ class SyncEngine {
   };
 
   async deleteFile(path: string): Promise<number | null> {
-    const start = this.snapshot.listPage.start;
-    return this.withClient('file-delete', async (client) => {
-      const code = await client.cmdFileDelete(path);
-      this.appendLog(`[ui] file-delete ${path} status=${ctrlStatusText(code)}`);
-      await client.reqStorage();
-      await client.reqList(start);
-      return code;
-    });
+    if (!this.client) return null;
+    this.setState({ deleting: path });
+    try {
+      const start = this.snapshot.listPage.start;
+      return await this.withClient('file-delete', async (client) => {
+        const code = await client.cmdFileDelete(path);
+        this.appendLog(`[ui] file-delete ${path} status=${ctrlStatusText(code)}`);
+        await client.reqStorage();
+        await client.reqList(start);
+        return code;
+      });
+    } finally {
+      this.setState({ deleting: null });
+    }
   }
 
   async eraseStorage(): Promise<number | null> {
-    return this.withClient('storage-erase', async (client) => {
-      const arm = await client.cmdStorageErase(CTRL_ERASE_ARM);
-      if ((arm.status ?? 1) !== CTRL_OK) {
-        this.appendLog(`[ui] erase arm refused status=${ctrlStatusText(arm.status ?? 1)}`);
-        return null;
-      }
-      const confirmed = await client.cmdStorageErase(CTRL_ERASE_CONFIRM);
-      this.appendLog(
-        `[ui] erase confirm status=${ctrlStatusText(confirmed.status ?? 1)} removed=${confirmed.removed ?? '?'}`,
-      );
-      this.setState({ listPage: { start: 0, total: 0, count: 0 } });
-      await client.reqStorage();
-      await client.reqList(0);
-      return confirmed.status ?? 1;
-    });
+    if (!this.client) return null;
+    this.setState({ erasing: true });
+    try {
+      return await this.withClient('storage-erase', async (client) => {
+        const arm = await client.cmdStorageErase(CTRL_ERASE_ARM);
+        if ((arm.status ?? 1) !== CTRL_OK) {
+          this.appendLog(`[ui] erase arm refused status=${ctrlStatusText(arm.status ?? 1)}`);
+          return null;
+        }
+        const confirmed = await client.cmdStorageErase(CTRL_ERASE_CONFIRM);
+        this.appendLog(
+          `[ui] erase confirm status=${ctrlStatusText(confirmed.status ?? 1)} removed=${confirmed.removed ?? '?'}`,
+        );
+        this.setState({ listPage: { start: 0, total: 0, count: 0 } });
+        await client.reqStorage();
+        await client.reqList(0);
+        return confirmed.status ?? 1;
+      });
+    } finally {
+      this.setState({ erasing: false });
+    }
   }
 
   clearLogs = (): void => {

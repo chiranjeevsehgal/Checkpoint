@@ -5,6 +5,7 @@ import { AudioContext, decodeAudioData } from 'react-native-audio-api';
 import { isOggOpus, repairOpusOgg } from './ogg.ts';
 
 const PREVIEW_TTL_MS = 90_000;
+const SLOW_PLAYBACK_RATE = 0.7;
 
 export interface PlaybackSnapshot {
   uri: string | null;
@@ -63,9 +64,10 @@ class PlaybackController {
     const file = this.writePreview(data);
     const context = this.ensureContext();
     if (context.state === 'suspended') await context.resume();
-    const source = context.createBufferSource();
+    const source = context.createBufferSource({ pitchCorrection: false });
     source.buffer = await decodeAudioData(toArrayBuffer(data));
     source.connect(context.destination);
+    source.playbackRate.value = SLOW_PLAYBACK_RATE;
     source.onEnded = () => {
       if (this.source === source) this.setState({ playing: false });
     };

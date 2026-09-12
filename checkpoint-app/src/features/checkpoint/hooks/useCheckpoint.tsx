@@ -44,6 +44,8 @@ interface CheckpointContextValue {
   listPage: ListPage;
   transfers: TransferRecord[];
   preview: PreviewSnapshot | null;
+  deleting: string | null;
+  erasing: boolean;
   logs: string[];
   settings: CheckpointSettings;
   connect: () => Promise<void>;
@@ -129,6 +131,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     async (path: string) => {
       const code = await syncEngine.deleteFile(path);
       if (code === CTRL_OK) showToast('File deleted.');
+      else if (code !== null) showToast(`Delete failed: ${ctrlStatusText(code)}`);
     },
     [showToast],
   );
@@ -204,6 +207,8 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       listPage: snapshot.listPage,
       transfers: snapshot.transfers,
       preview: snapshot.preview,
+      deleting: snapshot.deleting,
+      erasing: snapshot.erasing,
       logs: snapshot.logs,
       settings,
       connect,

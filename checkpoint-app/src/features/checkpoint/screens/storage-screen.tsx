@@ -1,5 +1,7 @@
+import { useFocusEffect } from 'expo-router';
 import { Pause, Play, Trash2 } from 'lucide-react-native';
-import { FlatList, Pressable, View } from 'react-native';
+import { useCallback, useEffect, useRef } from 'react';
+import { ActivityIndicator, FlatList, Pressable, View } from 'react-native';
 
 import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
@@ -24,6 +26,8 @@ const STATE_TAG: Record<string, string> = {
   synced: 'bg-success text-background',
 };
 
+const AUTO_REFRESH_MS = 5000;
+
 function FileRow({
   item,
   onDelete,
@@ -31,6 +35,7 @@ function FileRow({
   disabled,
   playing,
   fetching,
+  deleting,
   pct,
 }: {
   item: DeviceFileEntry;
@@ -39,6 +44,7 @@ function FileRow({
   disabled: boolean;
   playing: boolean;
   fetching: boolean;
+  deleting: boolean;
   pct: number;
 }) {
   const state = fileStateLabel(item.flags);
@@ -61,7 +67,7 @@ function FileRow({
         {playable ? (
           <Pressable
             onPress={onPlay}
-            disabled={disabled || fetching}
+            disabled={disabled || fetching || deleting}
             accessibilityRole="button"
             accessibilityLabel={playing ? `Pause ${item.name}` : `Play ${item.name}`}
             className="active:bg-foreground/10 border border-border p-1.5"
@@ -77,11 +83,16 @@ function FileRow({
         ) : null}
         <Pressable
           onPress={onDelete}
+          disabled={disabled || deleting}
           accessibilityRole="button"
           accessibilityLabel={`Delete ${item.name}`}
           className="active:bg-foreground/10 border border-border p-1.5"
         >
-          <Icon as={Trash2} size={14} className="text-destructive" />
+          {deleting ? (
+            <ActivityIndicator size="small" />
+          ) : (
+            <Icon as={Trash2} size={14} className="text-destructive" />
+          )}
         </Pressable>
       </View>
     </View>
@@ -101,8 +112,25 @@ export function StorageScreen() {
     requestErase,
     preview,
     previewStorageFile,
+    deleting,
+    erasing,
   } = useCheckpoint();
   const { label: playingLabel, playing } = usePlayback();
+
+  const busyRef = useRef(false);
+  useEffect(() => {
+    busyRef.current = deleting !== null || erasing || preview !== null;
+  }, [deleting, erasing, preview]);
+  useFocusEffect(
+    useCallback(() => {
+      if (!connected) return;
+      void refreshStorage();
+      const id = setInterval(() => {
+        if (!busyRef.current) void refreshStorage();
+      }, AUTO_REFRESH_MS);
+      return () => clearInterval(id);
+    }, [connected, refreshStorage]),
+  );
 
   const pct =
     storage && storage.total > 0
@@ -176,9 +204,10 @@ export function StorageScreen() {
                 if (isPlaying) playback.stop();
                 else void previewStorageFile(item.name);
               }}
-              disabled={!connected}
+              disabled={!connected || erasing}
               playing={isPlaying}
               fetching={fetching}
+              deleting={deleting === item.name}
               pct={progress}
             />
           );
@@ -209,10 +238,14 @@ export function StorageScreen() {
             <Button
               variant="outline"
               className="border-destructive"
-              disabled={!connected}
+              disabled={!connected || deleting !== null || erasing}
               onPress={requestErase}
             >
-              <Text className="text-destructive">Erase all…</Text>
+              {erasing ? (
+                <ActivityIndicator size="small" />
+              ) : (
+                <Text className="text-destructive">Erase all…</Text>
+              )}
             </Button>
           </View>
         }
