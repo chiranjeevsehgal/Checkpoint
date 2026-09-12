@@ -116,7 +116,7 @@ export function StorageScreen() {
     deleting,
     erasing,
   } = useCheckpoint();
-  const { label: playingLabel, playing } = usePlayback();
+  const { label: playingLabel, playing, paused } = usePlayback();
 
   const busyRef = useRef(false);
   useEffect(() => {
@@ -187,13 +187,16 @@ export function StorageScreen() {
           const fetching = preview?.path === item.name;
           const progress =
             fetching && preview.totalFrags > 0 ? preview.received / preview.totalFrags : 0;
-          const isPlaying = playing && playingLabel === item.name;
+          const isCurrent = playingLabel === item.name;
+          const isPlaying = isCurrent && playing;
+          const isPaused = isCurrent && paused;
           return (
             <FileRow
               item={item}
               onDelete={() => requestDelete(item.name)}
               onPlay={() => {
-                if (isPlaying) playback.stop();
+                if (isPlaying) playback.pause();
+                else if (isPaused) playback.resume();
                 else void previewStorageFile(item.name);
               }}
               disabled={!connected || erasing}

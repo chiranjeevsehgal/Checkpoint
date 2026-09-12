@@ -66,13 +66,18 @@ function Chip({
 }
 
 function PlayButton({ uri, label }: { uri: string; label: string }) {
-  const { uri: playingUri, playing } = usePlayback();
+  const { label: playingLabel, playing, paused } = usePlayback();
   const { showToast } = useToast();
-  const isThis = playing && playingUri === uri;
+  const isPlaying = playing && playingLabel === label;
+  const isPaused = paused && playingLabel === label;
 
   const onPress = () => {
-    if (isThis) {
-      playback.stop();
+    if (isPlaying) {
+      playback.pause();
+      return;
+    }
+    if (isPaused) {
+      playback.resume();
       return;
     }
     void playback.play(uri, label).catch((error: unknown) => {
@@ -84,10 +89,10 @@ function PlayButton({ uri, label }: { uri: string; label: string }) {
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={isThis ? `Pause ${label}` : `Play ${label}`}
+      accessibilityLabel={isPlaying ? `Pause ${label}` : `Play ${label}`}
       className="active:bg-foreground/10 border border-border p-1.5"
     >
-      <Icon as={isThis ? Pause : Play} size={14} />
+      <Icon as={isPlaying ? Pause : Play} size={14} />
     </Pressable>
   );
 }

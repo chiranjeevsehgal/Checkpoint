@@ -7,13 +7,16 @@ import { isOggOpus, repairOpusOgg } from './ogg.ts';
 const PREVIEW_TTL_MS = 90_000;
 const SLOW_PLAYBACK_RATE = 0.7;
 
+type DecodedAudio = Awaited<ReturnType<typeof decodeAudioData>>;
+
 export interface PlaybackSnapshot {
   uri: string | null;
   label: string | null;
   playing: boolean;
+  paused: boolean;
 }
 
-const IDLE: PlaybackSnapshot = { uri: null, label: null, playing: false };
+const IDLE: PlaybackSnapshot = { uri: null, label: null, playing: false, paused: false };
 
 function previewDir(): Directory {
   return new Directory(Paths.cache, 'checkpoint', 'preview');
@@ -40,6 +43,9 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 class PlaybackController {
   private context: AudioContext | null = null;
   private source: ReturnType<AudioContext['createBufferSource']> | null = null;
+  private buffer: DecodedAudio | null = null;
+  private offsetSeconds = 0;
+  private startedAt = 0;
   private deleteTimer: ReturnType<typeof setTimeout> | null = null;
   private listeners = new Set<() => void>();
   private snapshot: PlaybackSnapshot = IDLE;
@@ -66,17 +72,29 @@ class PlaybackController {
     const file = this.writePreview(data);
     const context = this.ensureContext();
     if (context.state === 'suspended') await context.resume();
-    const source = context.createBufferSource({ pitchCorrection: true });
-    source.buffer = await decodeAudioData(toArrayBuffer(data));
-    source.connect(context.destination);
-    source.playbackRate.value = SLOW_PLAYBACK_RATE;
-    source.onEnded = () => {
-      if (this.source === source) this.setState({ playing: false });
-    };
-    source.start();
-    this.source = source;
-    this.setState({ uri: file.uri, label, playing: true });
+    this.buffer = await decodeAudioData(toArrayBuffer(data));
+    this.offsetSeconds = 0;
+    this.startSource(0);
+    this.setState({ uri: file.uri, label, playing: true, paused: false });
     this.scheduleDelete(file);
+  };
+
+  pause = (): void => {
+    if (!this.source) return;
+    const context = this.context;
+    if (context) {
+      this.offsetSeconds += (context.currentTime - this.startedAt) * SLOW_PLAYBACK_RATE;
+    }
+    this.stopSource();
+    this.setState({ playing: false, paused: true });
+  };
+
+  resume = (): void => {
+    if (!this.buffer || !this.snapshot.paused) return;
+    const context = this.ensureContext();
+    if (context.state === 'suspended') void context.resume();
+    this.startSource(this.offsetSeconds);
+    this.setState({ playing: true, paused: false });
   };
 
   stop = (): void => {
@@ -84,18 +102,46 @@ class PlaybackController {
       clearTimeout(this.deleteTimer);
       this.deleteTimer = null;
     }
-    const source = this.source;
-    this.source = null;
-    if (source) {
-      try {
-        source.stop();
-      } catch {
-        /* already stopped */
-      }
-    }
+    this.stopSource();
+    this.buffer = null;
+    this.offsetSeconds = 0;
+    this.startedAt = 0;
     this.setState(IDLE);
     clearPreviewDir();
   };
+
+  private startSource(offset: number): void {
+    const buffer = this.buffer;
+    if (!buffer) return;
+    const context = this.ensureContext();
+    const source = context.createBufferSource({ pitchCorrection: true });
+    source.buffer = buffer;
+    source.connect(context.destination);
+    source.playbackRate.value = SLOW_PLAYBACK_RATE;
+    source.onEnded = () => this.handleEnded(source);
+    source.start(0, offset);
+    this.source = source;
+    this.startedAt = context.currentTime;
+  }
+
+  private stopSource(): void {
+    const source = this.source;
+    this.source = null;
+    if (!source) return;
+    source.onEnded = null;
+    try {
+      source.stop();
+    } catch {
+      /* already stopped */
+    }
+  }
+
+  private handleEnded(source: ReturnType<AudioContext['createBufferSource']>): void {
+    if (this.source !== source) return;
+    this.source = null;
+    this.offsetSeconds = 0;
+    this.setState({ playing: false, paused: false });
+  }
 
   private ensureContext(): AudioContext {
     this.context ??= new AudioContext();
