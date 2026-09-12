@@ -15,7 +15,12 @@ import {
   STATUS_POLL_INTERVAL_S,
   TRANSFER_TICK_MS,
 } from './config.ts';
-import { getEnrolledDeviceId } from './credentials.ts';
+import {
+  clearEnrolledDeviceId,
+  deleteCredential,
+  getEnrolledDeviceId,
+} from './credentials.ts';
+import { hexToBytes } from './crypto.ts';
 import { IngestionUploader } from './ingestion.ts';
 import { networkMonitor } from './networkMonitor.ts';
 import type { HealthProbe } from './networkStatus.ts';
@@ -725,6 +730,23 @@ class SyncEngine {
       deviceId: null,
       preview: null,
     });
+  }
+
+  async forgetDevice(): Promise<void> {
+    await this.disconnect();
+    const enrolled = await getEnrolledDeviceId();
+    if (enrolled) {
+      try {
+        await deleteCredential(hexToBytes(enrolled));
+      } catch (error) {
+        this.appendLog(
+          `[ui] forget credential failed: ${error instanceof Error ? error.message : 'unknown'}`,
+        );
+      }
+    }
+    await clearEnrolledDeviceId();
+    this.setState({ enrolled: false, deviceId: null });
+    this.appendLog('[ui] pendant forgotten');
   }
 
   refreshStatus = async (): Promise<void> => {

@@ -28,7 +28,11 @@ import type { DeviceFileList, DeviceStatus, LogEntry, StorageInfo } from '../typ
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { useToast } from '@/providers/toast-provider';
 
-type DialogState = { kind: 'delete'; path: string } | { kind: 'erase' } | null;
+type DialogState =
+  | { kind: 'delete'; path: string }
+  | { kind: 'erase' }
+  | { kind: 'forget' }
+  | null;
 
 interface CheckpointContextValue {
   connected: boolean;
@@ -53,6 +57,7 @@ interface CheckpointContextValue {
   settings: CheckpointSettings;
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
+  forgetDevice: () => Promise<void>;
   stopAutoConnect: () => Promise<void>;
   refreshStatus: () => Promise<void>;
   refreshStorage: () => Promise<void>;
@@ -64,6 +69,7 @@ interface CheckpointContextValue {
   applySync: (enabled: boolean) => Promise<void>;
   requestDelete: (path: string) => void;
   requestErase: () => void;
+  requestForget: () => void;
   previewStorageFile: (path: string) => Promise<number | null>;
   updateSettings: (settings: CheckpointSettings, options?: { silent?: boolean }) => Promise<void>;
   shareBench: () => Promise<void>;
@@ -117,6 +123,11 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
   const disconnect = useCallback(async () => {
     await syncEngine.disconnect();
   }, []);
+
+  const forgetDevice = useCallback(async () => {
+    await syncEngine.forgetDevice();
+    showToast('Pendant forgotten.');
+  }, [showToast]);
 
   const setDeviceName = useCallback(
     (name: string) => {
@@ -203,6 +214,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
 
   const requestDelete = useCallback((path: string) => setDialog({ kind: 'delete', path }), []);
   const requestErase = useCallback(() => setDialog({ kind: 'erase' }), []);
+  const requestForget = useCallback(() => setDialog({ kind: 'forget' }), []);
   const cancelDialog = useCallback(() => setDialog(null), []);
 
   const confirmDialog = useCallback(() => {
@@ -210,7 +222,8 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     setDialog(null);
     if (pending?.kind === 'delete') void deleteFile(pending.path);
     if (pending?.kind === 'erase') void eraseStorage();
-  }, [dialog, deleteFile, eraseStorage]);
+    if (pending?.kind === 'forget') void forgetDevice();
+  }, [dialog, deleteFile, eraseStorage, forgetDevice]);
 
   const value = useMemo<CheckpointContextValue>(
     () => ({
@@ -236,6 +249,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       settings,
       connect,
       disconnect,
+      forgetDevice,
       stopAutoConnect: syncEngine.stopAutoConnect,
       refreshStatus: syncEngine.refreshStatus,
       refreshStorage: syncEngine.refreshStorage,
@@ -247,6 +261,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       applySync,
       requestDelete,
       requestErase,
+      requestForget,
       previewStorageFile,
       updateSettings,
       shareBench: syncEngine.shareBench,
@@ -261,10 +276,12 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       claimText,
       connect,
       disconnect,
+      forgetDevice,
       openAppSettings,
       previewStorageFile,
       requestDelete,
       requestErase,
+      requestForget,
       setDeviceName,
       settings,
       snapshot,
@@ -280,13 +297,21 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       {children}
       <ConfirmDialog
         visible={dialog !== null}
-        title={dialog?.kind === 'erase' ? 'Erase all recordings' : 'Delete file'}
+        title={
+          dialog?.kind === 'erase'
+            ? 'Erase all recordings'
+            : dialog?.kind === 'forget'
+              ? 'Forget pendant'
+              : 'Delete file'
+        }
         body={
           dialog?.kind === 'erase'
             ? 'Erase ALL recordings from the pendant SD card? This cannot be undone. Type ERASE to confirm.'
-            : `Delete ${dialogFile} from the pendant? This cannot be undone.`
+            : dialog?.kind === 'forget'
+              ? 'Forget this pendant? You will need its claim key to set it up again.'
+              : `Delete ${dialogFile} from the pendant? This cannot be undone.`
         }
-        confirmLabel={dialog?.kind === 'erase' ? 'Erase all' : 'Delete'}
+        confirmLabel={dialog?.kind === 'erase' ? 'Erase all' : dialog?.kind === 'forget' ? 'Forget' : 'Delete'}
         requireText={dialog?.kind === 'erase' ? 'ERASE' : undefined}
         onCancel={cancelDialog}
         onConfirm={confirmDialog}
