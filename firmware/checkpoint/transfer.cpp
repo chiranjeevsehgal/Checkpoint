@@ -22,6 +22,13 @@ static volatile bool s_busy = false;
 static String s_current = "";
 static QueueHandle_t s_ack_q = nullptr;
 static uint16_t s_resume_seq = 0;
+
+// One-shot preview fetch request, latched by control_poll() and drained by
+// transfer_task(). Fixed buffer + critical section keeps Strings off the
+// cross-task handoff.
+static portMUX_TYPE s_fetch_mux = portMUX_INITIALIZER_UNLOCKED;
+static char s_fetch_path[128];
+static volatile uint16_t s_fetch_len = 0;
 #define XFER_MAX_FILE_RETRIES 3
 #define XFER_MAX_ACK_TIMEOUTS 5
 static String s_retry_path = "";
@@ -183,14 +190,36 @@ bool transfer_is_transferring(const String &path) {
   return s_busy && s_current == path;
 }
 
+void transfer_request_fetch(const char *path, size_t len) {
+  if (!path || len == 0 || len >= sizeof(s_fetch_path)) return;
+  portENTER_CRITICAL(&s_fetch_mux);
+  memcpy(s_fetch_path, path, len);
+  s_fetch_path[len] = '\0';
+  s_fetch_len = (uint16_t)len;
+  portEXIT_CRITICAL(&s_fetch_mux);
+}
+
+static bool take_fetch(String &out) {
+  char buf[sizeof(s_fetch_path)];
+  uint16_t len;
+  portENTER_CRITICAL(&s_fetch_mux);
+  len = s_fetch_len;
+  if (len > 0) {
+    memcpy(buf, s_fetch_path, len);
+    buf[len] = '\0';
+    s_fetch_len = 0;
+  }
+  portEXIT_CRITICAL(&s_fetch_mux);
+  if (len == 0) return false;
+  out = buf;
+  return true;
+}
+
 void transfer_task(void *arg) {
   (void)arg;
   uint16_t seq_gen = 1;
   while (true) {
-    if (!ble_is_connected() || !ble_is_handshaked() || !ble_peer_authenticated() || !control_sync_enabled()) {
-      // Sync off behaves like link-down for picking new files: the in-flight
-      // file (if any) finishes first, then the task idles here. No retry
-      // accounting, no deletes — resume state is already persisted.
+    if (!ble_is_connected() || !ble_is_handshaked() || !ble_peer_authenticated()) {
       s_busy = false;
       vTaskDelay(pdMS_TO_TICKS(500));
       continue;
@@ -202,24 +231,49 @@ void transfer_task(void *arg) {
     }
     ManifestEntry pending[8];
     size_t found = 0;
-    if (!manifest_get_pending(pending, 8, &found) || found == 0) {
-      vTaskDelay(pdMS_TO_TICKS(1000));
-      continue;
-    }
+    ManifestEntry preview_entry;
+    bool preview = false;
     ManifestEntry *job = nullptr;
-    for (size_t i = 0; i < found; i++) {
-      if (file_is_cooling(pending[i].path)) continue;
-      job = &pending[i];
-      break;
-    }
-    if (!job) {
-      // Every pending file is cooling down — idle until the earliest expiry.
-      s_busy = false;
-      vTaskDelay(pdMS_TO_TICKS(2000));
-      continue;
+    String fetch_path;
+    if (take_fetch(fetch_path)) {
+      // Preview fetch has priority and must work even with sync off. It never
+      // advances the manifest, so the file is still uploaded by a later sync.
+      preview_entry.path = fetch_path;
+      preview_entry.size = 0;
+      preview_entry.crc = 0;
+      preview_entry.uid = 0;
+      preview_entry.created_ms = millis();
+      preview_entry.pending = true;
+      preview_entry.next_seq = 0;
+      job = &preview_entry;
+      preview = true;
+    } else {
+      if (!control_sync_enabled()) {
+        // Sync off behaves like link-down for picking new files: the in-flight
+        // file (if any) finishes first, then the task idles here. No retry
+        // accounting, no deletes — resume state is already persisted.
+        s_busy = false;
+        vTaskDelay(pdMS_TO_TICKS(500));
+        continue;
+      }
+      if (!manifest_get_pending(pending, 8, &found) || found == 0) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        continue;
+      }
+      for (size_t i = 0; i < found; i++) {
+        if (file_is_cooling(pending[i].path)) continue;
+        job = &pending[i];
+        break;
+      }
+      if (!job) {
+        // Every pending file is cooling down — idle until the earliest expiry.
+        s_busy = false;
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        continue;
+      }
     }
     // Track file-level retries for bad-file skip (full retry on CRC fail)
-    if (s_retry_path != job->path) {
+    if (!preview && s_retry_path != job->path) {
       s_retry_path = job->path;
       s_retry_count = 0;
     }
@@ -233,8 +287,8 @@ void transfer_task(void *arg) {
     if (!f) {
       bool gone = false;
       if (sd_lock(500)) { gone = !SD.exists(job->path); sd_unlock(); }
-      if (gone) manifest_mark_done(job->path);
-      else vTaskDelay(pdMS_TO_TICKS(1000)); // transient: keep pending, retry later
+      if (gone && !preview) manifest_mark_done(job->path);
+      else if (!gone) vTaskDelay(pdMS_TO_TICKS(1000)); // transient: keep pending, retry later
       s_busy = false;
       continue;
     }
@@ -243,9 +297,11 @@ void transfer_task(void *arg) {
     uint16_t total_frags = (total + BLE_FRAG_SIZE - 1) / BLE_FRAG_SIZE;
     if (total_frags == 0) {
       if (sd_lock(500)) { f.close(); sd_unlock(); } else f.close();
-      // empty file, delete
-      sd_safe_delete_after_ack(job->path);
-      manifest_mark_done(job->path);
+      // empty file: normal sync drops it, a preview fetch just gives up
+      if (!preview) {
+        sd_safe_delete_after_ack(job->path);
+        manifest_mark_done(job->path);
+      }
       s_busy = false;
       continue;
     }
@@ -259,14 +315,14 @@ void transfer_task(void *arg) {
         vTaskDelay(pdMS_TO_TICKS(1000));
         continue;
       }
-      manifest_set_crc(job->path, file_crc);
+      if (!preview) manifest_set_crc(job->path, file_crc);
     }
     uint16_t start_seq = job->next_seq;
     // == total_frags means the host already holds every fragment (the final
     // ACK was lost): skip straight to FILE_DONE instead of resending.
     if (start_seq > total_frags) start_seq = 0;
 
-    uint8_t ann[32];
+    uint8_t ann[PROTO_MAX_PAYLOAD];
     ann[0] = job->path.length() & 0xFF;
     memcpy(ann + 1, &total, 4);
     memcpy(ann + 5, &total_frags, 2);
@@ -278,8 +334,26 @@ void transfer_task(void *arg) {
     s_resume_seq = start_seq;
     // clear stale acks before announce
     xQueueReset(s_ack_q);
-    if (!send_with_retry(PKT_FILE_ANNOUNCE, ann_seq, ann, 21)) {
+    bool announced;
+    if (preview) {
+      // Preview announces carry a flag + path so the host can recognize and
+      // play them without running its normal ingest pipeline.
+      ann[21] = 0x01;
+      size_t path_len = job->path.length();
+      if (path_len > 96) path_len = 96;
+      memcpy(ann + 22, job->path.c_str(), path_len);
+      announced = send_with_retry(PKT_FILE_ANNOUNCE, ann_seq, ann, (uint16_t)(22 + path_len));
+    } else {
+      announced = send_with_retry(PKT_FILE_ANNOUNCE, ann_seq, ann, 21);
+    }
+    if (!announced) {
       if (sd_lock(500)) { f.close(); sd_unlock(); } else f.close();
+      if (preview) {
+        s_current = "";
+        s_busy = false;
+        vTaskDelay(pdMS_TO_TICKS(500));
+        continue;
+      }
       s_retry_count++;
       if (s_retry_count >= XFER_MAX_FILE_RETRIES) {
         // Keep SD file + manifest pending for retry later.
@@ -490,7 +564,7 @@ void transfer_task(void *arg) {
         base++;
         slid++;
         frags_since_save++;
-        manifest_update_seq(job->path, base);
+        if (!preview) manifest_update_seq(job->path, base);
         for (int i = 0; i < BLE_WINDOW - 1; i++) {
           window[i] = window[i + 1];
         }
@@ -500,7 +574,7 @@ void transfer_task(void *arg) {
         ack_timeouts = 0;
         bool need_save = (frags_since_save >= SEQ_SAVE_FRAG_INTERVAL) ||
                          (millis() - last_seq_save_ms >= SEQ_SAVE_MS_INTERVAL);
-        if (need_save) {
+        if (need_save && !preview) {
           manifest_save();
           last_seq_save_ms = millis();
           frags_since_save = 0;
@@ -512,6 +586,12 @@ void transfer_task(void *arg) {
     // restore master key
     if (use_derived) crypto_load_or_gen_key();
     if (failed) {
+      if (preview) {
+        s_current = "";
+        s_busy = false;
+        vTaskDelay(pdMS_TO_TICKS(500));
+        continue;
+      }
       // Persist resume progress before retry, even if throttled interval not reached
       if (frags_since_save > 0) {
         manifest_save();
@@ -550,14 +630,22 @@ void transfer_task(void *arg) {
     ble_send_packet(PKT_FILE_DONE, done_seq, done_payload, 16);
     bool ok = wait_ack(done_seq, BLE_ACK_TIMEOUT_MS * 3);
     if (ok) {
-      sd_safe_delete_after_ack(job->path);
-      manifest_mark_done(job->path);
-      file_note_success(job->path);
+      if (!preview) {
+        sd_safe_delete_after_ack(job->path);
+        manifest_mark_done(job->path);
+        file_note_success(job->path);
+      }
       s_retry_path = "";
       s_retry_count = 0;
       s_current = "";
       s_busy = false;
     } else {
+      if (preview) {
+        s_current = "";
+        s_busy = false;
+        vTaskDelay(pdMS_TO_TICKS(500));
+        continue;
+      }
       s_retry_count++;
       LOG_E("XFER done fail %016llx %d/3", (unsigned long long)file_uid, s_retry_count);
       // Keep SD file + manifest pending for retry later.

@@ -34,6 +34,10 @@ volatile bool s_del_req = false;
 volatile uint16_t s_del_len = 0;
 volatile uint8_t s_del_path[PROTO_MAX_PAYLOAD];
 volatile uint16_t s_del_seq = 0;
+volatile bool s_fetch_req = false;
+volatile uint16_t s_fetch_len = 0;
+volatile uint8_t s_fetch_path[PROTO_MAX_PAYLOAD];
+volatile uint16_t s_fetch_seq = 0;
 volatile bool s_erase_req = false;
 volatile uint8_t s_erase_step = 0;
 volatile uint16_t s_erase_seq = 0;
@@ -372,6 +376,22 @@ uint8_t control_do_file_delete(const uint8_t *name, uint16_t name_len) {
   return CTRL_OK;
 }
 
+uint8_t control_do_file_fetch(const uint8_t *name, uint16_t name_len) {
+  if (!name || name_len == 0 || name_len > 128) return CTRL_ERR_BAD_ARG;
+  for (uint16_t i = 0; i < name_len; i++) {
+    if (name[i] == 0) return CTRL_ERR_BAD_ARG;
+  }
+  String path;
+  path.concat((const char *)name, name_len);
+  if (!sd_mounted()) return CTRL_ERR_NO_SD;
+  if (!storage_path_valid(path)) return CTRL_ERR_BAD_ARG;
+  if (recorder_is_recording() && path == recorder_current_file()) return CTRL_ERR_BUSY;
+  if (transfer_is_transferring(path)) return CTRL_ERR_BUSY;
+  if (!sd_file_exists(path)) return CTRL_ERR_NOT_FOUND;
+  transfer_request_fetch((const char *)name, name_len);
+  return CTRL_OK;
+}
+
 uint8_t control_do_erase(uint8_t step, uint16_t *removed_out) {
   if (removed_out) *removed_out = 0;
   if (step != CTRL_ERASE_ARM && step != CTRL_ERASE_CONFIRM) return CTRL_ERR_BAD_ARG;
@@ -424,6 +444,8 @@ void control_init() {
   s_list_req = false;
   s_del_req = false;
   s_del_len = 0;
+  s_fetch_req = false;
+  s_fetch_len = 0;
   s_erase_req = false;
   s_erase_armed_ms = 0;
   s_sync_req = false;
@@ -529,6 +551,16 @@ bool control_on_packet(const Packet *pkt) {
     s_erase_step = (pkt->len >= 2) ? pkt->payload[1] : 0xFF;
     s_erase_seq = pkt->seq;
     s_erase_req = true;
+  } else if (cmd == CTRL_CMD_FILE_FETCH) {
+    uint16_t n = (pkt->len > 1) ? (uint16_t)(pkt->len - 1) : 0;
+    if (n == 0 || n > sizeof(s_fetch_path)) {
+      s_fetch_len = 0xFFFF; // sentinel: invalid length -> BAD_ARG in poll
+    } else {
+      for (uint16_t i = 0; i < n; i++) s_fetch_path[i] = pkt->payload[1 + i];
+      s_fetch_len = n;
+    }
+    s_fetch_seq = pkt->seq;
+    s_fetch_req = true;
   } else {
     // Unknown cmd IDs are acked as BAD_ARG in poll.
     s_rec_seq = pkt->seq;
@@ -559,6 +591,10 @@ void control_poll() {
   uint16_t del_len = 0;
   uint8_t del_path[PROTO_MAX_PAYLOAD];
   uint16_t del_seq = 0;
+  bool fetch_req = false;
+  uint16_t fetch_len = 0;
+  uint8_t fetch_path[PROTO_MAX_PAYLOAD];
+  uint16_t fetch_seq = 0;
   bool erase_req = false;
   uint8_t erase_step = 0;
   uint16_t erase_seq = 0;
@@ -599,6 +635,13 @@ void control_poll() {
   }
   del_seq = s_del_seq;
   s_del_req = false;
+  fetch_req = s_fetch_req;
+  fetch_len = s_fetch_len;
+  if (fetch_len != 0xFFFF && fetch_len > 0 && fetch_len <= sizeof(fetch_path)) {
+    for (uint16_t i = 0; i < fetch_len; i++) fetch_path[i] = s_fetch_path[i];
+  }
+  fetch_seq = s_fetch_seq;
+  s_fetch_req = false;
   erase_req = s_erase_req;
   erase_step = s_erase_step;
   erase_seq = s_erase_seq;
@@ -680,6 +723,16 @@ void control_poll() {
         status = control_do_file_delete(del_path, del_len);
       }
       control_send_cmd_resp(del_seq, CTRL_CMD_FILE_DELETE, status, nullptr, 0);
+    }
+  }
+
+  if (fetch_req) {
+    if (control_gate_ok()) {
+      uint8_t status = CTRL_ERR_BAD_ARG;
+      if (fetch_len != 0xFFFF && fetch_len > 0 && fetch_len <= 128) {
+        status = control_do_file_fetch(fetch_path, fetch_len);
+      }
+      control_send_cmd_resp(fetch_seq, CTRL_CMD_FILE_FETCH, status, nullptr, 0);
     }
   }
 
