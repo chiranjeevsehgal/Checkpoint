@@ -14,7 +14,6 @@ export interface CheckpointSettings {
   userId: string;
   vadThreshold: number;
   minSpeechS: number;
-  keepFiles: boolean;
   ingestEnabled: boolean;
   vadEnabled: boolean;
   autoSyncEnabled: boolean;
@@ -26,7 +25,6 @@ const KEYS = {
   userId: settingsKey('userId'),
   vadThreshold: settingsKey('vadThreshold'),
   minSpeechS: settingsKey('minSpeechS'),
-  keepFiles: settingsKey('keepFiles'),
   ingestEnabled: settingsKey('ingestEnabled'),
   vadEnabled: settingsKey('vadEnabled'),
   autoSyncEnabled: settingsKey('autoSyncEnabled'),
@@ -39,7 +37,6 @@ export function defaultSettings(): CheckpointSettings {
     userId: INGEST_USER_ID_DEFAULT,
     vadThreshold: VAD_THRESHOLD_DEFAULT,
     minSpeechS: VAD_MIN_SPEECH_S_DEFAULT,
-    keepFiles: false,
     ingestEnabled: true,
     vadEnabled: true,
     autoSyncEnabled: true,
@@ -60,7 +57,6 @@ export async function loadSettings(): Promise<CheckpointSettings> {
     userId,
     vadThreshold,
     minSpeechS,
-    keepFiles,
     ingestEnabled,
     vadEnabled,
     autoSyncEnabled,
@@ -70,7 +66,6 @@ export async function loadSettings(): Promise<CheckpointSettings> {
     storage.get(KEYS.userId),
     storage.get(KEYS.vadThreshold),
     storage.get(KEYS.minSpeechS),
-    storage.get(KEYS.keepFiles),
     storage.get(KEYS.ingestEnabled),
     storage.get(KEYS.vadEnabled),
     storage.get(KEYS.autoSyncEnabled),
@@ -81,7 +76,6 @@ export async function loadSettings(): Promise<CheckpointSettings> {
     userId: (userId ?? '').trim() || defaults.userId,
     vadThreshold: toNumber(vadThreshold, defaults.vadThreshold),
     minSpeechS: toNumber(minSpeechS, defaults.minSpeechS),
-    keepFiles: keepFiles === '1',
     ingestEnabled: ingestEnabled !== '0',
     vadEnabled: vadEnabled !== '0',
     autoSyncEnabled: autoSyncEnabled !== '0',
@@ -95,7 +89,6 @@ export async function saveSettings(settings: CheckpointSettings): Promise<void> 
     storage.set(KEYS.userId, settings.userId.trim()),
     storage.set(KEYS.vadThreshold, String(settings.vadThreshold)),
     storage.set(KEYS.minSpeechS, String(settings.minSpeechS)),
-    storage.set(KEYS.keepFiles, settings.keepFiles ? '1' : '0'),
     storage.set(KEYS.ingestEnabled, settings.ingestEnabled ? '1' : '0'),
     storage.set(KEYS.vadEnabled, settings.vadEnabled ? '1' : '0'),
     storage.set(KEYS.autoSyncEnabled, settings.autoSyncEnabled ? '1' : '0'),

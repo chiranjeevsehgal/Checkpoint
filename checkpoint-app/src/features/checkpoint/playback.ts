@@ -54,7 +54,9 @@ class PlaybackController {
   getSnapshot = (): PlaybackSnapshot => this.snapshot;
 
   play = async (uri: string, label: string): Promise<void> => {
-    const bytes = await new File(uri).bytes();
+    const file = new File(uri);
+    if (!file.exists) throw new Error('Recording is no longer on this device.');
+    const bytes = await file.bytes();
     await this.playBytes(bytes, label);
   };
 

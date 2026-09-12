@@ -11,6 +11,7 @@ import type { DeviceFileEntry } from '../types.ts';
 
 import { AppHeader } from '@/components/shared/app-header';
 import { EmptyState } from '@/components/shared/empty-state';
+import { RefreshButton } from '@/components/shared/refresh-button';
 import { Button } from '@/components/ui/button';
 import { Card, CardKicker } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
@@ -165,16 +166,7 @@ export function StorageScreen() {
                     ? `SD: ${formatBytes(storage.used)} / ${formatBytes(storage.total)}`
                     : 'SD: —'}
                 </Text>
-                <Pressable
-                  onPress={() => void refreshStorage()}
-                  disabled={!connected}
-                  accessibilityRole="button"
-                  className="active:opacity-60"
-                >
-                  <Text variant="muted" className="text-[11px]">
-                    Refresh
-                  </Text>
-                </Pressable>
+                <RefreshButton onPress={() => void refreshStorage()} disabled={!connected} />
               </View>
               <ProgressBar value={pct / 100} className="h-1.5" />
               <Text variant="muted" className="text-[11.5px]">

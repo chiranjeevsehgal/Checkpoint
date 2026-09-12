@@ -385,9 +385,6 @@ class SyncEngine {
         this.appendLog(`  [ingest] OK upload_id=${result.uploadId} status=${result.status}`);
         this.reportIngest(record.fileId, result.uploadId, result.status, '');
         this.patchRecord(record.fileId, { attempts: 0, nextAttemptAt: undefined });
-        if (!this.settings.keepFiles) {
-          CheckpointClient.deleteLocalCopy(record.fileId);
-        }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'unknown';
         this.appendLog(`  [!] ingest failed: ${message}`);
@@ -502,9 +499,7 @@ class SyncEngine {
         verdict.status,
         verdict.speechS.toFixed(2),
       );
-      if (!current.keepFiles) {
-        CheckpointClient.deleteLocalCopy(file.fileIdHex);
-      }
+      CheckpointClient.deleteLocalCopy(file.fileIdHex);
       return;
     }
     if (!current.ingestEnabled) {

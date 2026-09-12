@@ -49,6 +49,7 @@ export function CheckpointSettingsScreen() {
       <AppHeader title="Settings" subtitle="Server, identity and VAD" />
       <ScrollView
         className="flex-1"
+        keyboardShouldPersistTaps="handled"
         refreshControl={<AppRefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         contentContainerStyle={{ gap: 14, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}

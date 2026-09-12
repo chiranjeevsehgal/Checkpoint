@@ -140,6 +140,7 @@ export function ConnectScreen() {
       <ScrollView
         className="flex-1"
         nestedScrollEnabled
+        keyboardShouldPersistTaps="handled"
         refreshControl={<AppRefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         contentContainerStyle={{ gap: 16, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
@@ -289,12 +290,6 @@ export function ConnectScreen() {
             description="Filter out silence before it's uploaded."
             value={settings.vadEnabled}
             onChange={(next) => void updateSettings({ ...settings, vadEnabled: next })}
-          />
-          <Toggle
-            label="Keep files on device"
-            description="Don't delete recordings from the pendant after upload."
-            value={settings.keepFiles}
-            onChange={(next) => void updateSettings({ ...settings, keepFiles: next })}
           />
         </Card>
 
