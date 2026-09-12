@@ -2,6 +2,7 @@ import notifee, { AndroidForegroundServiceType, AndroidImportance } from '@notif
 import { PermissionsAndroid, Platform } from 'react-native';
 
 import { networkMonitor } from './networkMonitor.ts';
+import { hasBlePermissions } from './permissions.ts';
 import { loadSettings } from './settings.ts';
 import { syncEngine } from './syncEngine.ts';
 
@@ -49,6 +50,12 @@ async function requestNotificationPermission(): Promise<void> {
 
 export async function startSyncService(status: SyncStatus): Promise<void> {
   if (Platform.OS !== 'android') return;
+  // A `connectedDevice` foreground service needs a granted Bluetooth runtime
+  // permission. Starting it before the user grants one crashes the process.
+  if (!(await hasBlePermissions())) {
+    console.debug('[bg] service deferred: Bluetooth permission not granted');
+    return;
+  }
   try {
     if (!serviceActive) {
       console.debug('[bg] starting service');
