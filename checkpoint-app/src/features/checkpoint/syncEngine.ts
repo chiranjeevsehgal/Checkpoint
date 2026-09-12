@@ -20,6 +20,7 @@ import { IngestionUploader } from './ingestion.ts';
 import { networkMonitor } from './networkMonitor.ts';
 import { ctrlStatusText } from './parsers.ts';
 import { ensureBlePermissions, hasBlePermissions } from './permissions.ts';
+import { playback } from './playback.ts';
 import { nextRetryDelayMs } from './retry.ts';
 import { defaultSettings, type CheckpointSettings } from './settings.ts';
 import {
@@ -48,6 +49,14 @@ export interface ListPage {
 
 export type BluetoothStatus = 'on' | 'off' | 'unauthorized' | 'unsupported' | 'unknown' | null;
 
+export interface PreviewSnapshot {
+  path: string;
+  fileId: string;
+  received: number;
+  totalFrags: number;
+  totalBytes: number;
+}
+
 export interface EngineSnapshot {
   connected: boolean;
   busy: boolean;
@@ -57,6 +66,7 @@ export interface EngineSnapshot {
   fileList: DeviceFileList | null;
   listPage: ListPage;
   transfers: TransferRecord[];
+  preview: PreviewSnapshot | null;
   logs: string[];
   needsSettings: boolean;
   bluetooth: BluetoothStatus;
@@ -73,6 +83,7 @@ const INITIAL_SNAPSHOT: EngineSnapshot = {
   fileList: null,
   listPage: { start: 0, total: 0, count: 0 },
   transfers: [],
+  preview: null,
   logs: [],
   needsSettings: false,
   bluetooth: null,
@@ -399,9 +410,44 @@ class SyncEngine {
     this.setState({ logs: pushLog(this.snapshot.logs, line) });
   }
 
+  private handlePreviewEvent(event: CheckpointEvent): void {
+    if (event.type === 'announce') {
+      this.setState({
+        preview: {
+          path: event.path ?? this.snapshot.preview?.path ?? 'preview',
+          fileId: event.fileId,
+          received: 0,
+          totalFrags: event.totalFrags,
+          totalBytes: event.totalBytes,
+        },
+      });
+      return;
+    }
+    if (event.type === 'progress') {
+      const preview = this.snapshot.preview;
+      if (!preview) return;
+      this.setState({
+        preview: { ...preview, received: event.received, totalFrags: event.totalFrags },
+      });
+      return;
+    }
+    if (event.type === 'file_done' && !event.crcOk) {
+      this.appendLog(`[preview] ${event.fileId} checksum failed`);
+      this.setState({ preview: null });
+    }
+  }
+
   private handleEvent(event: CheckpointEvent): void {
     if (event.type === 'link') {
-      this.setState({ linkState: event.state });
+      this.setState(
+        event.state === 'down'
+          ? { linkState: event.state, preview: null }
+          : { linkState: event.state },
+      );
+      return;
+    }
+    if ('preview' in event && event.preview) {
+      this.handlePreviewEvent(event);
       return;
     }
     if (event.type === 'rec_status') {
@@ -467,6 +513,19 @@ class SyncEngine {
     });
     const record = this.snapshot.transfers.find((item) => item.fileId === file.fileIdHex);
     if (record) await this.uploadRecord(record);
+  }
+
+  private async handlePreviewFile(file: CompletedFile): Promise<void> {
+    const label = this.snapshot.preview?.path ?? 'preview';
+    this.setState({ preview: null });
+    try {
+      await playback.playBytes(file.bytes, label);
+      this.appendLog(`[preview] playing ${label}`);
+    } catch (error) {
+      this.appendLog(
+        `[preview] playback failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
+    }
   }
 
   private async withClient<T>(
@@ -559,7 +618,8 @@ class SyncEngine {
         onEvent: (event) => this.handleEvent(event),
         log: (line) => this.appendLog(line),
         onFile: (file) => {
-          void this.handleCompletedFile(file);
+          if (file.preview) void this.handlePreviewFile(file);
+          else void this.handleCompletedFile(file);
         },
       });
     } catch (error) {
@@ -655,7 +715,13 @@ class SyncEngine {
         );
       }
     }
-    this.setState({ connected: false, autoConnecting: false, linkState: 'idle', deviceId: null });
+    this.setState({
+      connected: false,
+      autoConnecting: false,
+      linkState: 'idle',
+      deviceId: null,
+      preview: null,
+    });
   }
 
   refreshStatus = async (): Promise<void> => {
@@ -667,6 +733,28 @@ class SyncEngine {
       await client.reqStorage();
       await client.reqList(0);
     });
+  };
+
+  previewStorageFile = async (path: string): Promise<number | null> => {
+    const client = this.client;
+    if (!client) return null;
+    this.setState({
+      preview: { path, fileId: '', received: 0, totalFrags: 0, totalBytes: 0 },
+    });
+    try {
+      const code = await client.cmdFileFetch(path);
+      if (code !== CTRL_OK) {
+        this.setState({ preview: null });
+        this.appendLog(`[preview] fetch ${path} rejected status=${ctrlStatusText(code)}`);
+      }
+      return code;
+    } catch (error) {
+      this.setState({ preview: null });
+      this.appendLog(
+        `[preview] fetch failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
+      return null;
+    }
   };
 
   refreshTransfers = async (): Promise<void> => {

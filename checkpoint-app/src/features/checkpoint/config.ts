@@ -115,6 +115,7 @@ export const CTRL_CMD_SYNC_SET = 0x12;
 export const CTRL_CMD_SYNC_GET = 0x13;
 export const CTRL_CMD_FILE_DELETE = 0x20;
 export const CTRL_CMD_STORAGE_ERASE = 0x21;
+export const CTRL_CMD_FILE_FETCH = 0x22;
 
 export const CTRL_OK = 0x00;
 export const CTRL_ERR_NOT_READY = 0x01;

@@ -1,9 +1,10 @@
-import { Trash2 } from 'lucide-react-native';
+import { Pause, Play, Trash2 } from 'lucide-react-native';
 import { FlatList, Pressable, View } from 'react-native';
 
 import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { fileStateLabel, formatBytes } from '../parsers.ts';
+import { playback, usePlayback } from '../playback.ts';
 import type { DeviceFileEntry } from '../types.ts';
 
 import { AppHeader } from '@/components/shared/app-header';
@@ -23,8 +24,25 @@ const STATE_TAG: Record<string, string> = {
   synced: 'bg-success text-background',
 };
 
-function FileRow({ item, onDelete }: { item: DeviceFileEntry; onDelete: () => void }) {
+function FileRow({
+  item,
+  onDelete,
+  onPlay,
+  disabled,
+  playing,
+  fetching,
+  pct,
+}: {
+  item: DeviceFileEntry;
+  onDelete: () => void;
+  onPlay: () => void;
+  disabled: boolean;
+  playing: boolean;
+  fetching: boolean;
+  pct: number;
+}) {
   const state = fileStateLabel(item.flags);
+  const playable = state !== 'recording';
 
   return (
     <View className="flex-row items-center justify-between gap-2.5 bg-surface p-3">
@@ -39,14 +57,33 @@ function FileRow({ item, onDelete }: { item: DeviceFileEntry; onDelete: () => vo
           </Text>
         </View>
       </View>
-      <Pressable
-        onPress={onDelete}
-        accessibilityRole="button"
-        accessibilityLabel={`Delete ${item.name}`}
-        className="active:bg-foreground/10 border border-border p-1.5"
-      >
-        <Icon as={Trash2} size={14} className="text-destructive" />
-      </Pressable>
+      <View className="flex-row items-center gap-2">
+        {playable ? (
+          <Pressable
+            onPress={onPlay}
+            disabled={disabled || fetching}
+            accessibilityRole="button"
+            accessibilityLabel={playing ? `Pause ${item.name}` : `Play ${item.name}`}
+            className="active:bg-foreground/10 border border-border p-1.5"
+          >
+            {fetching ? (
+              <Text variant="muted" className="w-3.5 text-center text-[9px]">
+                {pct > 0 ? `${Math.round(pct * 100)}` : '…'}
+              </Text>
+            ) : (
+              <Icon as={playing ? Pause : Play} size={14} />
+            )}
+          </Pressable>
+        ) : null}
+        <Pressable
+          onPress={onDelete}
+          accessibilityRole="button"
+          accessibilityLabel={`Delete ${item.name}`}
+          className="active:bg-foreground/10 border border-border p-1.5"
+        >
+          <Icon as={Trash2} size={14} className="text-destructive" />
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -62,7 +99,10 @@ export function StorageScreen() {
     listNext,
     requestDelete,
     requestErase,
+    preview,
+    previewStorageFile,
   } = useCheckpoint();
+  const { label: playingLabel, playing } = usePlayback();
 
   const pct =
     storage && storage.total > 0
@@ -123,7 +163,26 @@ export function StorageScreen() {
             </View>
           </View>
         }
-        renderItem={({ item }) => <FileRow item={item} onDelete={() => requestDelete(item.name)} />}
+        renderItem={({ item }) => {
+          const fetching = preview?.path === item.name;
+          const progress =
+            fetching && preview.totalFrags > 0 ? preview.received / preview.totalFrags : 0;
+          const isPlaying = playing && playingLabel === item.name;
+          return (
+            <FileRow
+              item={item}
+              onDelete={() => requestDelete(item.name)}
+              onPlay={() => {
+                if (isPlaying) playback.stop();
+                else void previewStorageFile(item.name);
+              }}
+              disabled={!connected}
+              playing={isPlaying}
+              fetching={fetching}
+              pct={progress}
+            />
+          );
+        }}
         ListEmptyComponent={
           <EmptyState title="No files listed" hint="Refresh to load the pendant file list." />
         }

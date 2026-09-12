@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import { hexToBytes } from '../crypto.ts';
 import {
   buildFileDeletePayload,
+  buildFileFetchPayload,
   buildLedSetPayload,
   buildListReqPayload,
   buildStorageErasePayload,
@@ -124,6 +125,12 @@ describe('command payloads', () => {
 
   it('builds erase payload', () => {
     assert.deepEqual(Array.from(buildStorageErasePayload(1)), [0x21, 0x01]);
+  });
+
+  it('builds file fetch payload', () => {
+    const payload = buildFileFetchPayload('/rec/a.ogg');
+    assert.equal(payload[0], 0x22);
+    assert.equal(new TextDecoder().decode(payload.slice(1)), '/rec/a.ogg');
   });
 
   it('builds little-endian list payload', () => {

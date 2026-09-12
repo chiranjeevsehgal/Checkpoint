@@ -44,8 +44,15 @@ export interface LedState {
 
 export type CheckpointEvent =
   | { type: 'link'; state: 'up' | 'down' }
-  | { type: 'announce'; fileId: string; totalBytes: number; totalFrags: number }
-  | { type: 'progress'; fileId: string; received: number; totalFrags: number }
+  | {
+      type: 'announce';
+      fileId: string;
+      totalBytes: number;
+      totalFrags: number;
+      preview?: boolean;
+      path?: string;
+    }
+  | { type: 'progress'; fileId: string; received: number; totalFrags: number; preview?: boolean }
   | {
       type: 'file_done';
       fileId: string;
@@ -53,6 +60,7 @@ export type CheckpointEvent =
       totalBytes: number;
       ingestStatus: string;
       vadStatus: string;
+      preview?: boolean;
     }
   | { type: 'vad'; fileId: string; vadStatus: string; vadSpeechS: number }
   | {
