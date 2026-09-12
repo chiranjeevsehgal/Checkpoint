@@ -1,4 +1,5 @@
 import { formatBytes } from './parsers.ts';
+import type { CheckpointStatus } from './status.ts';
 
 export type TransferStage = 'receiving' | 'analyzing' | 'uploading' | 'done';
 
@@ -23,6 +24,8 @@ export interface TransferView {
   vadLabel: string;
   ingestLabel: string;
   failed: boolean;
+  status: CheckpointStatus;
+  headline: string;
 }
 
 export function classifyOutcome(complete: boolean, ingest: string): TransferOutcome {
@@ -74,6 +77,50 @@ function describeIngest(ingest: string, stage: TransferStage): string {
   return uploadId ? `Uploaded · ${uploadId}` : (status ?? ingest);
 }
 
+function transferStatus(view: {
+  stage: TransferStage;
+  outcome: TransferOutcome;
+  failed: boolean;
+}): CheckpointStatus {
+  if (view.failed) return 'failed';
+  if (view.outcome === 'uploaded') return 'uploaded';
+  if (view.outcome === 'filtered' || view.outcome === 'skipped' || view.outcome === 'disabled') {
+    return 'filtered';
+  }
+  if (view.stage === 'receiving') return 'receiving';
+  if (view.stage === 'analyzing') return 'analyzing';
+  if (view.stage === 'uploading') return 'uploading';
+  return 'ready';
+}
+
+function transferHeadline(view: TransferView): string {
+  if (view.failed) return 'Upload failed';
+  if (view.outcome === 'uploaded') return 'Uploaded successfully';
+  if (view.outcome === 'filtered') return 'No speech detected';
+  if (view.outcome === 'skipped' || view.outcome === 'disabled') return view.ingestLabel;
+  if (view.stage === 'receiving') return 'Receiving';
+  if (view.stage === 'analyzing') return 'Analyzing';
+  if (view.stage === 'uploading') return 'Uploading…';
+  return 'Ready';
+}
+
+export function formatTransferTime(at: number, now: number = Date.now()): string {
+  const date = new Date(at);
+  const today = new Date(now);
+  const sameDay =
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate();
+  if (!sameDay) {
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+  const hours24 = date.getHours();
+  const hours = hours24 % 12 === 0 ? 12 : hours24 % 12;
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const suffix = hours24 < 12 ? 'AM' : 'PM';
+  return `${hours}:${minutes} ${suffix}`;
+}
+
 export function transferView(input: TransferInput): TransferView {
   const pct = input.totalFrags > 0 ? input.received / input.totalFrags : 0;
   let stage: TransferStage = 'receiving';
@@ -83,14 +130,20 @@ export function transferView(input: TransferInput): TransferView {
     else stage = 'done';
   }
 
-  return {
+  const outcome = classifyOutcome(pct >= 1 && !isPendingValue(input.ingest), input.ingest);
+  const failed = input.ingest.startsWith('failed');
+  const view: TransferView = {
     filename: `file_${input.fileId}.ogg`,
     sizeLabel: formatBytes(input.totalBytes),
     pct,
     stage,
-    outcome: classifyOutcome(pct >= 1 && !isPendingValue(input.ingest), input.ingest),
+    outcome,
     vadLabel: describeVad(input.vad, stage),
     ingestLabel: describeIngest(input.ingest, stage),
-    failed: input.ingest.startsWith('failed'),
+    failed,
+    status: transferStatus({ stage, outcome, failed }),
+    headline: '',
   };
+  view.headline = transferHeadline(view);
+  return view;
 }

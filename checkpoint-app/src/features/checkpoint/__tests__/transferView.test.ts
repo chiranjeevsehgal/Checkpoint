@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { transferView, type TransferInput } from '../transferView.ts';
+import { formatTransferTime, transferView, type TransferInput } from '../transferView.ts';
 
 function input(overrides: Partial<TransferInput> = {}): TransferInput {
   return {
@@ -62,5 +62,38 @@ describe('transferView', () => {
     assert.equal(view.failed, true);
     assert.equal(view.outcome, 'failed');
     assert.equal(view.ingestLabel, 'Failed — network timeout');
+  });
+
+  it('exposes a canonical status and headline', () => {
+    assert.equal(transferView(input({ received: 4 })).headline, 'Receiving');
+    assert.equal(transferView(input({ received: 4 })).status, 'receiving');
+    assert.equal(transferView(input({ received: 10, vad: 'pending' })).headline, 'Analyzing');
+    assert.equal(transferView(input({ received: 10, vad: 'speech 3.2s' })).status, 'uploading');
+    const uploaded = transferView(
+      input({ received: 10, vad: 'speech 3.20s', ingest: 'READY ab12cd34' }),
+    );
+    assert.equal(uploaded.headline, 'Uploaded successfully');
+    assert.equal(uploaded.status, 'uploaded');
+    const filtered = transferView(
+      input({ received: 10, vad: 'no-speech 0.00s', ingest: 'skipped-no-speech' }),
+    );
+    assert.equal(filtered.headline, 'No speech detected');
+    assert.equal(filtered.status, 'filtered');
+    const failed = transferView(
+      input({ received: 10, vad: 'speech 1.0s', ingest: 'failed: network timeout' }),
+    );
+    assert.equal(failed.headline, 'Upload failed');
+    assert.equal(failed.status, 'failed');
+  });
+});
+
+describe('formatTransferTime', () => {
+  it('shows a clock time for today and a date for older items', () => {
+    const now = new Date(2026, 4, 10, 20, 0, 0).getTime();
+    assert.equal(formatTransferTime(new Date(2026, 4, 10, 20, 42, 0).getTime(), now), '8:42 PM');
+    assert.notEqual(
+      formatTransferTime(new Date(2026, 4, 9, 20, 42, 0).getTime(), now),
+      '8:42 PM',
+    );
   });
 });
