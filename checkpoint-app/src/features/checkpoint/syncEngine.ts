@@ -165,7 +165,6 @@ class SyncEngine {
       if (networkMonitor.getSnapshot().state === 'online') void this.drainQueue();
     });
     this.tickTimer = setInterval(() => {
-      console.debug('[bg] tick');
       this.cleanup();
       void this.drainQueue();
     }, TRANSFER_TICK_MS);
