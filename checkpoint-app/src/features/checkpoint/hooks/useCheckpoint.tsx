@@ -95,10 +95,6 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       void syncEngine.start();
       void networkMonitor.start();
     });
-    return () => {
-      void syncEngine.stop();
-      networkMonitor.stop();
-    };
   }, []);
 
   useEffect(() => {
@@ -107,9 +103,6 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       return;
     }
     void startSyncService();
-    return () => {
-      void stopSyncService();
-    };
   }, [snapshot.connected, settings.autoSyncEnabled]);
 
   const connect = useCallback(async () => {

@@ -1,10 +1,28 @@
 import notifee, { AndroidForegroundServiceType, AndroidImportance } from '@notifee/react-native';
 import { PermissionsAndroid, Platform } from 'react-native';
 
+import { networkMonitor } from './networkMonitor.ts';
+import { loadSettings } from './settings.ts';
+import { syncEngine } from './syncEngine.ts';
+
 const CHANNEL_ID = 'checkpoint-sync';
 
 if (Platform.OS === 'android') {
-  notifee.registerForegroundService(() => new Promise<void>(() => {}));
+  notifee.registerForegroundService(() => {
+    console.debug('[bg] fgs runner invoked');
+    void bootBackgroundSync();
+    return new Promise<void>(() => {});
+  });
+}
+
+async function bootBackgroundSync(): Promise<void> {
+  console.debug('[bg] booting engine');
+  const settings = await loadSettings();
+  syncEngine.configure(settings);
+  networkMonitor.configure(settings.serverUrl);
+  void networkMonitor.start();
+  void syncEngine.start();
+  console.debug('[bg] engine booted');
 }
 
 async function requestNotificationPermission(): Promise<void> {
@@ -19,6 +37,7 @@ async function requestNotificationPermission(): Promise<void> {
 export async function startSyncService(): Promise<void> {
   if (Platform.OS !== 'android') return;
   try {
+    console.debug('[bg] starting service');
     await requestNotificationPermission();
     await notifee.createChannel({
       id: CHANNEL_ID,
@@ -38,6 +57,7 @@ export async function startSyncService(): Promise<void> {
         pressAction: { id: 'default' },
       },
     });
+    console.debug('[bg] service started');
   } catch (error) {
     console.warn(
       `[bg] start service failed: ${error instanceof Error ? error.message : 'unknown'}`,
@@ -48,7 +68,9 @@ export async function startSyncService(): Promise<void> {
 export async function stopSyncService(): Promise<void> {
   if (Platform.OS !== 'android') return;
   try {
+    console.debug('[bg] stopping service');
     await notifee.stopForegroundService();
+    console.debug('[bg] service stopped');
   } catch (error) {
     console.warn(`[bg] stop service failed: ${error instanceof Error ? error.message : 'unknown'}`);
   }
