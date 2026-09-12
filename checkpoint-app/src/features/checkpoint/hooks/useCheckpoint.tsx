@@ -98,12 +98,15 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
   }, []);
 
   useEffect(() => {
-    if (!snapshot.connected || !settings.autoSyncEnabled) {
+    if (!settings.autoSyncEnabled) {
       void stopSyncService();
       return;
     }
-    void startSyncService();
-  }, [snapshot.connected, settings.autoSyncEnabled]);
+    void startSyncService({
+      connected: snapshot.connected,
+      recording: snapshot.status?.recording ?? false,
+    });
+  }, [settings.autoSyncEnabled, snapshot.connected, snapshot.status?.recording]);
 
   const connect = useCallback(async () => {
     syncEngine.configure(settings);

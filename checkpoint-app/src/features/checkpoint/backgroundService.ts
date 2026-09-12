@@ -6,6 +6,19 @@ import { loadSettings } from './settings.ts';
 import { syncEngine } from './syncEngine.ts';
 
 const CHANNEL_ID = 'checkpoint-sync';
+const NOTIFICATION_ID = 'checkpoint-sync';
+
+let serviceActive = false;
+
+export interface SyncStatus {
+  connected: boolean;
+  recording: boolean;
+}
+
+function syncBody({ connected, recording }: SyncStatus): string {
+  if (!connected) return 'Not Connected';
+  return recording ? "I'm all ears" : 'Pendant Mic is off';
+}
 
 if (Platform.OS === 'android') {
   notifee.registerForegroundService(() => {
@@ -34,19 +47,23 @@ async function requestNotificationPermission(): Promise<void> {
   }
 }
 
-export async function startSyncService(): Promise<void> {
+export async function startSyncService(status: SyncStatus): Promise<void> {
   if (Platform.OS !== 'android') return;
   try {
-    console.debug('[bg] starting service');
-    await requestNotificationPermission();
-    await notifee.createChannel({
-      id: CHANNEL_ID,
-      name: 'Background sync',
-      importance: AndroidImportance.LOW,
-    });
+    if (!serviceActive) {
+      console.debug('[bg] starting service');
+      await requestNotificationPermission();
+      await notifee.createChannel({
+        id: CHANNEL_ID,
+        name: 'Background sync',
+        importance: AndroidImportance.LOW,
+      });
+      serviceActive = true;
+    }
     await notifee.displayNotification({
+      id: NOTIFICATION_ID,
       title: 'Checkpoint',
-      body: 'Syncing with your pendant',
+      body: syncBody(status),
       android: {
         channelId: CHANNEL_ID,
         asForegroundService: true,
@@ -57,7 +74,7 @@ export async function startSyncService(): Promise<void> {
         pressAction: { id: 'default' },
       },
     });
-    console.debug('[bg] service started');
+    console.debug('[bg] service updated');
   } catch (error) {
     console.warn(
       `[bg] start service failed: ${error instanceof Error ? error.message : 'unknown'}`,
@@ -69,6 +86,7 @@ export async function stopSyncService(): Promise<void> {
   if (Platform.OS !== 'android') return;
   try {
     console.debug('[bg] stopping service');
+    serviceActive = false;
     await notifee.stopForegroundService();
     console.debug('[bg] service stopped');
   } catch (error) {
