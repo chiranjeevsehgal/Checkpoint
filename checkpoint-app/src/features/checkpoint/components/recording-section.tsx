@@ -1,7 +1,6 @@
 import { View } from 'react-native';
 
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
-import { useRecordingTimer } from '../hooks/useRecordingTimer.ts';
 import type { DeviceStatus } from '../types.ts';
 
 import { DetailRow, DeveloperDetails } from '@/components/shared/developer-details';
@@ -35,14 +34,12 @@ function recordingStatus(status: DeviceStatus | null): {
 export function RecordingSection() {
   const { connected, status, settings } = useCheckpoint();
   const { recording, levelPct, vadState } = recordingStatus(status);
-  const timer = useRecordingTimer(recording);
 
   if (!connected) return null;
 
   return (
     <Section title="Recording">
       <Card>
-        {recording ? <Text className="font-mono text-[20px]">{timer}</Text> : null}
         <ProgressBar value={levelPct / 100} className="h-1.5" />
         <Text variant="muted" className="text-[11px]">
           Voice level · {vadState}
