@@ -140,15 +140,17 @@ export function TransfersScreen() {
             <Text variant="muted" className="flex-1 text-[12px]">
               {transfers.length} total · {uploaded} uploaded · {filtered} filtered · {failed} failed
             </Text>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={transfers.length === 0}
-              onPress={() => void shareBench()}
-            >
-              <Icon as={Upload} size={14} />
-              <Text>Bench CSV</Text>
-            </Button>
+            {settings.developerMode ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={transfers.length === 0}
+                onPress={() => void shareBench()}
+              >
+                <Icon as={Upload} size={14} />
+                <Text>Bench CSV</Text>
+              </Button>
+            ) : null}
           </View>
         }
         renderItem={({ item }) => (

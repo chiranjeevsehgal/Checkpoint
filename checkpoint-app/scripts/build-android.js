@@ -6,7 +6,9 @@ const fs = require('fs');
 
 const androidDir = path.join(__dirname, '..', 'android');
 const gradlew = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
-const args = ['assembleRelease', ...process.argv.slice(2)];
+const argv = process.argv.slice(2);
+const devBuild = argv.includes('--dev');
+const args = ['assembleRelease', ...argv.filter((arg) => arg !== '--dev')];
 
 if (!fs.existsSync(path.join(androidDir, gradlew))) {
   console.error('android/ is missing. Run `npx expo prebuild -p android` first.');
@@ -17,7 +19,11 @@ const result = spawnSync(gradlew, args, {
   cwd: androidDir,
   stdio: 'inherit',
   shell: process.platform === 'win32',
-  env: { ...process.env, NODE_ENV: 'production' },
+  env: {
+    ...process.env,
+    NODE_ENV: 'production',
+    ...(devBuild ? { EXPO_PUBLIC_DEV_BUILD: '1' } : {}),
+  },
 });
 
 if (result.error) {

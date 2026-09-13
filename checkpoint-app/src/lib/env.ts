@@ -36,6 +36,7 @@ function defaultApiUrl(): string {
 export const env = {
   apiUrl: defaultApiUrl(),
   appEnv: process.env.EXPO_PUBLIC_ENV ?? 'development',
+  devBuild: process.env.EXPO_PUBLIC_DEV_BUILD === '1',
 } as const;
 
 // Anything WITHOUT the EXPO_PUBLIC_ prefix is never exposed to the client.

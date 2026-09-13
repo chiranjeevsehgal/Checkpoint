@@ -1,5 +1,10 @@
 export const DEVICE_NAME = 'Checkpoint';
 
+/** Developer surfaces exist only in dev builds and stay off if the user disabled them. */
+export function resolveDeveloperMode(stored: string | null, devBuild: boolean): boolean {
+  return devBuild && stored !== '0';
+}
+
 export const SERVICE_UUID = '9a8b0001-4a2b-4e3c-8f1a-5b2c9d0e1f2a';
 export const CTRL_UUID = '9a8b0002-4a2b-4e3c-8f1a-5b2c9d0e1f2a';
 export const DATA_UUID = '9a8b0003-4a2b-4e3c-8f1a-5b2c9d0e1f2a';

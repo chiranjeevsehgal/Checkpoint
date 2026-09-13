@@ -1,6 +1,7 @@
 import {
   DEVICE_NAME,
   INGEST_USER_ID_DEFAULT,
+  resolveDeveloperMode,
   TRANSFER_RETENTION_HOURS,
   VAD_MIN_SPEECH_S_DEFAULT,
   VAD_THRESHOLD_DEFAULT,
@@ -47,7 +48,7 @@ export function defaultSettings(): CheckpointSettings {
     vadEnabled: true,
     autoSyncEnabled: true,
     retentionHours: TRANSFER_RETENTION_HOURS,
-    developerMode: true,
+    developerMode: env.devBuild,
   };
 }
 
@@ -92,7 +93,7 @@ export async function loadSettings(): Promise<CheckpointSettings> {
     vadEnabled: vadEnabled !== '0',
     autoSyncEnabled: autoSyncEnabled !== '0',
     retentionHours: toNumber(retentionHours, defaults.retentionHours),
-    developerMode: developerMode !== '0',
+    developerMode: resolveDeveloperMode(developerMode, env.devBuild),
   };
 }
 

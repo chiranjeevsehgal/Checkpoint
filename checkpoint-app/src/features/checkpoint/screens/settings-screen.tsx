@@ -25,6 +25,7 @@ import { Input } from '@/components/ui/input';
 import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { RangeSlider } from '@/components/ui/slider';
 import { Text } from '@/components/ui/text';
+import { env } from '@/lib/env';
 import { useRefresh } from '@/lib/use-refresh';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/providers/toast-provider';
@@ -336,12 +337,14 @@ export function CheckpointSettingsScreen() {
           testing={testing}
           probe={probe}
         />
-        <DeveloperSection
-          settings={settings}
-          apply={apply}
-          diagnostics={diagnostics}
-          onOpenLog={() => router.push('/debug-log')}
-        />
+        {env.devBuild ? (
+          <DeveloperSection
+            settings={settings}
+            apply={apply}
+            diagnostics={diagnostics}
+            onOpenLog={() => router.push('/debug-log')}
+          />
+        ) : null}
       </ScrollView>
     </CheckpointScreen>
   );

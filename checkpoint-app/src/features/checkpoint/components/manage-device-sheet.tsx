@@ -21,6 +21,7 @@ export function ManageDeviceSheet({ visible, onClose, onSetup }: ManageDeviceShe
   const {
     connected,
     busy,
+    settings,
     deviceName,
     setDeviceName,
     deviceId,
@@ -119,11 +120,13 @@ export function ManageDeviceSheet({ visible, onClose, onSetup }: ManageDeviceShe
             </Button>
           </View>
 
-          <DeveloperDetails defaultExpanded>
-            <DetailRow label="Device ID" value={deviceId ?? '—'} />
-            <DetailRow label="Claim" value={enrolled ? 'Linked' : 'Not linked'} />
-            <DetailRow label="Link state" value={linkState} />
-          </DeveloperDetails>
+          {settings.developerMode ? (
+            <DeveloperDetails defaultExpanded>
+              <DetailRow label="Device ID" value={deviceId ?? '—'} />
+              <DetailRow label="Claim" value={enrolled ? 'Linked' : 'Not linked'} />
+              <DetailRow label="Link state" value={linkState} />
+            </DeveloperDetails>
+          ) : null}
         </View>
       </View>
     </Modal>

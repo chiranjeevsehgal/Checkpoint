@@ -6,6 +6,7 @@ import { HeaderIconButton } from '@/components/shared/header-icon-button';
 import { ThemeToggle } from '@/components/shared/theme-toggle';
 import { Icon } from '@/components/ui/icon';
 import { Text } from '@/components/ui/text';
+import { env } from '@/lib/env';
 
 interface AppHeaderProps {
   title: string;
@@ -19,7 +20,7 @@ export function AppHeader({
   title,
   subtitle,
   onBack,
-  showDebugLog = true,
+  showDebugLog = env.devBuild,
   action,
 }: AppHeaderProps) {
   const router = useRouter();
