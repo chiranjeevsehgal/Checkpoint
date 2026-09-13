@@ -53,9 +53,10 @@ interface CheckpointContextValue {
   logs: LogEntry[];
   settings: CheckpointSettings;
   connect: () => Promise<void>;
+  reconnect: () => Promise<void>;
   disconnect: () => Promise<void>;
   forgetDevice: () => Promise<void>;
-  stopAutoConnect: () => Promise<void>;
+  stopConnection: () => Promise<void>;
   refreshStatus: () => Promise<void>;
   refreshStorage: () => Promise<void>;
   refreshTransfers: () => Promise<void>;
@@ -165,7 +166,10 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       setSettings(next);
       syncEngine.configure(next);
       networkMonitor.configure(next.serverUrl);
-      if (autoSyncChanged) await syncEngine.applyAutoSyncIfConnected();
+      if (autoSyncChanged) {
+        await syncEngine.applyAutoSyncIfConnected();
+        if (next.autoSyncEnabled) await syncEngine.autoConnectNow();
+      }
       if (!options?.silent) showToast('Saved.');
     },
     [settings.autoSyncEnabled, showToast],
@@ -235,9 +239,10 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       logs: snapshot.logs,
       settings,
       connect,
+      reconnect: syncEngine.reconnect,
       disconnect,
       forgetDevice,
-      stopAutoConnect: syncEngine.stopAutoConnect,
+      stopConnection: syncEngine.stopConnection,
       refreshStatus: syncEngine.refreshStatus,
       refreshStorage: syncEngine.refreshStorage,
       refreshTransfers: syncEngine.refreshTransfers,

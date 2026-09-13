@@ -5,6 +5,23 @@ export function resolveDeveloperMode(stored: string | null, devBuild: boolean): 
   return devBuild && stored !== '0';
 }
 
+export interface AutoConnectGate {
+  autoSyncEnabled: boolean;
+  suppressed: boolean;
+  connected: boolean;
+  busy: boolean;
+  autoConnecting: boolean;
+  lastAttemptAt: number;
+  now: number;
+}
+
+/** Auto-connect runs when enabled, not suppressed, idle, and past the cooldown. */
+export function shouldAttemptAutoConnect(gate: AutoConnectGate): boolean {
+  if (!gate.autoSyncEnabled || gate.suppressed) return false;
+  if (gate.connected || gate.busy || gate.autoConnecting) return false;
+  return gate.now - gate.lastAttemptAt >= AUTO_CONNECT_COOLDOWN_MS;
+}
+
 export const SERVICE_UUID = '9a8b0001-4a2b-4e3c-8f1a-5b2c9d0e1f2a';
 export const CTRL_UUID = '9a8b0002-4a2b-4e3c-8f1a-5b2c9d0e1f2a';
 export const DATA_UUID = '9a8b0003-4a2b-4e3c-8f1a-5b2c9d0e1f2a';
@@ -26,6 +43,7 @@ export const ACK_TIMEOUT_MS = 5000;
 export const READY_RETRIES = 3;
 export const CONNECT_ATTEMPT_LIMIT = 3;
 export const RECONNECT_DELAY_MS = 2000;
+export const AUTO_CONNECT_COOLDOWN_MS = 60_000;
 export const COMPLETED_CACHE_SIZE = 16;
 
 export const INGEST_USER_ID_DEFAULT = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';

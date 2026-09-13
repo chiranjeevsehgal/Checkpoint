@@ -51,7 +51,7 @@ export function ConnectScreen() {
     settings,
     connect,
     disconnect,
-    stopAutoConnect,
+    stopConnection,
     refreshStatus,
     refreshStorage,
     needsSettings,
@@ -189,7 +189,7 @@ export function ConnectScreen() {
                   Auto-connecting…
                 </Text>
                 <Pressable
-                  onPress={() => void stopAutoConnect()}
+                  onPress={() => void stopConnection()}
                   accessibilityRole="button"
                   className="active:opacity-60"
                 >
@@ -245,7 +245,7 @@ export function ConnectScreen() {
                     className="flex-1"
                     value={claimText}
                     onChangeText={(text) => {
-                      void stopAutoConnect();
+                      void stopConnection();
                       setClaimText(text);
                     }}
                     editable={!connected && !busy}
@@ -261,7 +261,7 @@ export function ConnectScreen() {
                       className="h-9 w-9"
                       disabled={connected || busy}
                       onPress={() => {
-                        void stopAutoConnect();
+                        void stopConnection();
                         startScanner();
                       }}
                       accessibilityLabel="Scan claim QR"

@@ -27,18 +27,13 @@ export function ManageDeviceSheet({ visible, onClose, onSetup }: ManageDeviceShe
     deviceId,
     enrolled,
     linkState,
-    connect,
+    reconnect,
     disconnect,
+    stopConnection,
     requestForget,
   } = useCheckpoint();
   const { showToast } = useToast();
   const [name, setName] = useState(deviceName);
-
-  const reconnect = async () => {
-    onClose();
-    if (connected) await disconnect();
-    await connect();
-  };
 
   const saveName = () => {
     const trimmed = name.trim();
@@ -84,9 +79,44 @@ export function ManageDeviceSheet({ visible, onClose, onSetup }: ManageDeviceShe
           </View>
 
           <View className="gap-2">
-            <Button variant="outline" disabled={busy} onPress={() => void reconnect()}>
-              <Text>Reconnect</Text>
-            </Button>
+            {connected ? (
+              <View className="flex-row gap-2">
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  disabled={busy}
+                  onPress={() => void reconnect()}
+                >
+                  <Text>Reconnect</Text>
+                </Button>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  disabled={busy}
+                  onPress={() => void disconnect()}
+                >
+                  <Text>Disconnect</Text>
+                </Button>
+              </View>
+            ) : linkState === 'reconnecting' ? (
+              <Button variant="outline" onPress={() => void stopConnection()}>
+                <Text>Stop reconnecting</Text>
+              </Button>
+            ) : enrolled ? (
+              <Button disabled={busy} onPress={() => void reconnect()}>
+                <Text>Connect</Text>
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                onPress={() => {
+                  onSetup();
+                  onClose();
+                }}
+              >
+                <Text>Set up pendant</Text>
+              </Button>
+            )}
             <Button
               variant="outline"
               disabled={busy}

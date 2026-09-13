@@ -12,6 +12,7 @@ import {
   DEVICE_NAME,
   KAFKA_TOPIC_HINT,
   MAX_LOG_LINES,
+  shouldAttemptAutoConnect,
   STATUS_POLL_INTERVAL_S,
   TRANSFER_TICK_MS,
 } from './config.ts';
@@ -142,7 +143,8 @@ class SyncEngine {
   private networkUnsubscribe: (() => void) | null = null;
   private bluetoothSubscription: { remove: () => void } | null = null;
   private inFlight = new Set<string>();
-  private autoConnectGaveUp = false;
+  private autoConnectSuppressed = false;
+  private lastAutoConnectAt = 0;
   private connectTask: Promise<void> | null = null;
   private connectOrigin: 'user' | 'auto' | null = null;
 
@@ -181,7 +183,8 @@ class SyncEngine {
       this.cleanup();
       void this.drainQueue();
     }, TRANSFER_TICK_MS);
-    this.autoConnectGaveUp = false;
+    this.autoConnectSuppressed = false;
+    this.lastAutoConnectAt = 0;
     this.setState({ enrolled: (await getEnrolledDeviceId()) !== null });
     await this.maybeAutoConnect();
   }
@@ -237,11 +240,17 @@ class SyncEngine {
   }
 
   private async maybeAutoConnect(): Promise<void> {
-    if (!this.settings.autoSyncEnabled) {
-      this.appendLog('[sync] auto-connect skipped: auto-sync is off');
-      return;
-    }
-    if (this.snapshot.connected || this.snapshot.busy || this.snapshot.autoConnecting) return;
+    const allowed = shouldAttemptAutoConnect({
+      autoSyncEnabled: this.settings.autoSyncEnabled,
+      suppressed: this.autoConnectSuppressed,
+      connected: this.snapshot.connected,
+      busy: this.snapshot.busy,
+      autoConnecting: this.snapshot.autoConnecting,
+      lastAttemptAt: this.lastAutoConnectAt,
+      now: Date.now(),
+    });
+    if (!allowed) return;
+    this.lastAutoConnectAt = Date.now();
     const enrolled = await getEnrolledDeviceId();
     if (!enrolled) {
       this.appendLog('[sync] auto-connect skipped: no enrolled pendant');
@@ -290,7 +299,7 @@ class SyncEngine {
       await this.applyAutoSyncIfConnected();
       return;
     }
-    if (!this.autoConnectGaveUp) await this.maybeAutoConnect();
+    if (!this.snapshot.connected) await this.maybeAutoConnect();
   }
 
   private patchRecord(fileId: string, patch: Partial<TransferRecord>): void {
@@ -456,7 +465,7 @@ class SyncEngine {
     if (event.type === 'link') {
       this.setState(
         event.state === 'down'
-          ? { linkState: event.state, preview: null }
+          ? { linkState: 'reconnecting', connected: false, autoConnecting: false, preview: null }
           : { linkState: event.state },
       );
       return;
@@ -562,8 +571,12 @@ class SyncEngine {
     claimText: string,
     origin: 'user' | 'auto' = 'user',
   ): Promise<void> {
-    if (origin === 'user') await this.stopAutoConnect();
-    if (this.connectTask || this.snapshot.connected || this.snapshot.busy) return;
+    if (origin === 'user') {
+      this.autoConnectSuppressed = false;
+      await this.stopConnection();
+    }
+    if (this.connectTask) await this.connectTask;
+    if (this.snapshot.connected || this.snapshot.busy) return;
     this.connectOrigin = origin;
     this.setState(
       origin === 'user'
@@ -649,13 +662,10 @@ class SyncEngine {
     const enrollKey = claimKey;
     this.connectTask = (async () => {
       let lastPoll = 0;
-      let reachedReady = false;
       try {
         await client.supervise(target, enrollKey, {
           stopped: () => this.stopped,
           onReady: async () => {
-            reachedReady = true;
-            this.autoConnectGaveUp = false;
             this.setState({ connected: true, busy: false, autoConnecting: false });
             this.setState({ deviceId: await getEnrolledDeviceId(), enrolled: true });
             this.appendLog('[ui] listening for file transfers …');
@@ -672,7 +682,12 @@ class SyncEngine {
             void this.drainQueue();
           },
           onAlive: () => {
-            this.setState({ linkState: 'listening' });
+            this.setState({
+              connected: true,
+              busy: false,
+              autoConnecting: false,
+              linkState: 'listening',
+            });
           },
           onTick: async () => {
             const now = Date.now();
@@ -692,7 +707,6 @@ class SyncEngine {
           `[ui] connect failed: ${error instanceof Error ? error.message : 'unknown'}`,
         );
       }
-      if (!reachedReady) this.autoConnectGaveUp = true;
       this.setState({
         connected: false,
         busy: false,
@@ -706,17 +720,28 @@ class SyncEngine {
     })();
   }
 
-  stopAutoConnect = async (): Promise<void> => {
-    if (this.connectOrigin !== 'auto') return;
-    this.appendLog('[ui] auto-connect cancelled');
+  stopConnection = async (): Promise<void> => {
+    if (!this.connectTask) return;
+    this.appendLog('[ui] connection cancelled');
     this.stopped = true;
     this.client?.requestStop();
     await this.connectTask;
   };
 
+  reconnect = async (): Promise<void> => {
+    await this.disconnect();
+    this.autoConnectSuppressed = false;
+    await this.connect(this.settings.deviceName, '', 'user');
+  };
+
+  autoConnectNow = async (): Promise<void> => {
+    this.autoConnectSuppressed = false;
+    await this.maybeAutoConnect();
+  };
+
   async disconnect(): Promise<void> {
     this.stopped = true;
-    this.autoConnectGaveUp = true;
+    this.autoConnectSuppressed = true;
     const client = this.client;
     if (client) {
       try {

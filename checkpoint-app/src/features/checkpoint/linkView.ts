@@ -15,6 +15,11 @@ const VIEWS: Record<string, LinkView> = {
     sub: 'Looking for your pendant',
     openSettings: false,
   },
+  reconnecting: {
+    label: 'Reconnecting…',
+    sub: 'Lost the link to your pendant — retrying.',
+    openSettings: false,
+  },
   listening: {
     label: 'Connected',
     sub: 'Linked to your pendant',
