@@ -9,11 +9,13 @@ import {
   buildListReqPayload,
   buildStorageErasePayload,
   buildSyncSetPayload,
+  buildTimeSetPayload,
   ctrlStatusText,
   fileStateLabel,
   formatBytes,
   isValidUserId,
   parseCmdResp,
+  parseFileDoneTime,
   parseFileList,
   parseStatus,
   parseStorage,
@@ -135,6 +137,34 @@ describe('command payloads', () => {
 
   it('builds little-endian list payload', () => {
     assert.deepEqual(Array.from(buildListReqPayload(0x1234)), [0x34, 0x12]);
+  });
+
+  it('builds a little-endian unix-seconds time payload', () => {
+    const payload = buildTimeSetPayload(1789194600);
+    assert.equal(payload[0], 0x14);
+    assert.equal(payload.length, 9);
+    const view = new DataView(payload.buffer);
+    assert.equal(view.getBigUint64(1, true), 1789194600n);
+  });
+});
+
+describe('parseFileDoneTime', () => {
+  function donePayload(startUnixSeconds: bigint): Uint8Array {
+    const out = new Uint8Array(40);
+    new DataView(out.buffer).setBigUint64(20, startUnixSeconds, true);
+    return out;
+  }
+
+  it('returns milliseconds for a set trailer', () => {
+    assert.equal(parseFileDoneTime(donePayload(1789194600n)), 1789194600 * 1000);
+  });
+
+  it('returns null when the trailer is unset', () => {
+    assert.equal(parseFileDoneTime(donePayload(0n)), null);
+  });
+
+  it('returns null when the payload predates the trailer', () => {
+    assert.equal(parseFileDoneTime(new Uint8Array(16)), null);
   });
 });
 

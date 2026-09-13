@@ -71,7 +71,9 @@ import {
   buildListReqPayload,
   buildStorageErasePayload,
   buildSyncSetPayload,
+  buildTimeSetPayload,
   parseCmdResp,
+  parseFileDoneTime,
   parseFileList,
   parseStatus,
   parseStorage,
@@ -122,6 +124,7 @@ export interface CompletedFile {
   bytes: Uint8Array;
   totalBytes: number;
   preview?: boolean;
+  recordedAt?: number;
 }
 
 interface PendingRoundtrip {
@@ -860,6 +863,7 @@ export class CheckpointClient {
     const total = view.getUint32(12, true);
     const idHex = fileIdHex(fileId);
     const preview = this.previewIds.has(idHex);
+    const recordedAt = parseFileDoneTime(payload) ?? undefined;
     const file = this.currentFile;
     let ok = false;
     let fromCache = false;
@@ -886,6 +890,7 @@ export class CheckpointClient {
           frag_size: file.fragSize,
           duplicates: this.bench.duplicates,
           decrypt_fail: this.bench.decryptFail,
+          ...(recordedAt ? { recorded_at: new Date(recordedAt).toISOString() } : {}),
         });
         if (uri) {
           this.rememberCompleted(fileId, fileCrc, total, uri);
@@ -934,10 +939,17 @@ export class CheckpointClient {
       ingestStatus,
       vadStatus,
       preview,
+      recordedAt,
     });
     if (ok && !fromCache && data && (ingestStatus === 'pending' || preview)) {
       try {
-        this.callbacks.onFile?.({ fileIdHex: idHex, bytes: data, totalBytes: total, preview });
+        this.callbacks.onFile?.({
+          fileIdHex: idHex,
+          bytes: data,
+          totalBytes: total,
+          preview,
+          recordedAt,
+        });
       } catch {
         /* listener errors must not break the link */
       }
@@ -975,6 +987,14 @@ export class CheckpointClient {
 
   async cmdSyncGet(): Promise<CmdResponse> {
     return (await this.ctrlRoundtrip(PKT_CMD, new Uint8Array([0x13]))) as CmdResponse;
+  }
+
+  async cmdTimeSet(unixSeconds: number): Promise<number> {
+    const res = (await this.ctrlRoundtrip(
+      PKT_CMD,
+      buildTimeSetPayload(unixSeconds),
+    )) as CmdResponse;
+    return res.status ?? CTRL_ERR_NOT_READY;
   }
 
   async reqStatus(): Promise<DeviceStatus> {

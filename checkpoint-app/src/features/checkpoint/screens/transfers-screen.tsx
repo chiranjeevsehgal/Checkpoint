@@ -11,6 +11,7 @@ import type { TransferOutcome, TransferRecord } from '../transferStore.ts';
 import {
   formatTransferTime,
   groupTransfersByDay,
+  recordTime,
   transferView,
   type TransferStage,
   type TransferView,
@@ -91,7 +92,7 @@ function TransferRow({ item, developerMode }: { item: TransferRecord; developerM
     <Card>
       <View className="flex-row items-center justify-between gap-2">
         <Text className="flex-1 font-display text-[15px]">
-          Recording · {formatTransferTime(item.createdAt)}
+          Recording · {formatTransferTime(recordTime(item))}
         </Text>
         {item.localUri ? <PlayButton uri={item.localUri} label={view.filename} /> : null}
       </View>

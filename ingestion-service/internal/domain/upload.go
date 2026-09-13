@@ -38,6 +38,7 @@ var (
 	ErrTooLarge             = errors.New("upload exceeds maximum size")
 	ErrUnsupportedMediaType = errors.New("unsupported content type")
 	ErrInvalidChecksum      = errors.New("checksum_sha256 must be 64 lowercase hex characters")
+	ErrInvalidRecordedAt    = errors.New("recorded_at must be RFC3339 and not in the future")
 )
 
 const (
@@ -102,11 +103,35 @@ type Upload struct {
 	ActualSize       *int64
 	ChecksumSHA256   string
 	Status           string
+	RecordedAt       *time.Time
 	UploadExpiresAt  *time.Time
 	UploadedAt       *time.Time
 	SubmittedAt      *time.Time
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+}
+
+// MaxRecordedAtSkew bounds how far a client-supplied recording time may run
+// ahead of the server. Absent values and any past value are accepted: a phone
+// with an uncorrected clock must not have its recording rejected.
+const MaxRecordedAtSkew = 24 * time.Hour
+
+// ParseRecordedAt accepts an empty string (nil) or an RFC3339 timestamp no
+// more than MaxRecordedAtSkew in the future, normalized to UTC.
+func ParseRecordedAt(raw string, now time.Time) (*time.Time, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidRecordedAt, err)
+	}
+	utc := parsed.UTC()
+	if utc.After(now.Add(MaxRecordedAtSkew)) {
+		return nil, ErrInvalidRecordedAt
+	}
+	return &utc, nil
 }
 
 // ValidateCreate checks a create-upload command before any I/O happens.

@@ -15,6 +15,7 @@ enum CtrlCmd : uint8_t {
   CTRL_CMD_LED_GET = 0x11,
   CTRL_CMD_SYNC_SET = 0x12,   // payload[1] = 0/1 (off/on)
   CTRL_CMD_SYNC_GET = 0x13,   // reply extra [enabled]
+  CTRL_CMD_TIME_SET = 0x14,   // payload[1..8] = unix seconds u64 LE
   CTRL_CMD_FILE_DELETE = 0x20,  // payload[1..] = full "/rec/..." path bytes
   CTRL_CMD_STORAGE_ERASE = 0x21, // payload[1] = CTRL_ERASE_ARM / CTRL_ERASE_CONFIRM
   CTRL_CMD_FILE_FETCH = 0x22,   // payload[1..] = full "/rec/..." path (preview, keeps file)

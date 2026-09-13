@@ -54,6 +54,22 @@ type createRequest struct {
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type"`
 	SizeBytes   int64  `json:"size_bytes"`
+	RecordedAt  string `json:"recorded_at"`
+}
+
+// toCreateCommand validates optional recorded_at and builds the command once
+// so the plain and idempotent create paths share canonical fields.
+func toCreateCommand(req createRequest) (service.CreateCommand, error) {
+	recordedAt, err := domain.ParseRecordedAt(req.RecordedAt, time.Now().UTC())
+	if err != nil {
+		return service.CreateCommand{}, err
+	}
+	return service.CreateCommand{
+		Filename:    req.Filename,
+		ContentType: req.ContentType,
+		SizeBytes:   req.SizeBytes,
+		RecordedAt:  recordedAt,
+	}, nil
 }
 
 type createResponse struct {
@@ -92,11 +108,12 @@ func (h *Handler) CreateUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.uploads.CreateUpload(r.Context(), principal.UserID, service.CreateCommand{
-		Filename:    req.Filename,
-		ContentType: req.ContentType,
-		SizeBytes:   req.SizeBytes,
-	})
+	cmd, err := toCreateCommand(req)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	res, err := h.uploads.CreateUpload(r.Context(), principal.UserID, cmd)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -119,12 +136,13 @@ func (h *Handler) createIdempotent(w http.ResponseWriter, r *http.Request, userI
 		writeServiceError(w, r, err)
 		return
 	}
-	reqHash := hashCreateCommand(req)
-	out, err := h.uploads.CreateUploadIdempotent(r.Context(), userID, service.CreateCommand{
-		Filename:    req.Filename,
-		ContentType: req.ContentType,
-		SizeBytes:   req.SizeBytes,
-	}, key, reqHash, encodeCreateResponse)
+	cmd, err := toCreateCommand(req)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	reqHash := hashCreateCommand(cmd)
+	out, err := h.uploads.CreateUploadIdempotent(r.Context(), userID, cmd, key, reqHash, encodeCreateResponse)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -226,6 +244,7 @@ type getResponse struct {
 	SizeBytes  *int64  `json:"size_bytes"`
 	Content    string  `json:"content_type"`
 	Status     string  `json:"status"`
+	RecordedAt *string `json:"recorded_at,omitempty"`
 	CreatedAt  string  `json:"created_at"`
 	UploadedAt *string `json:"uploaded_at,omitempty"`
 }
@@ -254,6 +273,10 @@ func (h *Handler) GetUpload(w http.ResponseWriter, r *http.Request) {
 		Content:   upload.ContentType,
 		Status:    upload.Status,
 		CreatedAt: upload.CreatedAt.UTC().Format(time.RFC3339),
+	}
+	if upload.RecordedAt != nil {
+		recordedAt := upload.RecordedAt.UTC().Format(time.RFC3339)
+		resp.RecordedAt = &recordedAt
 	}
 	size := upload.ActualSize
 	if size == nil {
@@ -286,9 +309,14 @@ func readRawBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, b
 }
 
 // hashCreateCommand hashes canonical fields so semantically identical
-// retries with different JSON whitespace still replay.
-func hashCreateCommand(req createRequest) string {
-	filename, contentType := domain.NormalizeCreate(req.Filename, req.ContentType)
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d", filename, contentType, req.SizeBytes)))
+// retries with different JSON whitespace still replay. recorded_at is
+// normalized to UTC RFC3339 so equivalent offsets hash the same.
+func hashCreateCommand(cmd service.CreateCommand) string {
+	filename, contentType := domain.NormalizeCreate(cmd.Filename, cmd.ContentType)
+	recordedAt := ""
+	if cmd.RecordedAt != nil {
+		recordedAt = cmd.RecordedAt.UTC().Format(time.RFC3339)
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d|%s", filename, contentType, cmd.SizeBytes, recordedAt)))
 	return hex.EncodeToString(sum[:])
 }

@@ -68,6 +68,41 @@ describe('applyEventToRecords', () => {
     assert.equal(next[0]!.outcome, 'pending');
   });
 
+  it('stores the device recording time from file_done', () => {
+    let records = applyEventToRecords([], announce(), NOW);
+    records = applyEventToRecords(
+      records,
+      {
+        type: 'file_done',
+        fileId: 'aaaa000000000001',
+        crcOk: true,
+        totalBytes: 2048,
+        ingestStatus: 'pending',
+        vadStatus: 'pending',
+        recordedAt: 1_789_194_600_000,
+      },
+      NOW + 100,
+    );
+    assert.equal(records[0]!.recordedAt, 1_789_194_600_000);
+  });
+
+  it('leaves recordedAt unset when the device had no anchor', () => {
+    let records = applyEventToRecords([], announce(), NOW);
+    records = applyEventToRecords(
+      records,
+      {
+        type: 'file_done',
+        fileId: 'aaaa000000000001',
+        crcOk: true,
+        totalBytes: 2048,
+        ingestStatus: 'pending',
+        vadStatus: 'pending',
+      },
+      NOW + 100,
+    );
+    assert.equal(records[0]!.recordedAt, undefined);
+  });
+
   it('marks an accepted transfer uploaded', () => {
     let records = applyEventToRecords([], announce(), NOW);
     records = applyEventToRecords(

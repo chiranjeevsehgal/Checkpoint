@@ -1245,6 +1245,8 @@ class CheckpointClient:
         file_id = struct.unpack("<Q", p[0:8])[0]
         file_crc = struct.unpack("<I", p[8:12])[0]
         total = struct.unpack("<I", p[12:16])[0]
+        # Optional time trailer: boot_id(4) + start_unix_s(8) + ticks(8) + dur_ms(4)
+        recorded_at = struct.unpack("<Q", p[20:28])[0] if len(p) >= 40 else 0
 
         f = self.current_file
         ok = False
@@ -1284,6 +1286,9 @@ class CheckpointClient:
                         "mtu": self.mtu, "frag_size": self.frag_size,
                         "duplicates": self.bench.duplicates,
                         "decrypt_fail": self.bench.decrypt_fail,
+                        **({"recorded_at": time.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(recorded_at))}
+                           if recorded_at > 0 else {}),
                     }, indent=2))
                 except Exception:
                     pass

@@ -38,6 +38,12 @@ export interface CompletedUpload {
   status: string;
 }
 
+export interface UploadOptions {
+  idempotencyKey?: string;
+  /** Device recording start in milliseconds; omitted when the device had no anchor. */
+  recordedAtMs?: number;
+}
+
 interface CreateResponse {
   upload_id: string;
   upload: { url: string };
@@ -104,7 +110,7 @@ export class IngestionUploader {
     data: Uint8Array,
     filename: string,
     contentType = 'audio/ogg',
-    idempotencyKey?: string,
+    options: UploadOptions = {},
   ): Promise<CompletedUpload> {
     if (data.length > INGEST_MAX_BYTES) {
       throw new Error(`too-large: ${data.length} > ${INGEST_MAX_BYTES}`);
@@ -113,7 +119,7 @@ export class IngestionUploader {
       throw new Error('ingest user ID is not a valid UUID — check Settings > User ID');
     }
     const headers: Record<string, string> = {};
-    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey.slice(0, 128);
+    if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey.slice(0, 128);
     let created: CreateResponse;
     try {
       created = await apiFetch<CreateResponse>(
@@ -124,6 +130,9 @@ export class IngestionUploader {
             filename,
             content_type: contentType,
             size_bytes: data.length,
+            ...(options.recordedAtMs
+              ? { recorded_at: new Date(options.recordedAtMs).toISOString() }
+              : {}),
           }),
           signal: this.signal(),
           headers,

@@ -292,6 +292,17 @@ class SyncEngine {
     }
   }
 
+  private async syncClock(client: CheckpointClient): Promise<void> {
+    try {
+      const code = await client.cmdTimeSet(Math.floor(Date.now() / 1000));
+      this.appendLog(`[ui] clock sync status=${ctrlStatusText(code)}`);
+    } catch (error) {
+      this.appendLog(
+        `[ui] clock sync failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
+    }
+  }
+
   private async onForeground(): Promise<void> {
     this.cleanup();
     void this.drainQueue();
@@ -399,12 +410,10 @@ class SyncEngine {
       this.appendLog(`  [ingest] uploading file_${record.fileId}.ogg (${bytes.length}B) ...`);
       const uploader = new IngestionUploader(this.settings.serverUrl, this.settings.userId);
       try {
-        const result = await uploader.upload(
-          bytes,
-          `file_${record.fileId}.ogg`,
-          'audio/ogg',
-          record.fileId,
-        );
+        const result = await uploader.upload(bytes, `file_${record.fileId}.ogg`, 'audio/ogg', {
+          idempotencyKey: record.fileId,
+          recordedAtMs: record.recordedAt,
+        });
         this.appendLog(`  [ingest] OK upload_id=${result.uploadId} status=${result.status}`);
         this.reportIngest(record.fileId, result.uploadId, result.status, '');
         this.patchRecord(record.fileId, { attempts: 0, nextAttemptAt: undefined });
@@ -532,6 +541,7 @@ class SyncEngine {
     this.patchRecord(file.fileIdHex, {
       localUri: receivedFile(file.fileIdHex, '.ogg').uri,
       vad,
+      ...(file.recordedAt ? { recordedAt: file.recordedAt } : {}),
     });
     const record = this.snapshot.transfers.find((item) => item.fileId === file.fileIdHex);
     if (record) await this.uploadRecord(record);
@@ -666,6 +676,7 @@ class SyncEngine {
         await client.supervise(target, enrollKey, {
           stopped: () => this.stopped,
           onReady: async () => {
+            await this.syncClock(client);
             this.setState({ connected: true, busy: false, autoConnecting: false });
             this.setState({ deviceId: await getEnrolledDeviceId(), enrolled: true });
             this.appendLog('[ui] listening for file transfers …');
@@ -688,6 +699,7 @@ class SyncEngine {
               autoConnecting: false,
               linkState: 'listening',
             });
+            void this.syncClock(client);
           },
           onTick: async () => {
             const now = Date.now();

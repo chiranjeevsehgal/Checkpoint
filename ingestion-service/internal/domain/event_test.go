@@ -15,8 +15,8 @@ func TestNewAudioReadyPayloadTranscription(t *testing.T) {
 		ExpectedSize: &size,
 	}
 	got := NewAudioReadyPayload("event-1", u, 184320, "abc123", now)
-	if got.SchemaVersion != SchemaVersion || SchemaVersion != 2 {
-		t.Fatalf("schema version must be 2, got %+v", got)
+	if got.SchemaVersion != SchemaVersion || SchemaVersion != 3 {
+		t.Fatalf("schema version must be 3, got %+v", got)
 	}
 	if got.EventType != EventTranscriptionRequested {
 		t.Fatalf("event type must be %q, got %q", EventTranscriptionRequested, got.EventType)
@@ -53,5 +53,37 @@ func TestNewAudioReadyPayloadTranscription(t *testing.T) {
 	data := m["data"].(map[string]any)
 	if _, ok := data["checksum_sha256"]; ok {
 		t.Fatalf("empty checksum must be omitted, got %v", data)
+	}
+	if _, ok := data["recorded_at"]; ok {
+		t.Fatalf("absent recorded_at must be omitted, got %v", data)
+	}
+}
+
+func TestNewAudioReadyPayloadRecordedAt(t *testing.T) {
+	now := time.Date(2026, 9, 6, 10, 15, 30, 0, time.UTC)
+	recorded := time.Date(2026, 9, 6, 9, 0, 0, 0, time.UTC)
+	size := int64(1024)
+	u := &Upload{
+		ID: "audio-1", UserID: "user-1", Bucket: "audio",
+		ObjectKey: "user-1/2026/09/06/audio-1", ContentType: "audio/ogg",
+		ExpectedSize: &size, RecordedAt: &recorded,
+	}
+
+	got := NewAudioReadyPayload("event-1", u, 184320, "abc123", now)
+	if got.Data.RecordedAt != "2026-09-06T09:00:00Z" {
+		t.Fatalf("recorded_at = %q, want 2026-09-06T09:00:00Z", got.Data.RecordedAt)
+	}
+
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	data := m["data"].(map[string]any)
+	if data["recorded_at"] != "2026-09-06T09:00:00Z" {
+		t.Fatalf("round-trip lost recorded_at: %v", data)
 	}
 }

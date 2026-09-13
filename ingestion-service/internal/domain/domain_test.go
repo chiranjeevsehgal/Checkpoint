@@ -76,6 +76,34 @@ func TestValidateChecksumFormat(t *testing.T) {
 	}
 }
 
+func TestParseRecordedAt(t *testing.T) {
+	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+
+	for _, raw := range []string{"", "   "} {
+		got, err := ParseRecordedAt(raw, now)
+		if err != nil || got != nil {
+			t.Fatalf("empty %q must yield nil,nil; got %v,%v", raw, got, err)
+		}
+	}
+
+	got, err := ParseRecordedAt("2026-09-13T10:15:00+05:30", now)
+	if err != nil {
+		t.Fatalf("valid recorded_at rejected: %v", err)
+	}
+	if want := time.Date(2026, 9, 13, 4, 45, 0, 0, time.UTC); got == nil || !got.Equal(want) {
+		t.Fatalf("got %v, want %v UTC", got, want)
+	}
+
+	if _, err := ParseRecordedAt("2026-09-14T11:00:00Z", now); err != nil {
+		t.Fatalf("within future skew must be accepted: %v", err)
+	}
+	for _, bad := range []string{"not-a-date", "2026-09-15T00:00:00Z"} {
+		if _, err := ParseRecordedAt(bad, now); !errors.Is(err, ErrInvalidRecordedAt) {
+			t.Fatalf("%q: want ErrInvalidRecordedAt, got %v", bad, err)
+		}
+	}
+}
+
 func TestCompletionStates(t *testing.T) {
 	if !CanTransitionToComplete(StatusUploading) {
 		t.Fatal("UPLOADING must allow completion")

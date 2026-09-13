@@ -231,6 +231,54 @@ func TestCreateIdempotencyCanonicalHash(t *testing.T) {
 	}
 }
 
+func TestCreateRecordedAt(t *testing.T) {
+	valid := `{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"recorded_at":"2020-01-01T00:00:00Z"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(valid))
+	authed(req)
+	testRouter(&fakeService{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("valid recorded_at must be 201, got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	for _, bad := range []string{
+		`{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"recorded_at":"not-a-date"}`,
+		`{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"recorded_at":"2999-01-01T00:00:00Z"}`,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(bad))
+		authed(req)
+		testRouter(&fakeService{}).ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("bad recorded_at must be 400, got %d (%s)", rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestCreateIdempotencyRecordedAtChangesHash(t *testing.T) {
+	svc := &fakeService{}
+	r := NewRouter(svc, &fakeIdem{rows: map[string]repository.IdempotencyRecord{}}, nil, nil, metrics.NewRegistry())
+	first := `{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"recorded_at":"2020-01-01T00:00:00Z"}`
+	second := `{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"recorded_at":"2020-01-02T00:00:00Z"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(first))
+	authed(req)
+	req.Header.Set("Idempotency-Key", "key-recorded")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("first create: got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(second))
+	authed(req)
+	req.Header.Set("Idempotency-Key", "key-recorded")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("different recorded_at under same key must be 400, got %d", rec.Code)
+	}
+}
+
 func TestCreateBodyTooLargeAndBadKey(t *testing.T) {
 	r := testRouter(&fakeService{})
 	big := strings.Repeat("a", (1<<20)+10)

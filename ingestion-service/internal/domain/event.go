@@ -18,8 +18,8 @@ const (
 )
 
 // SchemaVersion versions the transcription payload contract so ingestion
-// and workers can evolve independently.
-const SchemaVersion = 2
+// and workers can evolve independently. v3 adds data.recorded_at.
+const SchemaVersion = 3
 
 // AudioReadyData is the deliverable core of the transcription job request.
 // Workers fetch bytes by-reference via Bucket+ObjectKey from MinIO.
@@ -31,6 +31,7 @@ type AudioReadyData struct {
 	ContentType    string `json:"content_type"`
 	SizeBytes      int64  `json:"size_bytes"`
 	ChecksumSHA256 string `json:"checksum_sha256,omitempty"`
+	RecordedAt     string `json:"recorded_at,omitempty"`
 }
 
 // AudioReadyPayload is the versioned envelope published toward Kafka.
@@ -45,6 +46,10 @@ type AudioReadyPayload struct {
 // NewAudioReadyPayload builds the Kafka-bound envelope for an upload.
 // checksum is the client-confirmed sha256 (may be empty when absent).
 func NewAudioReadyPayload(eventID string, upload *Upload, sizeBytes int64, checksum string, now time.Time) AudioReadyPayload {
+	recordedAt := ""
+	if upload.RecordedAt != nil {
+		recordedAt = upload.RecordedAt.UTC().Format(time.RFC3339)
+	}
 	return AudioReadyPayload{
 		SchemaVersion: SchemaVersion,
 		EventID:       eventID,
@@ -58,6 +63,7 @@ func NewAudioReadyPayload(eventID string, upload *Upload, sizeBytes int64, check
 			ContentType:    upload.ContentType,
 			SizeBytes:      sizeBytes,
 			ChecksumSHA256: checksum,
+			RecordedAt:     recordedAt,
 		},
 	}
 }
