@@ -135,6 +135,20 @@
 #define UI_SLOT_DROP_MS 15000
 #define AUTH_ENROLL_WINDOW_MS 60000
 
+// Power — deep sleep after the mic has been off. GPIO1 is RTC-capable and not
+// a strapping pin, so it wakes the S3 from deep sleep (level-triggered; the
+// hold duration is enforced in power.cpp, not by hardware).
+#define POWER_AUTO_SLEEP_ENABLE 1
+#define POWER_IDLE_SLEEP_MS (30UL * 60UL * 1000UL) // mic-off -> deep sleep
+#define POWER_WAKE_HOLD_MS 3500                     // hold to accept a wake
+#define POWER_WAKE_RELEASE_CAP_MS 3500              // cap wait for release
+#define POWER_WAKE_LED_FLASHES 2
+#define POWER_SLEEP_LED_FLASHES 1
+#define POWER_LED_FLASH_ON_MS 120
+#define POWER_LED_FLASH_OFF_MS 120
+#define POWER_LED_FLASH_PERIOD_MS (POWER_LED_FLASH_ON_MS + POWER_LED_FLASH_OFF_MS)
+#define POWER_LED_B 255
+
 // System
 // NOTE: libopus opus_encode() needs ~20-30KB call depth (SILK+CELT, incl. ROM
 // memmove loop at 0x40056f5c-72 seen in backtraces). 12KB overflows the

@@ -11,6 +11,7 @@
 #include "auth.h"
 #include "log.h"
 #include "control.h"
+#include "power.h"
 
 static TaskHandle_t uiTaskHandle = nullptr;
 static TaskHandle_t transferTaskHandle = nullptr;
@@ -29,8 +30,10 @@ void setup() {
   else if (rr == ESP_RST_WDT) rr_str = "WDT";
   else if (rr == ESP_RST_BROWNOUT) rr_str = "BROWNOUT";
   else if (rr == ESP_RST_SDIO) rr_str = "SDIO";
+  else if (rr == ESP_RST_DEEPSLEEP) rr_str = "DEEPSLEEP";
 
   ui_init();
+  power_init();
   control_init();
   xTaskCreatePinnedToCore(ui_task, "ui", TASK_STACK_UI, nullptr, TASK_PRIO_UI, &uiTaskHandle, 0);
 
@@ -152,6 +155,7 @@ void loop() {
   ble_check_final_diag();
   control_poll();
   auth_usb_poll();
+  power_poll();
 
   if (ble_is_connected() && ble_is_handshaked()) {
     // keepalive handled in ble_service (BLE_KEEPALIVE_MS reserved)
