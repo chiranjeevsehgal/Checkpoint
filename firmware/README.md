@@ -16,6 +16,7 @@ firmware/
     crypto.{cpp,h}          #   AES-128-CCM, SHA256 KDF
     bench.h                 #   BENCH csv header
     ui.{cpp,h}              #   button debounce, LED states
+    power.{cpp,h}           #   mic-off deep sleep, held-button wake
   examples/                 # bring-up sketches (keep folder==.ino per Arduino)
     board_test_rainbow/     #   RGB WS2812 sanity
     mic_test/               #   I2S only, no SD/BLE
