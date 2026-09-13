@@ -819,15 +819,6 @@ class SyncEngine {
     });
   }
 
-  async applySync(enabled: boolean): Promise<number | null> {
-    return this.withClient('sync-apply', async (client) => {
-      const code = await client.cmdSyncSet(enabled);
-      this.appendLog(`[ui] sync-apply enabled=${enabled} status=${ctrlStatusText(code)}`);
-      await client.reqStatus();
-      return code;
-    });
-  }
-
   listPrev = async (): Promise<void> => {
     const page = this.snapshot.listPage;
     const start = Math.max(0, page.start - Math.max(1, page.count));

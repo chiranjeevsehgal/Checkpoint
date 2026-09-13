@@ -32,7 +32,7 @@ type Apply = (patch: Partial<CheckpointSettings>) => void;
 
 interface ValueSliderProps {
   label: string;
-  display: string;
+  format: (value: number) => string;
   min: number;
   max: number;
   step: number;
@@ -47,14 +47,30 @@ function thresholdHint(value: number): string {
   return 'Balanced sensitivity.';
 }
 
-function ValueSlider({ label, display, min, max, step, value, hint, onChange }: ValueSliderProps) {
+function ValueSlider({ label, format, min, max, step, value, hint, onChange }: ValueSliderProps) {
+  const [draft, setDraft] = useState(value);
+  const [trackedValue, setTrackedValue] = useState(value);
+
+  if (value !== trackedValue) {
+    setTrackedValue(value);
+    setDraft(value);
+  }
+
   return (
     <View className="gap-1">
       <View className="flex-row justify-between">
         <Text className="text-[12px]">{label}</Text>
-        <Text className="font-mono text-[12px]">{display}</Text>
+        <Text className="font-mono text-[12px]">{format(draft)}</Text>
       </View>
-      <RangeSlider min={min} max={max} step={step} value={value} onValueChange={onChange} />
+      <RangeSlider
+        min={min}
+        max={max}
+        step={step}
+        value={draft}
+        accessibilityLabel={label}
+        onValueChange={setDraft}
+        onSlidingComplete={onChange}
+      />
       {hint ? (
         <Text variant="muted" className="text-[11px]">
           {hint}
@@ -64,7 +80,15 @@ function ValueSlider({ label, display, min, max, step, value, hint, onChange }: 
   );
 }
 
-function SpeechSection({ settings, apply }: { settings: CheckpointSettings; apply: Apply }) {
+function SpeechSection({
+  settings,
+  apply,
+  applySilent,
+}: {
+  settings: CheckpointSettings;
+  apply: Apply;
+  applySilent: Apply;
+}) {
   return (
     <Section title="Speech detection">
       <Card>
@@ -76,30 +100,38 @@ function SpeechSection({ settings, apply }: { settings: CheckpointSettings; appl
         />
         <ValueSlider
           label="VAD threshold"
-          display={settings.vadThreshold.toFixed(2)}
+          format={(value) => value.toFixed(2)}
           min={0}
           max={1}
           step={0.01}
           value={settings.vadThreshold}
           hint={thresholdHint(settings.vadThreshold)}
-          onChange={(value) => apply({ vadThreshold: Number(value.toFixed(2)) })}
+          onChange={(value) => applySilent({ vadThreshold: Number(value.toFixed(2)) })}
         />
         <ValueSlider
           label="Minimum speech duration"
-          display={`${settings.minSpeechS.toFixed(1)}s`}
+          format={(value) => `${value.toFixed(1)}s`}
           min={0.1}
           max={3}
           step={0.1}
           value={settings.minSpeechS}
           hint={`Clips shorter than ${settings.minSpeechS.toFixed(1)}s are dropped as noise.`}
-          onChange={(value) => apply({ minSpeechS: Number(value.toFixed(1)) })}
+          onChange={(value) => applySilent({ minSpeechS: Number(value.toFixed(1)) })}
         />
       </Card>
     </Section>
   );
 }
 
-function TransferSection({ settings, apply }: { settings: CheckpointSettings; apply: Apply }) {
+function TransferSection({
+  settings,
+  apply,
+  applySilent,
+}: {
+  settings: CheckpointSettings;
+  apply: Apply;
+  applySilent: Apply;
+}) {
   return (
     <Section title="Transfer & sync">
       <Card>
@@ -117,13 +149,13 @@ function TransferSection({ settings, apply }: { settings: CheckpointSettings; ap
         />
         <ValueSlider
           label="Keep completed transfers"
-          display={`${settings.retentionHours}h`}
+          format={(value) => `${Math.round(value)}h`}
           min={1}
           max={168}
           step={1}
           value={settings.retentionHours}
           hint={`Completed transfers and their local audio are cleaned up after ${settings.retentionHours}h. Pending and failed audio is never deleted.`}
-          onChange={(value) => apply({ retentionHours: Math.round(value) })}
+          onChange={(value) => applySilent({ retentionHours: Math.round(value) })}
         />
       </Card>
       <BatteryOptimizationCard />
@@ -278,6 +310,13 @@ export function CheckpointSettingsScreen() {
 
   const apply = useCallback<Apply>(
     (patch) => {
+      void updateSettings({ ...settings, ...patch });
+    },
+    [settings, updateSettings],
+  );
+
+  const applySilent = useCallback<Apply>(
+    (patch) => {
       void updateSettings({ ...settings, ...patch }, { silent: true });
     },
     [settings, updateSettings],
@@ -323,8 +362,8 @@ export function CheckpointSettingsScreen() {
         contentContainerStyle={{ gap: 24, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
       >
-        <SpeechSection settings={settings} apply={apply} />
-        <TransferSection settings={settings} apply={apply} />
+        <SpeechSection settings={settings} apply={apply} applySilent={applySilent} />
+        <TransferSection settings={settings} apply={apply} applySilent={applySilent} />
         <BackendSection
           settings={settings}
           onSave={onSaveServer}

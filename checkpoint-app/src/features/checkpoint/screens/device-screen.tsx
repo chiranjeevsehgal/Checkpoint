@@ -129,13 +129,13 @@ function LedCard({
   brightness,
   onMutedChange,
   onBrightnessChange,
-  onApply,
+  onBrightnessCommit,
 }: {
   muted: boolean;
   brightness: number;
   onMutedChange: (muted: boolean) => void;
   onBrightnessChange: (brightness: number) => void;
-  onApply: () => void;
+  onBrightnessCommit: (brightness: number) => void;
 }) {
   return (
     <Section title="Status light">
@@ -156,27 +156,24 @@ function LedCard({
             max={255}
             step={1}
             value={brightness}
+            accessibilityLabel="Brightness"
             onValueChange={onBrightnessChange}
+            onSlidingComplete={onBrightnessCommit}
           />
         </View>
-        <Button variant="outline" onPress={onApply}>
-          <Text>Apply light settings</Text>
-        </Button>
       </Card>
     </Section>
   );
 }
 
 export function DeviceScreen() {
-  const { connected, status, settings, toggleRec, refreshStatus, applyLed, applySync } =
-    useCheckpoint();
+  const { connected, status, settings, toggleRec, refreshStatus, applyLed } = useCheckpoint();
   const router = useRouter();
   const [controls, setControls] = useState<DeviceControls>({ session: connected });
   const { refreshing, onRefresh } = useRefresh(refreshStatus);
   const active = controls.session === connected ? controls : { session: connected };
   const muted = active.muted ?? status?.muted ?? false;
   const brightness = active.brightness ?? status?.brightness ?? 30;
-  const sync = status?.sync ?? false;
 
   const updateControls = (patch: Partial<Omit<DeviceControls, 'session'>>) => {
     setControls({ ...active, ...patch, session: connected });
@@ -218,20 +215,13 @@ export function DeviceScreen() {
         <LedCard
           muted={muted}
           brightness={brightness}
-          onMutedChange={(next) => updateControls({ muted: next })}
+          onMutedChange={(next) => {
+            updateControls({ muted: next });
+            void applyLed(next, brightness);
+          }}
           onBrightnessChange={(value) => updateControls({ brightness: value })}
-          onApply={() => void applyLed(muted, brightness)}
+          onBrightnessCommit={(value) => void applyLed(muted, value)}
         />
-        <Section title="Auto-sync">
-          <Card>
-            <Toggle
-              label="Automatically transfer new recordings"
-              description="Let the pendant send new files as soon as they are ready."
-              value={sync}
-              onChange={(next) => void applySync(next)}
-            />
-          </Card>
-        </Section>
       </ScrollView>
     </CheckpointScreen>
   );

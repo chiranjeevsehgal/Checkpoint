@@ -63,7 +63,6 @@ interface CheckpointContextValue {
   listNext: () => Promise<void>;
   toggleRec: () => Promise<void>;
   applyLed: (muted: boolean, brightness: number) => Promise<void>;
-  applySync: (enabled: boolean) => Promise<void>;
   requestDelete: (path: string) => void;
   requestErase: () => void;
   requestForget: () => void;
@@ -141,16 +140,6 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     async (muted: boolean, brightness: number) => {
       const code = await syncEngine.applyLed(muted, brightness);
       if (code === CTRL_OK) showToast('LED settings applied.');
-    },
-    [showToast],
-  );
-
-  const applySync = useCallback(
-    async (enabled: boolean) => {
-      const code = await syncEngine.applySync(enabled);
-      if (code === CTRL_OK) {
-        showToast(`Auto-sync ${enabled ? 'enabled' : 'disabled'}.`);
-      }
     },
     [showToast],
   );
@@ -256,7 +245,6 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       listNext: syncEngine.listNext,
       toggleRec: syncEngine.toggleRec,
       applyLed,
-      applySync,
       requestDelete,
       requestErase,
       requestForget,
@@ -270,7 +258,6 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     }),
     [
       applyLed,
-      applySync,
       claimText,
       connect,
       disconnect,
