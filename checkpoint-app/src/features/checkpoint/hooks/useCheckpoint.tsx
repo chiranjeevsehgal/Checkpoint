@@ -10,6 +10,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 
+import { shouldRunSyncService } from '../backgroundPolicy.ts';
 import { startSyncService, stopSyncService } from '../backgroundService.ts';
 import { CTRL_OK } from '../config.ts';
 import { networkMonitor } from '../networkMonitor.ts';
@@ -89,6 +90,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
   const snapshot = useSyncExternalStore(syncEngine.subscribe, syncEngine.getSnapshot);
   const [claimText, setClaimText] = useState('');
   const [settings, setSettings] = useState<CheckpointSettings>(defaultSettings);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [dialog, setDialog] = useState<DialogState>(null);
 
   useEffect(() => {
@@ -98,11 +100,17 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       networkMonitor.configure(loaded.serverUrl);
       void syncEngine.start();
       void networkMonitor.start();
+      setSettingsLoaded(true);
     });
   }, []);
 
   useEffect(() => {
-    if (!settings.autoSyncEnabled) {
+    if (!settingsLoaded) return;
+    const shouldRun = shouldRunSyncService({
+      connected: snapshot.connected,
+      autoSyncEnabled: settings.autoSyncEnabled,
+    });
+    if (!shouldRun) {
       void stopSyncService();
       return;
     }
@@ -110,7 +118,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       connected: snapshot.connected,
       recording: snapshot.status?.recording ?? false,
     });
-  }, [settings.autoSyncEnabled, snapshot.connected, snapshot.status?.recording]);
+  }, [settingsLoaded, settings.autoSyncEnabled, snapshot.connected, snapshot.status?.recording]);
 
   const connect = useCallback(async () => {
     syncEngine.configure(settings);
