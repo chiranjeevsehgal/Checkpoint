@@ -138,8 +138,8 @@ function TransferSection({
     <Section title="Sync">
       <Card>
         <Toggle
-          label="Auto-discover pendant"
-          description="Look for your pendant and sync automatically when the app opens."
+          label="Auto-sync"
+          description="Find your pendant and sync automatically when the app opens."
           value={settings.autoSyncEnabled}
           onChange={(next) => apply({ autoSyncEnabled: next })}
         />

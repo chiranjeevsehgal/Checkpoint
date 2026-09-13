@@ -296,7 +296,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
         }
         body={
           dialog?.kind === 'erase'
-            ? `Erase ALL recordings from the pendant SD card? This cannot be undone.${
+            ? `Erase ALL recordings from the pendant memory? This cannot be undone.${
                 snapshot.storage
                   ? ` Files: ${snapshot.storage.files} · Used: ${formatBytes(snapshot.storage.used)}.`
                   : ''

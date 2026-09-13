@@ -232,7 +232,7 @@ export function StorageScreen() {
 
   return (
     <CheckpointScreen>
-      <AppHeader title="Storage" subtitle="Pendant SD card" />
+      <AppHeader title="Storage" subtitle="Pendant Memory" />
       <FlatList
         className="flex-1"
         data={files}

@@ -23,6 +23,10 @@ describe('linkView', () => {
     assert.equal(linkView('bluetooth off', 'Checkpoint').openSettings, false);
   });
 
+  it('describes an active reconnect', () => {
+    assert.equal(linkView('reconnecting', 'Checkpoint').label, 'Reconnecting…');
+  });
+
   it('falls back to idle for unknown states', () => {
     assert.equal(linkView('something-else', 'Checkpoint').label, 'Not connected');
   });
