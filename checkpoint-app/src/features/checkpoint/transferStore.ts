@@ -1,4 +1,9 @@
-import { classifyOutcome, isPendingValue, type TransferOutcome } from './transferView.ts';
+import {
+  classifyOutcome,
+  isPendingValue,
+  recordTime,
+  type TransferOutcome,
+} from './transferView.ts';
 import type { CheckpointEvent } from './types.ts';
 
 export type { TransferOutcome };
@@ -6,6 +11,7 @@ export type { TransferOutcome };
 export interface TransferRecord {
   fileId: string;
   createdAt: number;
+  recordedAt?: number;
   updatedAt: number;
   totalBytes: number;
   received: number;
@@ -93,6 +99,7 @@ export function applyEventToRecords(
               received: record.totalFrags,
               ingest: event.ingestStatus || 'pending',
               vad: event.vadStatus || '—',
+              ...(event.recordedAt ? { recordedAt: event.recordedAt } : {}),
               ...(localUri ? { localUri } : {}),
             })
           : record,
@@ -117,7 +124,9 @@ export function applyEventToRecords(
 }
 
 export function sortTransfers(records: TransferRecord[]): TransferRecord[] {
-  return [...records].sort((a, b) => b.createdAt - a.createdAt || b.fileId.localeCompare(a.fileId));
+  return [...records].sort(
+    (a, b) => recordTime(b) - recordTime(a) || b.fileId.localeCompare(a.fileId),
+  );
 }
 
 export function pruneExpired(

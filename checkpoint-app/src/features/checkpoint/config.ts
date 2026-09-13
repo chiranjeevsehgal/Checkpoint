@@ -136,6 +136,7 @@ export const CTRL_CMD_LED_SET = 0x10;
 export const CTRL_CMD_LED_GET = 0x11;
 export const CTRL_CMD_SYNC_SET = 0x12;
 export const CTRL_CMD_SYNC_GET = 0x13;
+export const CTRL_CMD_TIME_SET = 0x14;
 export const CTRL_CMD_FILE_DELETE = 0x20;
 export const CTRL_CMD_STORAGE_ERASE = 0x21;
 export const CTRL_CMD_FILE_FETCH = 0x22;
@@ -157,3 +158,7 @@ export const CTRL_ERASE_CONFIRM = 0x02;
 export const CTRL_LIST_FLAG_PENDING = 0x01;
 export const CTRL_LIST_FLAG_CRC = 0x02;
 export const CTRL_LIST_FLAG_ACTIVE = 0x04;
+
+/** FILE_DONE optional trailer: boot_id(4) + start_unix_s(8) + ticks(8) + dur_ms(4). */
+export const FILE_DONE_TIME_OFFSET = 20;
+export const FILE_DONE_TIME_LEN = 40;

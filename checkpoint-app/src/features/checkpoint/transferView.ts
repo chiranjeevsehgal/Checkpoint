@@ -104,6 +104,14 @@ function transferHeadline(view: TransferView): string {
   return 'Ready';
 }
 
+/**
+ * Capture time when the device provided an anchor, else the phone receipt
+ * time. Legacy records and unsynced boots keep behaving exactly as before.
+ */
+export function recordTime(record: { createdAt: number; recordedAt?: number }): number {
+  return record.recordedAt ?? record.createdAt;
+}
+
 export function formatTransferTime(at: number, now: number = Date.now()): string {
   const date = new Date(at);
   const today = new Date(now);
@@ -139,13 +147,13 @@ function transferDayTitle(at: number, now: number): string {
 }
 
 /** Groups newest-first records into consecutive day sections. */
-export function groupTransfersByDay<T extends { createdAt: number }>(
+export function groupTransfersByDay<T extends { createdAt: number; recordedAt?: number }>(
   records: T[],
   now: number = Date.now(),
 ): TransferDayGroup<T>[] {
   const groups: TransferDayGroup<T>[] = [];
   for (const record of records) {
-    const title = transferDayTitle(record.createdAt, now);
+    const title = transferDayTitle(recordTime(record), now);
     const current = groups[groups.length - 1];
     if (current?.title === title) current.data.push(record);
     else groups.push({ title, data: [record] });

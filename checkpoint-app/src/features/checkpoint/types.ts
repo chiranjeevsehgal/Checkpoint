@@ -66,6 +66,7 @@ export type CheckpointEvent =
       ingestStatus: string;
       vadStatus: string;
       preview?: boolean;
+      recordedAt?: number;
     }
   | { type: 'vad'; fileId: string; vadStatus: string; vadSpeechS: number }
   | {

@@ -7,6 +7,7 @@ import {
   CTRL_CMD_STORAGE_ERASE,
   CTRL_CMD_SYNC_GET,
   CTRL_CMD_SYNC_SET,
+  CTRL_CMD_TIME_SET,
   CTRL_ERR_BAD_ARG,
   CTRL_ERR_BUSY,
   CTRL_ERR_DENIED,
@@ -17,6 +18,8 @@ import {
   CTRL_LIST_FLAG_PENDING,
   CTRL_OK,
   CTRL_STORAGE_LEN,
+  FILE_DONE_TIME_LEN,
+  FILE_DONE_TIME_OFFSET,
 } from './config.ts';
 import { decodeUtf8 } from './ogg.ts';
 import type { DeviceFileList, DeviceStatus, LedState, StorageInfo } from './types.ts';
@@ -115,6 +118,26 @@ export function buildLedSetPayload(muted: boolean, brightness: number): Uint8Arr
 
 export function buildSyncSetPayload(enabled: boolean): Uint8Array {
   return new Uint8Array([CTRL_CMD_SYNC_SET, enabled ? 1 : 0]);
+}
+
+/** 9 bytes: command id then the phone unix time as u64 LE (SECONDS). */
+export function buildTimeSetPayload(unixSeconds: number): Uint8Array {
+  const out = new Uint8Array(9);
+  out[0] = CTRL_CMD_TIME_SET;
+  new DataView(out.buffer).setBigUint64(1, BigInt(Math.max(0, Math.floor(unixSeconds))), true);
+  return out;
+}
+
+/**
+ * Reads the optional FILE_DONE time trailer. Returns the recording start in
+ * milliseconds, or null when the trailer is absent or the device had no
+ * anchor (start_unix_s == 0).
+ */
+export function parseFileDoneTime(payload: Uint8Array): number | null {
+  if (payload.length < FILE_DONE_TIME_LEN) return null;
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  const unixSeconds = view.getBigUint64(FILE_DONE_TIME_OFFSET, true);
+  return unixSeconds > 0n ? Number(unixSeconds) * 1000 : null;
 }
 
 export function buildFileDeletePayload(path: string): Uint8Array {

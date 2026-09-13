@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   formatTransferTime,
   groupTransfersByDay,
+  recordTime,
   transferView,
   type TransferInput,
 } from '../transferView.ts';
@@ -100,6 +101,16 @@ describe('formatTransferTime', () => {
   });
 });
 
+describe('recordTime', () => {
+  it('prefers the device recording time when present', () => {
+    assert.equal(recordTime({ createdAt: 1000, recordedAt: 500 }), 500);
+  });
+
+  it('falls back to the phone receipt time', () => {
+    assert.equal(recordTime({ createdAt: 1000 }), 1000);
+  });
+});
+
 describe('groupTransfersByDay', () => {
   it('groups consecutive records into Today and Yesterday', () => {
     const now = new Date(2026, 4, 10, 20, 0, 0).getTime();
@@ -118,6 +129,20 @@ describe('groupTransfersByDay', () => {
         ['Yesterday', 1],
       ],
     );
+  });
+
+  it('groups by recording time when the device provided one', () => {
+    const now = new Date(2026, 4, 10, 20, 0, 0).getTime();
+    const groups = groupTransfersByDay(
+      [
+        {
+          createdAt: now,
+          recordedAt: new Date(2026, 4, 9, 20, 0, 0).getTime(),
+        },
+      ],
+      now,
+    );
+    assert.equal(groups[0]!.title, 'Yesterday');
   });
 
   it('returns no groups for no records', () => {
