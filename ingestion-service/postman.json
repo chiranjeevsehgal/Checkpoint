@@ -61,7 +61,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"filename\": \"speech.ogg\",\n  \"content_type\": \"audio/ogg\",\n  \"size_bytes\": {{fileSize}}\n}",
+							"raw": "{\n  \"filename\": \"speech.ogg\",\n  \"content_type\": \"audio/ogg\",\n  \"size_bytes\": {{fileSize}},\n  \"recorded_at\": \"2026-09-13T10:15:00Z\"\n}",
 							"options": {
 								"raw": {
 									"language": "json"

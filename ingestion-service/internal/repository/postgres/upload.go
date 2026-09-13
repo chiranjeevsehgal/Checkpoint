@@ -22,12 +22,12 @@ func (p *Pool) Create(ctx context.Context, upload *domain.Upload) error {
 		INSERT INTO uploads (
 			id, user_id, bucket, object_key,
 			original_filename, content_type,
-			expected_size_bytes, status,
+			expected_size_bytes, status, recorded_at,
 			upload_url_expires_at, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`,
 		upload.ID, upload.UserID, upload.Bucket, upload.ObjectKey,
 		upload.OriginalFilename, upload.ContentType,
-		nullableInt(upload.ExpectedSize), upload.Status,
+		nullableInt(upload.ExpectedSize), upload.Status, nullableTime(upload.RecordedAt),
 		nullableTime(upload.UploadExpiresAt), upload.CreatedAt,
 	)
 	return err
@@ -79,12 +79,12 @@ func (p *Pool) CreateUploadIdempotent(ctx context.Context, params repository.Ide
 		INSERT INTO uploads (
 			id, user_id, bucket, object_key,
 			original_filename, content_type,
-			expected_size_bytes, status,
+			expected_size_bytes, status, recorded_at,
 			upload_url_expires_at, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`,
 		upload.ID, upload.UserID, upload.Bucket, upload.ObjectKey,
 		upload.OriginalFilename, upload.ContentType,
-		nullableInt(upload.ExpectedSize), upload.Status,
+		nullableInt(upload.ExpectedSize), upload.Status, nullableTime(upload.RecordedAt),
 		nullableTime(upload.UploadExpiresAt), upload.CreatedAt,
 	); err != nil {
 		return nil, err
@@ -105,7 +105,7 @@ func (p *Pool) GetByIDForUser(ctx context.Context, userID, uploadID string) (*do
 		SELECT id, user_id, bucket, object_key,
 			original_filename, content_type,
 			expected_size_bytes, actual_size_bytes, checksum_sha256,
-			status, upload_url_expires_at,
+			status, recorded_at, upload_url_expires_at,
 			uploaded_at, submitted_at, created_at, updated_at
 		FROM uploads WHERE id = $1 AND user_id = $2`, uploadID, userID)
 	if err != nil {
@@ -198,7 +198,7 @@ func getTxUpload(ctx context.Context, tx pgx.Tx, uploadID, userID string) (*doma
 		SELECT id, user_id, bucket, object_key,
 			original_filename, content_type,
 			expected_size_bytes, actual_size_bytes, checksum_sha256,
-			status, upload_url_expires_at,
+			status, recorded_at, upload_url_expires_at,
 			uploaded_at, submitted_at, created_at, updated_at
 		FROM uploads WHERE id = $1 AND user_id = $2`, uploadID, userID)
 	if err != nil {
@@ -211,12 +211,12 @@ func scanUpload(row pgx.CollectableRow) (*domain.Upload, error) {
 	var u domain.Upload
 	var expected, actual pgtype.Int8
 	var checksum pgtype.Text
-	var expires, uploaded, submitted pgtype.Timestamptz
+	var recorded, expires, uploaded, submitted pgtype.Timestamptz
 	err := row.Scan(
 		&u.ID, &u.UserID, &u.Bucket, &u.ObjectKey,
 		&u.OriginalFilename, &u.ContentType,
 		&expected, &actual, &checksum,
-		&u.Status, &expires,
+		&u.Status, &recorded, &expires,
 		&uploaded, &submitted, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
@@ -227,6 +227,7 @@ func scanUpload(row pgx.CollectableRow) (*domain.Upload, error) {
 	if checksum.Valid {
 		u.ChecksumSHA256 = checksum.String
 	}
+	u.RecordedAt = timeFromPg(recorded)
 	u.UploadExpiresAt = timeFromPg(expires)
 	u.UploadedAt = timeFromPg(uploaded)
 	u.SubmittedAt = timeFromPg(submitted)

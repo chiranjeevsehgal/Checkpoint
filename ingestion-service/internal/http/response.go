@@ -68,7 +68,8 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusUnsupportedMediaType, CodeUnsupportedMediaType, "Content type is not supported.")
 	case errors.Is(err, domain.ErrInvalidFilename),
 		errors.Is(err, domain.ErrInvalidSize),
-		errors.Is(err, domain.ErrInvalidChecksum):
+		errors.Is(err, domain.ErrInvalidChecksum),
+		errors.Is(err, domain.ErrInvalidRecordedAt):
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, err.Error())
 	default:
 		writeError(w, r, http.StatusInternalServerError, CodeInternal, "Unexpected internal error.")
