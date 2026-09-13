@@ -3,7 +3,6 @@ import { ArrowLeft, Terminal } from 'lucide-react-native';
 import { Pressable, View } from 'react-native';
 
 import { HeaderIconButton } from '@/components/shared/header-icon-button';
-import { ThemeToggle } from '@/components/shared/theme-toggle';
 import { Icon } from '@/components/ui/icon';
 import { Text } from '@/components/ui/text';
 import { env } from '@/lib/env';
@@ -52,7 +51,6 @@ export function AppHeader({
             onPress={() => router.push('/debug-log')}
           />
         ) : null}
-        <ThemeToggle />
       </View>
     </View>
   );

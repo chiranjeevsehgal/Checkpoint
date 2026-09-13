@@ -149,40 +149,6 @@ function StorageHeader({
   );
 }
 
-function EraseCard({
-  connected,
-  busy,
-  erasing,
-  onErase,
-}: {
-  connected: boolean;
-  busy: boolean;
-  erasing: boolean;
-  onErase: () => void;
-}) {
-  return (
-    <Section title="Erase device storage">
-      <Card>
-        <Text variant="muted" className="text-[12px]">
-          Permanently delete all recordings stored on the pendant. This cannot be undone.
-        </Text>
-        <Button
-          variant="outline"
-          className="border-destructive"
-          disabled={!connected || busy || erasing}
-          onPress={onErase}
-        >
-          {erasing ? (
-            <ActivityIndicator size="small" />
-          ) : (
-            <Text className="text-destructive">Erase all recordings</Text>
-          )}
-        </Button>
-      </Card>
-    </Section>
-  );
-}
-
 function Pagination({
   page,
   pages,
@@ -223,7 +189,6 @@ export function StorageScreen() {
     listPrev,
     listNext,
     requestDelete,
-    requestErase,
     preview,
     previewStorageFile,
     deleting,
@@ -339,24 +304,16 @@ export function StorageScreen() {
           )
         }
         ListFooterComponent={
-          <View className="gap-4">
-            {showPagination ? (
-              <Pagination
-                page={page}
-                pages={pages}
-                canPrev={canPrev}
-                canNext={canNext}
-                onPrev={() => void listPrev()}
-                onNext={() => void listNext()}
-              />
-            ) : null}
-            <EraseCard
-              connected={connected}
-              busy={deleting !== null}
-              erasing={erasing}
-              onErase={requestErase}
+          showPagination ? (
+            <Pagination
+              page={page}
+              pages={pages}
+              canPrev={canPrev}
+              canNext={canNext}
+              onPrev={() => void listPrev()}
+              onNext={() => void listNext()}
             />
-          </View>
+          ) : null
         }
       />
     </CheckpointScreen>

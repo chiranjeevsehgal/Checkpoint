@@ -1,14 +1,16 @@
 import { useRouter } from 'expo-router';
 import { Pause, Play, RefreshCw, Upload } from 'lucide-react-native';
-import { FlatList, Pressable, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { Pressable, SectionList, View } from 'react-native';
 
 import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { playback, usePlayback } from '../playback.ts';
 import { statusDescriptor, TONE_TEXT } from '../status.ts';
-import type { TransferRecord } from '../transferStore.ts';
+import type { TransferOutcome, TransferRecord } from '../transferStore.ts';
 import {
   formatTransferTime,
+  groupTransfersByDay,
   transferView,
   type TransferStage,
   type TransferView,
@@ -33,6 +35,15 @@ const STAGE_INDEX: Record<TransferStage, number> = {
   uploading: 2,
   done: 3,
 };
+
+type TransferFilter = 'all' | TransferOutcome;
+
+const FILTERS: { id: TransferFilter; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'uploaded', label: 'Uploaded' },
+  { id: 'filtered', label: 'Filtered' },
+  { id: 'failed', label: 'Failed' },
+];
 
 function pipelineLabel(view: TransferView): string {
   if (view.failed) return 'Receive ✓ → Analyze ✓ → Upload ✕';
@@ -104,6 +115,7 @@ function TransferRow({ item, developerMode }: { item: TransferRecord; developerM
 export function TransfersScreen() {
   const { transfers, hydrated, settings, shareBench, refreshTransfers } = useCheckpoint();
   const router = useRouter();
+  const [filter, setFilter] = useState<TransferFilter>('all');
 
   const views = transfers.map(transferView);
   const uploaded = views.filter((view) => view.outcome === 'uploaded').length;
@@ -113,18 +125,28 @@ export function TransfersScreen() {
     (record) => record.outcome === 'pending' || record.outcome === 'failed',
   );
 
+  const visible = useMemo(
+    () =>
+      filter === 'all'
+        ? transfers
+        : transfers.filter((record) => transferView(record).outcome === filter),
+    [transfers, filter],
+  );
+  const sections = useMemo(() => groupTransfersByDay(visible), [visible]);
+
   return (
     <CheckpointScreen>
       <AppHeader title="Transfers" subtitle={`${transfers.length} audio items`} />
-      <FlatList
+      <SectionList
         className="flex-1"
-        data={transfers}
+        sections={sections}
         keyExtractor={(item) => item.fileId}
+        stickySectionHeadersEnabled={false}
         contentContainerStyle={{ gap: 12, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={
           transfers.length > 0 ? (
-            <View className="gap-2">
+            <View className="gap-3">
               <View className="flex-row items-center justify-between gap-2">
                 <Text variant="muted" className="flex-1 text-[12px]">
                   {transfers.length} total · {uploaded} uploaded · {filtered} filtered · {failed}{' '}
@@ -137,6 +159,29 @@ export function TransfersScreen() {
                   </Button>
                 ) : null}
               </View>
+              <View className="flex-row flex-wrap gap-1.5">
+                {FILTERS.map((option) => (
+                  <Pressable
+                    key={option.id}
+                    onPress={() => setFilter(option.id)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: filter === option.id }}
+                    className={cn(
+                      'border px-2.5 py-1 active:opacity-80',
+                      filter === option.id ? 'border-primary bg-primary' : 'border-border',
+                    )}
+                  >
+                    <Text
+                      className={cn(
+                        'text-[11px]',
+                        filter === option.id ? 'text-primary-foreground' : 'text-muted-foreground',
+                      )}
+                    >
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
               {hasRetryable ? (
                 <Button variant="outline" size="sm" onPress={() => void refreshTransfers()}>
                   <Icon as={RefreshCw} size={14} />
@@ -146,6 +191,11 @@ export function TransfersScreen() {
             </View>
           ) : null
         }
+        renderSectionHeader={({ section }) => (
+          <Text variant="kicker" className="pt-1">
+            {section.title}
+          </Text>
+        )}
         renderItem={({ item }) => (
           <TransferRow item={item} developerMode={settings.developerMode} />
         )}
@@ -154,13 +204,23 @@ export function TransfersScreen() {
             <Text variant="muted" className="py-12 text-center">
               Loading transfers…
             </Text>
-          ) : (
+          ) : transfers.length === 0 ? (
             <EmptyState
               title="No transfers yet"
               hint="Connect and sync the pendant to receive audio."
               action={
                 <Button variant="outline" onPress={() => router.navigate('/(app)/(tabs)/connect')}>
                   <Text>Go to Connect</Text>
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              title={`No ${filter} transfers`}
+              hint="Try a different filter."
+              action={
+                <Button variant="outline" onPress={() => setFilter('all')}>
+                  <Text>Show all</Text>
                 </Button>
               }
             />

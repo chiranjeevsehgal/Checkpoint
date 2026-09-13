@@ -134,7 +134,16 @@ export function ConnectScreen() {
   }, [activityLive, livePulse, reduceMotion]);
 
   const showSettings = view.openSettings || needsSettings;
-  const showEnrollment = setupOpen || !connected;
+  const showEnrollment = setupOpen || !enrolled;
+  const settingsLabel = linkState === 'needs permission' ? 'Allow Bluetooth' : 'Open Settings';
+  const claimValid = useMemo(() => {
+    try {
+      parseClaimHex(claimText.trim());
+      return true;
+    } catch {
+      return false;
+    }
+  }, [claimText]);
 
   return (
     <CheckpointScreen>
@@ -207,10 +216,14 @@ export function ConnectScreen() {
                     <Text>Manage device</Text>
                   </Button>
                 </>
+              ) : enrolled ? (
+                <Button className="flex-1" disabled={busy} onPress={() => void connect()}>
+                  <Text>{busy ? 'Connecting…' : 'Connect'}</Text>
+                </Button>
               ) : null}
               {showSettings ? (
                 <Button variant="outline" className="flex-1" onPress={() => void openAppSettings()}>
-                  <Text>Open Settings</Text>
+                  <Text>{settingsLabel}</Text>
                 </Button>
               ) : null}
             </View>
@@ -258,7 +271,7 @@ export function ConnectScreen() {
                   ) : null}
                 </View>
               </View>
-              <Button disabled={busy} onPress={() => void connect()}>
+              <Button disabled={busy || !claimValid} onPress={() => void connect()}>
                 <Text>{busy ? 'Linking…' : 'Find & link pendant'}</Text>
               </Button>
               {settings.developerMode ? (

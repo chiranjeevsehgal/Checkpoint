@@ -6,6 +6,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
 import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
+import { EraseCard } from '../components/erase-card.tsx';
 import { Toggle } from '../components/toggle.tsx';
 import { useBluetoothState } from '../hooks/useBluetoothState.ts';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
@@ -26,6 +27,7 @@ import { RangeSlider } from '@/components/ui/slider';
 import { Text } from '@/components/ui/text';
 import { env } from '@/lib/env';
 import { cn } from '@/lib/utils';
+import { useAppTheme } from '@/providers/theme-provider';
 import { useToast } from '@/providers/toast-provider';
 
 type Apply = (patch: Partial<CheckpointSettings>) => void;
@@ -90,7 +92,7 @@ function SpeechSection({
   applySilent: Apply;
 }) {
   return (
-    <Section title="Speech detection">
+    <Section title="Speech">
       <Card>
         <Toggle
           label="Voice activity detection"
@@ -133,7 +135,7 @@ function TransferSection({
   applySilent: Apply;
 }) {
   return (
-    <Section title="Transfer & sync">
+    <Section title="Sync">
       <Card>
         <Toggle
           label="Auto-discover pendant"
@@ -197,7 +199,7 @@ function BackendSection({
   };
 
   return (
-    <Section title="Backend">
+    <Section title="Connection">
       <Card>
         <View className="gap-1">
           <Text className="text-[11px] text-subtle-foreground">
@@ -300,6 +302,23 @@ function DeveloperSection({
   );
 }
 
+function AppearanceSection() {
+  const { scheme, setTheme } = useAppTheme();
+
+  return (
+    <Section title="Appearance">
+      <Card>
+        <Toggle
+          label="Dark mode"
+          description="Use the dark theme across the app."
+          value={scheme === 'dark'}
+          onChange={(next) => setTheme(next ? 'dark' : 'light')}
+        />
+      </Card>
+    </Section>
+  );
+}
+
 export function CheckpointSettingsScreen() {
   const { settings, updateSettings, testConnection, logs, transfers, deviceId, enrolled } =
     useCheckpoint();
@@ -371,6 +390,10 @@ export function CheckpointSettingsScreen() {
           testing={testing}
           probe={probe}
         />
+        <AppearanceSection />
+        <Section title="Danger zone">
+          <EraseCard />
+        </Section>
         {env.devBuild ? (
           <DeveloperSection
             settings={settings}

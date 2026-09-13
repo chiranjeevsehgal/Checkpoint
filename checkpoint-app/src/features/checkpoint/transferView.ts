@@ -121,6 +121,38 @@ export function formatTransferTime(at: number, now: number = Date.now()): string
   return `${hours}:${minutes} ${suffix}`;
 }
 
+export interface TransferDayGroup<T> {
+  title: string;
+  data: T[];
+}
+
+function startOfDay(at: number): number {
+  const date = new Date(at);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+function transferDayTitle(at: number, now: number): string {
+  const daysAgo = Math.round((startOfDay(now) - startOfDay(at)) / 86_400_000);
+  if (daysAgo <= 0) return 'Today';
+  if (daysAgo === 1) return 'Yesterday';
+  return new Date(at).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+/** Groups newest-first records into consecutive day sections. */
+export function groupTransfersByDay<T extends { createdAt: number }>(
+  records: T[],
+  now: number = Date.now(),
+): TransferDayGroup<T>[] {
+  const groups: TransferDayGroup<T>[] = [];
+  for (const record of records) {
+    const title = transferDayTitle(record.createdAt, now);
+    const current = groups[groups.length - 1];
+    if (current?.title === title) current.data.push(record);
+    else groups.push({ title, data: [record] });
+  }
+  return groups;
+}
+
 export function transferView(input: TransferInput): TransferView {
   const pct = input.totalFrags > 0 ? input.received / input.totalFrags : 0;
   let stage: TransferStage = 'receiving';

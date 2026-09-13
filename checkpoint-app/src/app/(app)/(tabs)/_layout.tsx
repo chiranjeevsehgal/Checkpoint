@@ -35,17 +35,17 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="transfers"
-        options={{
-          title: 'Transfers',
-          tabBarIcon: ({ color, size }) => <Icon as={ArrowDownUp} color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
         name="device"
         options={{
           title: 'Device',
           tabBarIcon: ({ color, size }) => <Icon as={Mic} color={color} size={size} />,
+        }}
+      />
+      <Tabs.Screen
+        name="transfers"
+        options={{
+          title: 'Transfers',
+          tabBarIcon: ({ color, size }) => <Icon as={ArrowDownUp} color={color} size={size} />,
         }}
       />
       <Tabs.Screen

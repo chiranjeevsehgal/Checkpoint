@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { formatTransferTime, transferView, type TransferInput } from '../transferView.ts';
+import {
+  formatTransferTime,
+  groupTransfersByDay,
+  transferView,
+  type TransferInput,
+} from '../transferView.ts';
 
 function input(overrides: Partial<TransferInput> = {}): TransferInput {
   return {
@@ -92,5 +97,30 @@ describe('formatTransferTime', () => {
     const now = new Date(2026, 4, 10, 20, 0, 0).getTime();
     assert.equal(formatTransferTime(new Date(2026, 4, 10, 20, 42, 0).getTime(), now), '8:42 PM');
     assert.notEqual(formatTransferTime(new Date(2026, 4, 9, 20, 42, 0).getTime(), now), '8:42 PM');
+  });
+});
+
+describe('groupTransfersByDay', () => {
+  it('groups consecutive records into Today and Yesterday', () => {
+    const now = new Date(2026, 4, 10, 20, 0, 0).getTime();
+    const groups = groupTransfersByDay(
+      [
+        { createdAt: new Date(2026, 4, 10, 9, 0, 0).getTime() },
+        { createdAt: new Date(2026, 4, 10, 8, 0, 0).getTime() },
+        { createdAt: new Date(2026, 4, 9, 20, 0, 0).getTime() },
+      ],
+      now,
+    );
+    assert.deepEqual(
+      groups.map((group) => [group.title, group.data.length]),
+      [
+        ['Today', 2],
+        ['Yesterday', 1],
+      ],
+    );
+  });
+
+  it('returns no groups for no records', () => {
+    assert.deepEqual(groupTransfersByDay([], Date.now()), []);
   });
 });
