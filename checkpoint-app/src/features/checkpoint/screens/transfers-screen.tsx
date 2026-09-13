@@ -113,7 +113,8 @@ function TransferRow({ item, developerMode }: { item: TransferRecord; developerM
 }
 
 export function TransfersScreen() {
-  const { transfers, hydrated, settings, shareBench, refreshTransfers } = useCheckpoint();
+  const { connected, transfers, hydrated, settings, shareBench, refreshTransfers } =
+    useCheckpoint();
   const router = useRouter();
   const [filter, setFilter] = useState<TransferFilter>('all');
 
@@ -207,11 +208,20 @@ export function TransfersScreen() {
           ) : transfers.length === 0 ? (
             <EmptyState
               title="No transfers yet"
-              hint="Connect and sync the pendant to receive audio."
+              hint={
+                connected
+                  ? 'Listening for audio from the pendant — new recordings appear here.'
+                  : 'Connect and sync the pendant to receive audio.'
+              }
               action={
-                <Button variant="outline" onPress={() => router.navigate('/(app)/(tabs)/connect')}>
-                  <Text>Go to Connect</Text>
-                </Button>
+                connected ? undefined : (
+                  <Button
+                    variant="outline"
+                    onPress={() => router.navigate('/(app)/(tabs)/connect')}
+                  >
+                    <Text>Go to Pendant</Text>
+                  </Button>
+                )
               }
             />
           ) : (
