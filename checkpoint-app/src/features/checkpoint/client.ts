@@ -1,4 +1,4 @@
-import type { BleManager, Characteristic, Device } from 'react-native-ble-plx';
+import { ScanMode, type BleManager, type Characteristic, type Device } from 'react-native-ble-plx';
 
 import { base64Decode, base64Encode } from './base64.ts';
 import { BenchRecorder } from './bench.ts';
@@ -39,6 +39,7 @@ import {
   PKT_STORAGE_REQ,
   READY_RETRIES,
   RECONNECT_DELAY_MS,
+  RECONNECT_DELAY_MAX_MS,
   SERVICE_UUID,
 } from './config.ts';
 import {
@@ -89,6 +90,7 @@ import {
   packetName,
   parsePacket,
 } from './protocol.ts';
+import { growBackoffMs } from './retry.ts';
 import {
   deletePart,
   deleteSaved,
@@ -151,6 +153,8 @@ export class CheckpointClient {
   linkLost = true;
 
   private device: Device | null = null;
+  private disconnectSubscription: { remove: () => void } | null = null;
+  private monitorSubscriptions: { remove: () => void }[] = [];
   private sessionId: number | null = null;
   private sessionKey: Uint8Array | null = null;
   private deviceId: Uint8Array | null = null;
@@ -177,6 +181,7 @@ export class CheckpointClient {
   private pending = new Map<number, PendingRoundtrip>();
   private stopRequested = false;
   private failedAttempts = 0;
+  private reconnectDelayMs = RECONNECT_DELAY_MS;
 
   constructor(
     private readonly manager: BleManager,
@@ -273,29 +278,35 @@ export class CheckpointClient {
       }, 200);
       try {
         this.manager
-          .startDeviceScan([SERVICE_UUID], { allowDuplicates: false }, (error, scanned) => {
-            if (error) {
-              this.log(`[ble] scan failed: ${describeScanError(error.errorCode, error.message)}`);
-              return;
-            }
-            if (!scanned) return;
-            seenCount += 1;
-            const id = scanned.id ?? '';
-            const name = scanned.name ?? '';
-            const localName = scanned.localName ?? '';
-            const named =
-              id.toUpperCase() === want.toUpperCase() || name === want || localName === want;
-            // Scan is already filtered by SERVICE_UUID, so any hit advertises
-            // our service; a missing name (common on some stacks when the
-            // scan response is absent) must not veto the match.
-            if (named || (name === '' && localName === '')) {
-              this.log(`Found: ${name || '?'} [${scanned.id}]`);
-              finish(() => resolve(scanned));
-            } else if (!seenIds.has(id)) {
-              seenIds.add(id);
-              this.log(`[ble] ignoring non-target device: ${name || '?'} [${id}]`);
-            }
-          })
+          .startDeviceScan(
+            [SERVICE_UUID],
+            { allowDuplicates: false, scanMode: ScanMode.LowLatency },
+            (error, scanned) => {
+              if (error) {
+                const message = describeScanError(error.errorCode, error.message);
+                this.log(`[ble] scan failed: ${message}`);
+                finish(() => reject(new Error(message)));
+                return;
+              }
+              if (!scanned) return;
+              seenCount += 1;
+              const id = scanned.id ?? '';
+              const name = scanned.name ?? '';
+              const localName = scanned.localName ?? '';
+              const named =
+                id.toUpperCase() === want.toUpperCase() || name === want || localName === want;
+              // Scan is already filtered by SERVICE_UUID, so any hit advertises
+              // our service; a missing name (common on some stacks when the
+              // scan response is absent) must not veto the match.
+              if (named || (name === '' && localName === '')) {
+                this.log(`Found: ${name || '?'} [${scanned.id}]`);
+                finish(() => resolve(scanned));
+              } else if (!seenIds.has(id)) {
+                seenIds.add(id);
+                this.log(`[ble] ignoring non-target device: ${name || '?'} [${id}]`);
+              }
+            },
+          )
           .catch((error: unknown) => {
             finish(() => {
               reject(error instanceof Error ? error : new Error('Scan failed'));
@@ -318,7 +329,8 @@ export class CheckpointClient {
       /* iOS negotiates MTU itself; HELLO_ACK is authoritative */
     }
     this.linkLost = false;
-    this.device.onDisconnected(() => {
+    this.clearSubscriptions();
+    this.disconnectSubscription = this.device.onDisconnected(() => {
       this.handleLinkLost();
     });
     const onNotify = (error: unknown, characteristic: Characteristic | null) => {
@@ -330,14 +342,24 @@ export class CheckpointClient {
         /* ignore malformed notify */
       }
     };
-    this.device.monitorCharacteristicForService(SERVICE_UUID, CTRL_UUID, onNotify);
-    this.device.monitorCharacteristicForService(SERVICE_UUID, DATA_UUID, onNotify);
+    this.monitorSubscriptions.push(
+      this.device.monitorCharacteristicForService(SERVICE_UUID, CTRL_UUID, onNotify),
+      this.device.monitorCharacteristicForService(SERVICE_UUID, DATA_UUID, onNotify),
+    );
     this.log(`Connected to ${device.id}`);
+  }
+
+  private clearSubscriptions(): void {
+    this.disconnectSubscription?.remove();
+    this.disconnectSubscription = null;
+    for (const subscription of this.monitorSubscriptions) subscription.remove();
+    this.monitorSubscriptions = [];
   }
 
   async disconnect(): Promise<void> {
     const device = this.device;
     this.device = null;
+    this.clearSubscriptions();
     this.linkState = 'down';
     this.closePart();
     if (device) {
@@ -351,6 +373,8 @@ export class CheckpointClient {
   }
 
   private handleLinkLost(): void {
+    this.clearSubscriptions();
+    this.device = null;
     this.linkState = 'down';
     this.sessionKey = null;
     this.sessionId = null;
@@ -1045,6 +1069,7 @@ export class CheckpointClient {
   ): Promise<void> {
     this.stopRequested = false;
     this.failedAttempts = 0;
+    this.reconnectDelayMs = RECONNECT_DELAY_MS;
     let readyOnce = false;
     const retryOrGiveUp = async (message: string): Promise<boolean> => {
       this.log(message);
@@ -1057,7 +1082,9 @@ export class CheckpointClient {
           return true;
         }
       }
-      return this.sleepOrStopped(RECONNECT_DELAY_MS, hooks.stopped);
+      const delay = this.reconnectDelayMs;
+      this.reconnectDelayMs = growBackoffMs(this.reconnectDelayMs, RECONNECT_DELAY_MAX_MS);
+      return this.sleepOrStopped(delay, hooks.stopped);
     };
     while (!hooks.stopped()) {
       let device: Device | null = null;
@@ -1080,6 +1107,7 @@ export class CheckpointClient {
         if (!this.device || !(await this.device.isConnected())) {
           throw new Error('BLE disappeared during handshake');
         }
+        this.reconnectDelayMs = RECONNECT_DELAY_MS;
       } catch (error) {
         this.linkState = 'down';
         try {

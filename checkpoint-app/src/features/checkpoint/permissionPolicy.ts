@@ -8,6 +8,9 @@ const FINE_LOCATION = 'android.permission.ACCESS_FINE_LOCATION';
 // so this module stays importable (and unit-testable) without the BLE stack.
 const SCAN_BT_UNAUTHORIZED = 101;
 const SCAN_BT_POWERED_OFF = 102;
+const SCAN_BT_UNKNOWN_STATE = 103;
+const SCAN_BT_RESETTING = 104;
+const SCAN_START_FAILED = 600;
 const SCAN_LOCATION_DISABLED = 601;
 
 /** Runtime permissions needed for BLE scanning. Empty outside Android. */
@@ -35,6 +38,11 @@ export function describeScanError(errorCode: number, fallback: string): string {
   switch (errorCode) {
     case SCAN_BT_POWERED_OFF:
       return 'Bluetooth is off — turn it on and retry';
+    case SCAN_BT_UNKNOWN_STATE:
+    case SCAN_BT_RESETTING:
+      return 'Bluetooth is resetting — retrying';
+    case SCAN_START_FAILED:
+      return 'Bluetooth scan could not start — retrying shortly';
     case SCAN_BT_UNAUTHORIZED:
       return 'missing Bluetooth permission — grant Nearby devices and retry';
     case SCAN_LOCATION_DISABLED:
