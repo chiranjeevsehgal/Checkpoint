@@ -9,9 +9,19 @@ interface RangeSliderProps {
   step: number;
   value: number;
   onValueChange: (value: number) => void;
+  accessibilityLabel?: string;
+  onSlidingComplete?: (value: number) => void;
 }
 
-export function RangeSlider({ min, max, step, value, onValueChange }: RangeSliderProps) {
+export function RangeSlider({
+  min,
+  max,
+  step,
+  value,
+  onValueChange,
+  accessibilityLabel,
+  onSlidingComplete,
+}: RangeSliderProps) {
   const { colorScheme } = useColorScheme();
   const palette = colorScheme === 'dark' ? PALETTE.dark : PALETTE.light;
 
@@ -22,6 +32,9 @@ export function RangeSlider({ min, max, step, value, onValueChange }: RangeSlide
       step={step}
       value={value}
       onValueChange={onValueChange}
+      onSlidingComplete={onSlidingComplete}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityValue={{ min, max, now: value }}
       minimumTrackTintColor={palette.primary}
       maximumTrackTintColor={palette.divider}
       thumbTintColor={palette.primary}

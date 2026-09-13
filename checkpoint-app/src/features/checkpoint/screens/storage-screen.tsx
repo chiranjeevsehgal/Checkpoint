@@ -1,4 +1,4 @@
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Pause, Play, Trash2 } from 'lucide-react-native';
 import { useCallback, useEffect, useRef } from 'react';
 import { ActivityIndicator, FlatList, Pressable, View } from 'react-native';
@@ -72,7 +72,7 @@ function FileRow({
             disabled={disabled || fetching || deleting}
             accessibilityRole="button"
             accessibilityLabel={playing ? `Pause ${item.name}` : `Play ${item.name}`}
-            className="active:bg-foreground/10 border border-border p-1.5"
+            className="active:bg-foreground/10 h-11 w-11 items-center justify-center border border-border"
           >
             {fetching ? (
               <Text variant="muted" className="w-3.5 text-center text-[9px]">
@@ -88,7 +88,7 @@ function FileRow({
           disabled={disabled || deleting}
           accessibilityRole="button"
           accessibilityLabel={`Delete ${item.name}`}
-          className="active:bg-foreground/10 border border-border p-1.5"
+          className="active:bg-foreground/10 h-11 w-11 items-center justify-center border border-border"
         >
           {deleting ? (
             <ActivityIndicator size="small" />
@@ -230,6 +230,7 @@ export function StorageScreen() {
     erasing,
   } = useCheckpoint();
   const { label: playingLabel, playing, paused } = usePlayback();
+  const router = useRouter();
 
   const busyRef = useRef(false);
   useEffect(() => {
@@ -275,14 +276,16 @@ export function StorageScreen() {
         contentContainerStyle={{ gap: 12, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={
-          <StorageHeader
-            storage={storage}
-            pct={pct}
-            free={free}
-            pageLabel={pageLabel}
-            connected={connected}
-            onRefresh={() => void refreshStorage()}
-          />
+          connected ? (
+            <StorageHeader
+              storage={storage}
+              pct={pct}
+              free={free}
+              pageLabel={pageLabel}
+              connected={connected}
+              onRefresh={() => void refreshStorage()}
+            />
+          ) : null
         }
         renderItem={({ item }) => {
           const fetching = preview?.path === item.name;
@@ -309,15 +312,31 @@ export function StorageScreen() {
           );
         }}
         ListEmptyComponent={
-          <EmptyState
-            title="No recordings found"
-            hint="Refresh the file list to read recordings currently stored on the pendant."
-            action={
-              <Button variant="outline" onPress={() => void refreshStorage()}>
-                <Text>Refresh</Text>
-              </Button>
-            }
-          />
+          !connected ? (
+            <EmptyState
+              title="Not connected"
+              hint="Connect to a pendant to browse its recordings."
+              action={
+                <Button variant="outline" onPress={() => router.navigate('/(app)/(tabs)/connect')}>
+                  <Text>Go to Connect</Text>
+                </Button>
+              }
+            />
+          ) : fileList === null ? (
+            <Text variant="muted" className="py-12 text-center">
+              Reading storage…
+            </Text>
+          ) : (
+            <EmptyState
+              title="No recordings found"
+              hint="Refresh the file list to read recordings currently stored on the pendant."
+              action={
+                <Button variant="outline" onPress={() => void refreshStorage()}>
+                  <Text>Refresh</Text>
+                </Button>
+              }
+            />
+          )
         }
         ListFooterComponent={
           <View className="gap-4">

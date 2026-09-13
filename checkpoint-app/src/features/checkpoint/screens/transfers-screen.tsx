@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { Pause, Play, RefreshCw, Upload } from 'lucide-react-native';
 import { FlatList, Pressable, View } from 'react-native';
 
@@ -20,9 +21,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { ProgressBar } from '@/components/ui/progress-bar';
-import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { Text } from '@/components/ui/text';
-import { useRefresh } from '@/lib/use-refresh';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/providers/toast-provider';
 
@@ -66,22 +65,14 @@ function PlayButton({ uri, label }: { uri: string; label: string }) {
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={isPlaying ? `Pause ${label}` : `Play ${label}`}
-      className="active:bg-foreground/10 border border-border p-1.5"
+      className="active:bg-foreground/10 h-11 w-11 items-center justify-center border border-border"
     >
       <Icon as={isPlaying ? Pause : Play} size={14} />
     </Pressable>
   );
 }
 
-function TransferRow({
-  item,
-  developerMode,
-  onRetry,
-}: {
-  item: TransferRecord;
-  developerMode: boolean;
-  onRetry: () => void;
-}) {
+function TransferRow({ item, developerMode }: { item: TransferRecord; developerMode: boolean }) {
   const view = transferView(item);
   const { tone } = statusDescriptor(view.status);
 
@@ -98,12 +89,6 @@ function TransferRow({
       </Text>
       <Text className={cn('text-[12px]', TONE_TEXT[tone])}>{view.headline}</Text>
       <ProgressBar value={view.pct} className="h-1" />
-      {view.failed ? (
-        <Button variant="outline" size="sm" onPress={onRetry}>
-          <Icon as={RefreshCw} size={14} />
-          <Text>Retry</Text>
-        </Button>
-      ) : null}
       {developerMode ? (
         <DeveloperDetails defaultExpanded>
           <DetailRow label="Pipeline" value={pipelineLabel(view)} />
@@ -117,13 +102,16 @@ function TransferRow({
 }
 
 export function TransfersScreen() {
-  const { transfers, settings, shareBench, refreshTransfers } = useCheckpoint();
-  const { refreshing, onRefresh } = useRefresh(refreshTransfers);
+  const { transfers, hydrated, settings, shareBench, refreshTransfers } = useCheckpoint();
+  const router = useRouter();
 
   const views = transfers.map(transferView);
   const uploaded = views.filter((view) => view.outcome === 'uploaded').length;
   const filtered = views.filter((view) => view.outcome === 'filtered').length;
   const failed = views.filter((view) => view.outcome === 'failed').length;
+  const hasRetryable = transfers.some(
+    (record) => record.outcome === 'pending' || record.outcome === 'failed',
+  );
 
   return (
     <CheckpointScreen>
@@ -132,39 +120,51 @@ export function TransfersScreen() {
         className="flex-1"
         data={transfers}
         keyExtractor={(item) => item.fileId}
-        refreshControl={<AppRefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         contentContainerStyle={{ gap: 12, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={
-          <View className="flex-row items-center justify-between gap-2">
-            <Text variant="muted" className="flex-1 text-[12px]">
-              {transfers.length} total · {uploaded} uploaded · {filtered} filtered · {failed} failed
-            </Text>
-            {settings.developerMode ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={transfers.length === 0}
-                onPress={() => void shareBench()}
-              >
-                <Icon as={Upload} size={14} />
-                <Text>Bench CSV</Text>
-              </Button>
-            ) : null}
-          </View>
+          transfers.length > 0 ? (
+            <View className="gap-2">
+              <View className="flex-row items-center justify-between gap-2">
+                <Text variant="muted" className="flex-1 text-[12px]">
+                  {transfers.length} total · {uploaded} uploaded · {filtered} filtered · {failed}{' '}
+                  failed
+                </Text>
+                {settings.developerMode ? (
+                  <Button variant="ghost" size="sm" onPress={() => void shareBench()}>
+                    <Icon as={Upload} size={14} />
+                    <Text>Bench CSV</Text>
+                  </Button>
+                ) : null}
+              </View>
+              {hasRetryable ? (
+                <Button variant="outline" size="sm" onPress={() => void refreshTransfers()}>
+                  <Icon as={RefreshCw} size={14} />
+                  <Text>Retry all</Text>
+                </Button>
+              ) : null}
+            </View>
+          ) : null
         }
         renderItem={({ item }) => (
-          <TransferRow
-            item={item}
-            developerMode={settings.developerMode}
-            onRetry={() => void refreshTransfers()}
-          />
+          <TransferRow item={item} developerMode={settings.developerMode} />
         )}
         ListEmptyComponent={
-          <EmptyState
-            title="No transfers yet"
-            hint="Connect and sync the pendant to receive audio."
-          />
+          !hydrated ? (
+            <Text variant="muted" className="py-12 text-center">
+              Loading transfers…
+            </Text>
+          ) : (
+            <EmptyState
+              title="No transfers yet"
+              hint="Connect and sync the pendant to receive audio."
+              action={
+                <Button variant="outline" onPress={() => router.navigate('/(app)/(tabs)/connect')}>
+                  <Text>Go to Connect</Text>
+                </Button>
+              }
+            />
+          )
         }
       />
     </CheckpointScreen>

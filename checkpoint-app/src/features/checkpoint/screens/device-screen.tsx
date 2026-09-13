@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { Play, Square } from 'lucide-react-native';
 import { useState } from 'react';
 import { ScrollView, View } from 'react-native';
@@ -169,6 +170,7 @@ function LedCard({
 export function DeviceScreen() {
   const { connected, status, settings, toggleRec, refreshStatus, applyLed, applySync } =
     useCheckpoint();
+  const router = useRouter();
   const [controls, setControls] = useState<DeviceControls>({ session: connected });
   const { refreshing, onRefresh } = useRefresh(refreshStatus);
   const active = controls.session === connected ? controls : { session: connected };
@@ -184,7 +186,15 @@ export function DeviceScreen() {
     return (
       <CheckpointScreen>
         <AppHeader title="Device" subtitle="BLE remote control" />
-        <EmptyState title="Not connected" hint="Connect to a pendant to control it." />
+        <EmptyState
+          title="Not connected"
+          hint="Connect to a pendant to control it."
+          action={
+            <Button variant="outline" onPress={() => router.navigate('/(app)/(tabs)/connect')}>
+              <Text>Go to Connect</Text>
+            </Button>
+          }
+        />
       </CheckpointScreen>
     );
   }

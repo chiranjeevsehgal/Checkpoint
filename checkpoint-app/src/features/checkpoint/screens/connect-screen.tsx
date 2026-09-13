@@ -22,6 +22,7 @@ import { Icon } from '@/components/ui/icon';
 import { Input } from '@/components/ui/input';
 import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { Text } from '@/components/ui/text';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useRefresh } from '@/lib/use-refresh';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/providers/toast-provider';
@@ -61,6 +62,7 @@ export function ConnectScreen() {
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const view = linkView(linkState, deviceName.trim() || DEVICE_NAME);
+  const reduceMotion = useReducedMotion();
   const pulse = useMemo(() => new Animated.Value(1), []);
   const livePulse = useMemo(() => new Animated.Value(1), []);
 
@@ -93,7 +95,7 @@ export function ConnectScreen() {
   const { refreshing, onRefresh } = useRefresh(refresh);
 
   useEffect(() => {
-    if (!busy) {
+    if (!busy || reduceMotion) {
       pulse.setValue(1);
       return;
     }
@@ -105,7 +107,7 @@ export function ConnectScreen() {
     );
     loop.start();
     return () => loop.stop();
-  }, [busy, pulse]);
+  }, [busy, pulse, reduceMotion]);
 
   const syncing = transfers.filter(isInProgress).length;
   const activity = connectionActivity({
@@ -117,7 +119,7 @@ export function ConnectScreen() {
   const activityLive = activity.tone === 'recording' || activity.tone === 'capturing';
 
   useEffect(() => {
-    if (!activityLive) {
+    if (!activityLive || reduceMotion) {
       livePulse.setValue(1);
       return;
     }
@@ -129,7 +131,7 @@ export function ConnectScreen() {
     );
     loop.start();
     return () => loop.stop();
-  }, [activityLive, livePulse]);
+  }, [activityLive, livePulse, reduceMotion]);
 
   const showSettings = view.openSettings || needsSettings;
   const showEnrollment = setupOpen || !connected;

@@ -69,6 +69,7 @@ export interface EngineSnapshot {
   connected: boolean;
   busy: boolean;
   linkState: string;
+  hydrated: boolean;
   status: DeviceStatus | null;
   storage: StorageInfo | null;
   fileList: DeviceFileList | null;
@@ -89,6 +90,7 @@ const INITIAL_SNAPSHOT: EngineSnapshot = {
   connected: false,
   busy: false,
   linkState: 'idle',
+  hydrated: false,
   status: null,
   storage: null,
   fileList: null,
@@ -164,6 +166,7 @@ class SyncEngine {
     const stored = await loadTransfers();
     if (!this.started) return;
     if (stored.length > 0) this.setState({ transfers: sortTransfers(stored) });
+    this.setState({ hydrated: true });
     this.ensureManager();
     this.cleanup();
     this.appStateSubscription = AppState.addEventListener('change', (state) => {

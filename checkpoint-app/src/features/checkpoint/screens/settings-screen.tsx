@@ -22,11 +22,9 @@ import { Section } from '@/components/shared/section';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { RangeSlider } from '@/components/ui/slider';
 import { Text } from '@/components/ui/text';
 import { env } from '@/lib/env';
-import { useRefresh } from '@/lib/use-refresh';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/providers/toast-provider';
 
@@ -294,8 +292,6 @@ export function CheckpointSettingsScreen() {
     }
   }, [testConnection]);
 
-  const { refreshing, onRefresh } = useRefresh(runTest);
-
   const onSaveServer = useCallback(
     (next: { serverUrl: string; userId: string }) => {
       void updateSettings({ ...settings, ...next });
@@ -324,7 +320,6 @@ export function CheckpointSettingsScreen() {
       <ScrollView
         className="flex-1"
         keyboardShouldPersistTaps="handled"
-        refreshControl={<AppRefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         contentContainerStyle={{ gap: 24, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
       >

@@ -15,6 +15,7 @@ export function HeaderIconButton({ icon, label, onPress }: HeaderIconButtonProps
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={label}
+      hitSlop={8}
       className="active:bg-foreground/10 h-9 w-9 flex-none items-center justify-center border border-border"
     >
       <Icon as={icon} size={18} />

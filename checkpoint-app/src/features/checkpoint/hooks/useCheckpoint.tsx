@@ -34,6 +34,7 @@ interface CheckpointContextValue {
   connected: boolean;
   busy: boolean;
   linkState: string;
+  hydrated: boolean;
   deviceId: string | null;
   enrolled: boolean;
   autoConnecting: boolean;
@@ -226,6 +227,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       connected: snapshot.connected,
       busy: snapshot.busy,
       linkState: snapshot.linkState,
+      hydrated: snapshot.hydrated,
       deviceId: snapshot.deviceId,
       enrolled: snapshot.enrolled,
       autoConnecting: snapshot.autoConnecting,
