@@ -18,13 +18,45 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  quality:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: checkpoint-app
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: checkpoint-app/package-lock.json
+
+      - name: Install dependencies (legacy peer deps for cross-platform lockfile)
+        run: npm ci --legacy-peer-deps
+
+      - name: Quality gate
+        run: npm run check && npm test
+
+  build:
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: checkpoint-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free runner disk
+        uses: jlumbroso/free-disk-space@main
+        with:
+          android: false
+          tool-cache: false
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -53,32 +85,42 @@ jobs:
       - name: Install dependencies (legacy peer deps for cross-platform lockfile)
         run: npm ci --legacy-peer-deps
 
-      - name: Quality gate
-        run: npm run check && npm test
-
       - name: Generate Android project
         run: npx expo prebuild -p android --no-install
 
-      - name: Build APKs
+      - name: Build APK
         run: |
-          npm run build:android -- -PreactNativeArchitectures=arm64-v8a
-          cp android/app/build/outputs/apk/release/app-release.apk checkpoint-nightly-arm64-v8a.apk
-          npm run build:android -- -PreactNativeArchitectures=armeabi-v7a
-          cp android/app/build/outputs/apk/release/app-release.apk checkpoint-nightly-armeabi-v7a.apk
-          npm run build:android
-          cp android/app/build/outputs/apk/release/app-release.apk checkpoint-nightly-universal.apk
+          npm run build:android -- -PreactNativeArchitectures=${{ matrix.abi }}
+          cp android/app/build/outputs/apk/release/app-release.apk \
+            checkpoint-nightly-${{ matrix.abi }}.apk
+
+      - name: Checksum
+        run: sha256sum checkpoint-nightly-${{ matrix.abi }}.apk > checkpoint-nightly-${{ matrix.abi }}.apk.sha256
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ matrix.abi }}
+          retention-days: 1
+          path: |
+            checkpoint-app/checkpoint-nightly-${{ matrix.abi }}.apk
+            checkpoint-app/checkpoint-nightly-${{ matrix.abi }}.apk.sha256
+
+  publish:
+    needs: build
+    if: ${{ github.event_name == 'schedule' || inputs.publish }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APKs
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Build metadata
         run: echo "BUILD_DATE=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
 
-      - name: Checksum
-        run: |
-          sha256sum checkpoint-nightly-arm64-v8a.apk > checkpoint-nightly-arm64-v8a.apk.sha256
-          sha256sum checkpoint-nightly-armeabi-v7a.apk > checkpoint-nightly-armeabi-v7a.apk.sha256
-          sha256sum checkpoint-nightly-universal.apk > checkpoint-nightly-universal.apk.sha256
-
       - name: Publish nightly release
-        if: ${{ github.event_name == 'schedule' || inputs.publish }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: app-nightly
@@ -86,21 +128,15 @@ jobs:
           prerelease: true
           make_latest: "false"
           overwrite_files: true
-          files: |
-            checkpoint-app/checkpoint-nightly-arm64-v8a.apk
-            checkpoint-app/checkpoint-nightly-arm64-v8a.apk.sha256
-            checkpoint-app/checkpoint-nightly-armeabi-v7a.apk
-            checkpoint-app/checkpoint-nightly-armeabi-v7a.apk.sha256
-            checkpoint-app/checkpoint-nightly-universal.apk
-            checkpoint-app/checkpoint-nightly-universal.apk.sha256
+          files: dist/*
           body: |
-            Nightly builds of the Checkpoint app (arm64-v8a, armeabi-v7a, universal).
+            Nightly builds of the Checkpoint app (arm64-v8a, armeabi-v7a).
 
             - Commit: ${{ github.sha }}
             - Branch: ${{ github.ref_name }} (${{ github.event_name }})
             - Date (UTC): ${{ env.BUILD_DATE }}
             - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             - Signed with the debug keystore; not Play Store ready.
-            - Artifacts: arm64-v8a (64-bit ARM), armeabi-v7a (32-bit ARM), universal (all ABIs).
+            - Artifacts: arm64-v8a (64-bit ARM), armeabi-v7a (32-bit ARM).
 
             Install: `adb install -r checkpoint-nightly-<abi>.apk`
