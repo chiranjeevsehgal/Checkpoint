@@ -5,7 +5,7 @@ import { AudioContext, decodeAudioData } from 'react-native-audio-api';
 import { isOggOpus, repairOpusOgg } from './ogg.ts';
 
 const PREVIEW_TTL_MS = 90_000;
-const SLOW_PLAYBACK_RATE = 0.5;
+const SLOW_PLAYBACK_RATE = 0.6;
 
 type DecodedAudio = Awaited<ReturnType<typeof decodeAudioData>>;
 
