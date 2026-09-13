@@ -3,12 +3,14 @@
 
 struct ManifestEntry {
   String path;
-  uint32_t size;
-  uint32_t crc;
-  uint64_t uid; // random per-file id for the transfer protocol (0 = legacy)
-  uint32_t created_ms;
-  bool pending;
-  uint16_t next_seq;
+  uint32_t size = 0;
+  uint32_t crc = 0;
+  uint64_t uid = 0; // random per-file id for the transfer protocol (0 = legacy)
+  uint32_t created_ms = 0;
+  uint32_t time_boot_id = 0;   // boot that produced start_ticks_us (0 = unknown)
+  uint64_t start_ticks_us = 0; // esp_timer_get_time() at file open (0 = unknown)
+  bool pending = false;
+  uint16_t next_seq = 0;
 };
 
 bool manifest_init();
@@ -28,4 +30,7 @@ uint64_t manifest_uid_or_generate(const String &path, uint64_t fallback);
 bool manifest_add_file(const String &path, uint32_t size);
 bool manifest_add_file(const String &path, uint32_t size, uint32_t crc);
 bool manifest_set_crc(const String &path, uint32_t crc);
+// RAM-only timing for the transfer protocol; intentionally not persisted to
+// manifest.json (the tick base is boot-relative and meaningless after reboot).
+bool manifest_set_time(const String &path, uint32_t boot_id, uint64_t start_ticks_us);
 size_t manifest_pending_count();

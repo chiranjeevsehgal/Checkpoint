@@ -7,6 +7,7 @@ void recorder_stop();
 bool recorder_is_recording();
 uint32_t recorder_chunks_written();
 String recorder_current_file();
+uint32_t recorder_boot_id();
 void recorder_task(void *arg);
 void recorder_notify_bookmark();
 uint32_t recorder_dropped_bytes();

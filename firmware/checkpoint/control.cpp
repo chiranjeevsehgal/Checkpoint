@@ -1,5 +1,6 @@
 #include "control.h"
 #include "config.h"
+#include "clock.h"
 #include "protocol.h"
 #include "ble_service.h"
 #include "recorder.h"
@@ -46,6 +47,9 @@ volatile uint8_t s_sync_enabled_arg = 1;
 volatile uint16_t s_sync_seq = 0;
 volatile uint8_t s_sync_get_seq_valid = 0;
 volatile uint16_t s_sync_get_seq = 0;
+volatile bool s_time_req = false;
+volatile uint64_t s_time_unix_s = 0;
+volatile uint16_t s_time_seq = 0;
 // Erase arm timestamp, loop-task only (set/consumed in poll).
 static uint32_t s_erase_armed_ms = 0;
 // BLE auto-upload gate. Written only in control_poll (loop task), read in
@@ -450,6 +454,8 @@ void control_init() {
   s_erase_armed_ms = 0;
   s_sync_req = false;
   s_sync_get_seq_valid = 0;
+  s_time_req = false;
+  s_time_seq = 0;
   s_sync_enabled = control_load_sync_flag();
   control_load_led();
 }
@@ -537,6 +543,14 @@ bool control_on_packet(const Packet *pkt) {
   } else if (cmd == CTRL_CMD_SYNC_GET) {
     s_sync_get_seq = pkt->seq;
     s_sync_get_seq_valid = 1;
+  } else if (cmd == CTRL_CMD_TIME_SET) {
+    if (pkt->len >= 9) {
+      uint64_t unix_s = 0;
+      for (int i = 0; i < 8; i++) unix_s |= (uint64_t)pkt->payload[1 + i] << (i * 8);
+      s_time_unix_s = unix_s;
+      s_time_seq = pkt->seq;
+      s_time_req = true;
+    }
   } else if (cmd == CTRL_CMD_FILE_DELETE) {
     uint16_t n = (pkt->len > 1) ? (uint16_t)(pkt->len - 1) : 0;
     if (n == 0 || n > sizeof(s_del_path)) {
@@ -603,6 +617,9 @@ void control_poll() {
   uint16_t sync_seq = 0;
   bool sync_get = false;
   uint16_t sync_get_seq = 0;
+  bool time_req = false;
+  uint64_t time_unix_s = 0;
+  uint16_t time_seq = 0;
 
   portENTER_CRITICAL(&s_ctrl_mux);
   denied = s_denied_pending;
@@ -653,6 +670,10 @@ void control_poll() {
   sync_get = s_sync_get_seq_valid != 0;
   sync_get_seq = s_sync_get_seq;
   s_sync_get_seq_valid = 0;
+  time_req = s_time_req;
+  time_unix_s = s_time_unix_s;
+  time_seq = s_time_seq;
+  s_time_req = false;
   portEXIT_CRITICAL(&s_ctrl_mux);
 
   if (denied) {
@@ -756,6 +777,16 @@ void control_poll() {
     if (control_gate_ok()) {
       uint8_t extra[1] = {s_sync_enabled ? (uint8_t)1 : (uint8_t)0};
       control_send_cmd_resp(sync_get_seq, CTRL_CMD_SYNC_GET, CTRL_OK, extra, 1);
+    }
+  }
+
+  if (time_req) {
+    if (control_gate_ok()) {
+      clock_set_anchor(time_unix_s, clock_ticks_us());
+      uint32_t echo = (uint32_t)time_unix_s;
+      uint8_t extra[4] = {(uint8_t)(echo & 0xFF), (uint8_t)((echo >> 8) & 0xFF),
+                          (uint8_t)((echo >> 16) & 0xFF), (uint8_t)((echo >> 24) & 0xFF)};
+      control_send_cmd_resp(time_seq, CTRL_CMD_TIME_SET, CTRL_OK, extra, sizeof(extra));
     }
   }
 

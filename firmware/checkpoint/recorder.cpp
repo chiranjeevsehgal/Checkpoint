@@ -129,6 +129,7 @@ static String s_tmp_path;
 static String s_final_path;
 static uint32_t s_bytes_in_chunk = 0;
 static uint32_t s_chunk_start_ms = 0;
+static uint64_t s_chunk_start_us = 0;
 
 // Legacy WAV header for migration — kept for old .wav recovery and tests
 static void write_wav_header(File &f, uint32_t data_bytes) {
@@ -200,6 +201,7 @@ static bool open_chunk() {
   s_file_seq++;
   s_bytes_in_chunk = bos;
   s_chunk_start_ms = millis();
+  s_chunk_start_us = (uint64_t)esp_timer_get_time();
   s_current = s_tmp_path;
   s_encode_time_us_sum = 0;
   s_encode_frames = 0;
@@ -212,6 +214,7 @@ static bool open_chunk() {
   s_file_seq++;
   s_bytes_in_chunk = 0;
   s_chunk_start_ms = millis();
+  s_chunk_start_us = (uint64_t)esp_timer_get_time();
   s_current = s_tmp_path;
   return true;
 #endif
@@ -386,6 +389,8 @@ static void close_chunk(bool keep) {
       bool m_ok = manifest_add_file(s_final_path, total_size);
       if (!m_ok) {
         LOG_E("REC manifest fail");
+      } else {
+        manifest_set_time(s_final_path, s_boot_id, s_chunk_start_us);
       }
     }
   }
@@ -543,6 +548,7 @@ void recorder_stop() {
 bool recorder_is_recording() { return s_recording && s_task; }
 uint32_t recorder_chunks_written() { return s_chunks; }
 String recorder_current_file() { return s_current; }
+uint32_t recorder_boot_id() { return s_boot_id; }
 void recorder_notify_bookmark() {
 }
 uint32_t recorder_dropped_bytes() { return s_dropped_bytes; }

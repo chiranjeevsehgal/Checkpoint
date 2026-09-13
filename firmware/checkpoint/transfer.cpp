@@ -9,6 +9,7 @@
 #include "recorder.h"
 #include "ui.h"
 #include "control.h"
+#include "clock.h"
 #if !SD_USE_SDMMC
 #include <SD.h>
 #endif
@@ -621,13 +622,23 @@ void transfer_task(void *arg) {
       continue;
     }
 
-    uint8_t done_payload[16];
+    // Base 16-byte prefix plus an optional time trailer so hosts that only
+    // read the prefix (and hosts predating this field) stay compatible.
+    uint8_t done_payload[40];
     memcpy(done_payload, &file_uid, 8);
     memcpy(done_payload + 8, &file_crc, 4);
     memcpy(done_payload + 12, &total, 4);
+    uint64_t start_unix_s = 0;
+    if (!preview) clock_resolve(job->time_boot_id, job->start_ticks_us, &start_unix_s);
+    uint32_t done_boot_id = job->time_boot_id;
+    uint32_t duration_ms = 0; // reserved: recorder has no persisted end tick yet
+    memcpy(done_payload + 16, &done_boot_id, 4);
+    memcpy(done_payload + 20, &start_unix_s, 8);
+    memcpy(done_payload + 28, &job->start_ticks_us, 8);
+    memcpy(done_payload + 36, &duration_ms, 4);
     uint16_t done_seq = seq_gen++;
     xQueueReset(s_ack_q);
-    ble_send_packet(PKT_FILE_DONE, done_seq, done_payload, 16);
+    ble_send_packet(PKT_FILE_DONE, done_seq, done_payload, sizeof(done_payload));
     bool ok = wait_ack(done_seq, BLE_ACK_TIMEOUT_MS * 3);
     if (ok) {
       if (!preview) {

@@ -308,6 +308,20 @@ bool manifest_set_crc(const String &path, uint32_t crc) {
   return found;
 }
 
+bool manifest_set_time(const String &path, uint32_t boot_id, uint64_t start_ticks_us) {
+  if (!s_entries) ensure_capacity();
+  if (xSemaphoreTake(s_manifest_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) return false;
+  bool found = false;
+  for (size_t i = 0; i < s_count; i++) if (s_entries[i].path == path) {
+    s_entries[i].time_boot_id = boot_id;
+    s_entries[i].start_ticks_us = start_ticks_us;
+    found = true;
+    break;
+  }
+  xSemaphoreGive(s_manifest_mutex);
+  return found;
+}
+
 bool manifest_mark_done(const String &path) {
   if (xSemaphoreTake(s_manifest_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) return false;
   size_t w = 0;
