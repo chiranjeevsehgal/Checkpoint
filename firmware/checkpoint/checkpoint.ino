@@ -153,6 +153,7 @@ void loop() {
   // Recovery now only on boot (setup) and SD remount (sd_begin success paths above).
   ble_check_handshake_timeout();
   ble_check_final_diag();
+  ble_check_advertising();
   control_poll();
   auth_usb_poll();
   power_poll();

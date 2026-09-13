@@ -3,6 +3,7 @@
 #include "crypto.h"
 #include "auth.h"
 #include "ui.h"
+#include "log.h"
 #include <NimBLEDevice.h>
 #ifndef BLE_GAP_LE_PHY_2M_MASK
 #define BLE_GAP_LE_PHY_2M_MASK 0x02
@@ -322,19 +323,31 @@ bool ble_init() {
   s_ack->setCallbacks(new AckCallbacks());
   s_service->start();
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-  // Fix N/A on phone: put name in ADV (passive scan) and also in scan response
+  // The app filters scans by BLE_SERVICE_UUID, so the 128-bit UUID must sit in
+  // the advertisement packet itself; a UUID that only lives in the scan
+  // response is missed by some stacks. Name + UUID exceed the 31-byte legacy
+  // ADV (3 + 12 + 18 = 33), so the name moves to the scan response (the app
+  // tolerates a missing name and still matches on the UUID).
   {
     NimBLEAdvertisementData advData;
     advData.setFlags(0x06);
-    advData.setName(BLE_DEVICE_NAME);
     advData.addServiceUUID(BLE_SERVICE_UUID);
-    adv->setAdvertisementData(advData);
+    if (!adv->setAdvertisementData(advData)) {
+      LOG_E("BLE adv data fail");
+    }
     NimBLEAdvertisementData scanResp;
     scanResp.setName(BLE_DEVICE_NAME);
     scanResp.addServiceUUID(BLE_SERVICE_UUID);
-    adv->setScanResponseData(scanResp);
+    if (!adv->setScanResponseData(scanResp)) {
+      LOG_E("BLE scan rsp fail");
+    }
+    // Without this, a controller resync drops the scan response (and with it
+    // the UUID) while advertising silently continues.
+    adv->enableScanResponse(true);
   }
-  adv->start();
+  if (!adv->start()) {
+    LOG_E("BLE adv start fail");
+  }
   Serial.println("BLE advertising started");
   crypto_init();
   crypto_load_or_gen_key();
@@ -375,6 +388,26 @@ void ble_check_handshake_timeout() {
 void ble_check_final_diag() {
   // PHY/MTU tuning settles without Serial spam; phone-side logs cover triage.
   s_final_diag_due_ms = 0;
+}
+
+void ble_check_advertising() {
+  // Self-heal: if the link is down but advertising is not active (failed
+  // restart after disconnect, controller resync), bring it back so the app can
+  // always rediscover the pendant. Throttled to avoid log/host spam.
+  if (s_connected || !s_server) {
+    return;
+  }
+  static uint32_t last_try_ms = 0;
+  uint32_t now = millis();
+  if ((now - last_try_ms) < 2000) {
+    return;
+  }
+  last_try_ms = now;
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  if (adv && !adv->isAdvertising()) {
+    LOG_W("BLE adv restart");
+    adv->start();
+  }
 }
 
 void ble_disconnect() {
