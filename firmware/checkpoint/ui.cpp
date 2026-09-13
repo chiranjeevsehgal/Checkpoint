@@ -7,7 +7,7 @@
 #include <Adafruit_NeoPixel.h>
 
 enum LedState : uint8_t { LED_OFF, LED_ON, LED_BOOKMARK, LED_ERROR, LED_FATAL, LED_VAD_IDLE };
-enum LedOverlay : uint8_t { OVERLAY_NONE, OVERLAY_ENROLL, OVERLAY_AUTH_OK, OVERLAY_SLOT_DROP };
+enum LedOverlay : uint8_t { OVERLAY_NONE, OVERLAY_ENROLL, OVERLAY_AUTH_OK, OVERLAY_SLOT_DROP, OVERLAY_SLEEP };
 
 static TaskHandle_t s_task = nullptr;
 static volatile uint8_t s_state = 0;
@@ -32,6 +32,16 @@ static inline void ui_set_rgb(uint8_t r, uint8_t g, uint8_t b) {
   }
 }
 
+// Shared blue-blink timing so the pre-task wake flash and the sleeping
+// overlay stay in step.
+static bool ui_blue_on(uint32_t elapsed_ms, uint8_t flashes) {
+  uint32_t period = POWER_LED_FLASH_PERIOD_MS;
+  if (period == 0 || elapsed_ms >= (uint32_t)flashes * period) {
+    return false;
+  }
+  return (elapsed_ms % period) < POWER_LED_FLASH_ON_MS;
+}
+
 void ui_init() {
   s_rgb.begin();
   s_rgb.setBrightness(HW_RGB_BRIGHTNESS);
@@ -41,9 +51,31 @@ void ui_init() {
   pinMode(HW_BUTTON_GPIO, INPUT_PULLUP);
 }
 
+void ui_flash_blue(uint8_t flashes) {
+  uint32_t period = POWER_LED_FLASH_PERIOD_MS;
+  if (period == 0 || flashes == 0) {
+    return;
+  }
+  for (uint32_t elapsed = 0; elapsed < (uint32_t)flashes * period; elapsed += 20) {
+    if (ui_blue_on(elapsed, flashes)) {
+      ui_set_rgb(0, 0, POWER_LED_B);
+    } else {
+      ui_set_rgb(0, 0, 0);
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+  ui_set_rgb(0, 0, 0);
+}
+
+void ui_signal_sleeping() {
+  s_overlay = OVERLAY_SLEEP;
+  s_overlay_enter_ms = millis();
+}
+
 void ui_signal_recording(bool on) {
   s_state = on ? LED_ON : LED_OFF;
 }
+
 void ui_signal_vad_listening() {
   s_state = LED_VAD_IDLE;
 }
@@ -172,6 +204,11 @@ void ui_task(void *arg) {
     if (s_overlay == OVERLAY_ENROLL && !auth_enrollment_active()) s_overlay = OVERLAY_NONE;
     if (s_overlay == OVERLAY_AUTH_OK && (now - s_overlay_enter_ms) > 1000) s_overlay = OVERLAY_NONE;
     if (s_overlay == OVERLAY_SLOT_DROP && (now - s_overlay_enter_ms) > 720) s_overlay = OVERLAY_NONE;
+    if (s_overlay == OVERLAY_SLEEP &&
+        (now - s_overlay_enter_ms) >
+            (uint32_t)POWER_SLEEP_LED_FLASHES * POWER_LED_FLASH_PERIOD_MS) {
+      s_overlay = OVERLAY_NONE;
+    }
     // Track state entry for non-blocking blinks
     static uint8_t prev_state = 255;
     if (s_state != prev_state) {
@@ -200,6 +237,9 @@ void ui_task(void *arg) {
       bool on = drop_removed ? ((now - s_overlay_enter_ms) % 240 < 120)
                              : ((now - s_overlay_enter_ms) < 120);
       ui_set_rgb(on ? 255 : 0, 0, 0);
+    } else if (s_overlay == OVERLAY_SLEEP) {
+      bool on = ui_blue_on(now - s_overlay_enter_ms, POWER_SLEEP_LED_FLASHES);
+      ui_set_rgb(0, 0, on ? POWER_LED_B : 0);
     } else switch (s_state) {
       case LED_OFF: ui_set_rgb(0, 0, 0); break;
       case LED_ON:

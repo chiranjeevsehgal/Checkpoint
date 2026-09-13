@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Modal, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, View } from 'react-native';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -56,9 +56,11 @@ function DialogBody({
 export function ConfirmDialog({ visible, onCancel, ...rest }: ConfirmDialogProps) {
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <View className="flex-1 items-center justify-center bg-black/50 p-6">
-        {visible ? <DialogBody {...rest} onCancel={onCancel} /> : null}
-      </View>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+        <View className="flex-1 items-center justify-center bg-black/50 p-6">
+          {visible ? <DialogBody {...rest} onCancel={onCancel} /> : null}
+        </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

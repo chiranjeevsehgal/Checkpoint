@@ -53,6 +53,12 @@ describe('describeScanError', () => {
     assert.match(describeScanError(601, 'fallback'), /Location services/);
   });
 
+  it('maps resetting and throttled scan codes', () => {
+    assert.match(describeScanError(103, 'fallback'), /resetting/);
+    assert.match(describeScanError(104, 'fallback'), /resetting/);
+    assert.match(describeScanError(600, 'fallback'), /scan could not start/);
+  });
+
   it('falls back to the native message', () => {
     assert.equal(describeScanError(999, 'weird failure'), 'weird failure');
   });

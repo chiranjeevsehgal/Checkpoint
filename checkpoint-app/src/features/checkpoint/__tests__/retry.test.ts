@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { nextRetryDelayMs } from '../retry.ts';
+import { growBackoffMs, nextRetryDelayMs } from '../retry.ts';
 
 describe('nextRetryDelayMs', () => {
   it('starts at the first delay', () => {
@@ -27,5 +27,17 @@ describe('nextRetryDelayMs', () => {
       assert.ok(delay >= previous, `attempt ${attempts} decreased`);
       previous = delay;
     }
+  });
+});
+
+describe('growBackoffMs', () => {
+  it('doubles the delay', () => {
+    assert.equal(growBackoffMs(2_000, 30_000), 4_000);
+    assert.equal(growBackoffMs(4_000, 30_000), 8_000);
+  });
+
+  it('caps at the maximum', () => {
+    assert.equal(growBackoffMs(16_000, 30_000), 30_000);
+    assert.equal(growBackoffMs(30_000, 30_000), 30_000);
   });
 });

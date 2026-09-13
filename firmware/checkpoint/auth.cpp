@@ -1,5 +1,6 @@
 #include "auth.h"
 #include "crypto.h"
+#include "power.h"
 #include <Preferences.h>
 
 namespace {
@@ -449,8 +450,12 @@ void auth_usb_poll() {
       Serial.println("keep this secret — it enrolls new devices");
       memset(claim, 0, sizeof(claim));
       memset(dev, 0, sizeof(dev));
+    } else if (line == "power sleep") {
+      Serial.println("sleeping");
+      Serial.flush();
+      power_sleep_now();
     } else if (line.length() > 0) {
-      Serial.println("commands: auth list | auth forget 0|1 | auth reset | auth export");
+      Serial.println("commands: auth list | auth forget 0|1 | auth reset | auth export | power sleep");
     }
     line = "";
   }

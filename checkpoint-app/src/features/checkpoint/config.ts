@@ -43,6 +43,7 @@ export const ACK_TIMEOUT_MS = 5000;
 export const READY_RETRIES = 3;
 export const CONNECT_ATTEMPT_LIMIT = 3;
 export const RECONNECT_DELAY_MS = 2000;
+export const RECONNECT_DELAY_MAX_MS = 30000;
 export const AUTO_CONNECT_COOLDOWN_MS = 60_000;
 export const COMPLETED_CACHE_SIZE = 16;
 

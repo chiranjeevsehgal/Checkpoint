@@ -1,6 +1,11 @@
 #pragma once
 #include <Arduino.h>
 void ui_init();
+// Synchronous blue flash for pre-ui_task use (deep-sleep wake). ui_init()
+// must have run.
+void ui_flash_blue(uint8_t flashes);
+// Ask ui_task to blink blue before the device sleeps.
+void ui_signal_sleeping();
 void ui_task(void *arg);
 void ui_signal_recording(bool on);
 void ui_signal_vad_listening(); // VAD idle: mic ON, listening, no speech yet

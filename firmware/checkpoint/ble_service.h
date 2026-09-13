@@ -18,6 +18,7 @@ void ble_check_handshake_timeout();
 // Force-drop the link so both sides restart from a clean session.
 void ble_disconnect();
 void ble_check_final_diag();
+void ble_check_advertising();
 bool ble_send_packet(uint8_t type, uint16_t seq, const uint8_t *payload, uint16_t len);
 bool ble_send_raw(const uint8_t *data, size_t len);
 void ble_on_packet(void (*cb)(const uint8_t *data, size_t len));
