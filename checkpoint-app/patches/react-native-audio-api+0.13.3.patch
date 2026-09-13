@@ -1,8 +1,8 @@
 diff --git a/node_modules/react-native-audio-api/android/build.gradle b/node_modules/react-native-audio-api/android/build.gradle
-index 0033a2b..6e54272 100644
+index 0033a2b..50f2559 100644
 --- a/node_modules/react-native-audio-api/android/build.gradle
 +++ b/node_modules/react-native-audio-api/android/build.gradle
-@@ -224,6 +224,17 @@ android {
+@@ -224,6 +224,20 @@ android {
    externalNativeBuild {
      cmake {
        path "CMakeLists.txt"
@@ -11,16 +11,19 @@ index 0033a2b..6e54272 100644
 +      // make CMake flatten their absolute paths into the object dir, pushing
 +      // generated paths past the 260-char Windows limit. Stage the native build
 +      // in a short root instead. Override with RN_AUDIO_API_CXX_DIR if C:/rnc
-+      // is not writable on this machine.
-+      def rnAudioCxxDir = System.getenv("RN_AUDIO_API_CXX_DIR")
-+      if (rnAudioCxxDir == null || rnAudioCxxDir.trim().isEmpty()) {
-+        rnAudioCxxDir = rootProject.rootDir.absolutePath.substring(0, 2) + "/rnc"
++      // is not writable on this machine. Skipped on Linux/macOS, where the
++      // default staging directory is fine (there is no MAX_PATH limit).
++      if (Os.isFamily(Os.FAMILY_WINDOWS)) {
++        def rnAudioCxxDir = System.getenv("RN_AUDIO_API_CXX_DIR")
++        if (rnAudioCxxDir == null || rnAudioCxxDir.trim().isEmpty()) {
++          rnAudioCxxDir = rootProject.rootDir.absolutePath.substring(0, 2) + "/rnc"
++        }
++        buildStagingDirectory = new File(rnAudioCxxDir)
 +      }
-+      buildStagingDirectory = new File(rnAudioCxxDir)
      }
    }
  
-@@ -320,7 +331,15 @@ def assertMinimalReactNativeVersion = task assertMinimalReactNativeVersionTask {
+@@ -320,7 +334,15 @@ def assertMinimalReactNativeVersion = task assertMinimalReactNativeVersionTask {
  task downloadPrebuiltBinaries(type: Exec) {
    def isWindows = Os.isFamily(Os.FAMILY_WINDOWS)
    if (isWindows) {
