@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { ArrowDownUp, HardDrive, Mic, Settings } from 'lucide-react-native';
+import { ArrowDownUp, HardDrive, Settings } from 'lucide-react-native';
 import { useColorScheme } from 'nativewind';
 
 import { PendantLogo } from '@/components/shared/pendant-logo';
@@ -30,15 +30,8 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="connect"
         options={{
-          title: 'Connect',
+          title: 'Pendant',
           tabBarIcon: ({ color, size }) => <PendantLogo height={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="device"
-        options={{
-          title: 'Device',
-          tabBarIcon: ({ color, size }) => <Icon as={Mic} color={color} size={size} />,
         }}
       />
       <Tabs.Screen
