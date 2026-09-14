@@ -1,6 +1,8 @@
 #include "control.h"
 #include "config.h"
+#include "auth.h"
 #include "clock.h"
+#include "crypto.h"
 #include "protocol.h"
 #include "ble_service.h"
 #include "recorder.h"
@@ -50,8 +52,19 @@ volatile uint16_t s_sync_get_seq = 0;
 volatile bool s_time_req = false;
 volatile uint64_t s_time_unix_s = 0;
 volatile uint16_t s_time_seq = 0;
+volatile bool s_cloud_req = false;
+volatile uint16_t s_cloud_seq = 0;
+volatile bool s_clear_slots_req = false;
+volatile uint16_t s_clear_slots_seq = 0;
+volatile bool s_forget_self_req = false;
+volatile uint16_t s_forget_self_seq = 0;
 // Erase arm timestamp, loop-task only (set/consumed in poll).
 static uint32_t s_erase_armed_ms = 0;
+// Set after the clear-slots ACK is sent; acted on the next poll tick so the
+// indicate can flush before the session is invalidated.
+static bool s_clear_slots_pending = false;
+// Same ACK-then-act ordering for dropping the caller's own trusted slot.
+static bool s_forget_self_pending = false;
 // BLE auto-upload gate. Written only in control_poll (loop task), read in
 // transfer_task; single-byte volatile matches the s_busy cross-task style.
 static volatile bool s_sync_enabled = true;
@@ -575,6 +588,15 @@ bool control_on_packet(const Packet *pkt) {
     }
     s_fetch_seq = pkt->seq;
     s_fetch_req = true;
+  } else if (cmd == CTRL_CMD_GET_CLOUD_SECRET) {
+    s_cloud_seq = pkt->seq;
+    s_cloud_req = true;
+  } else if (cmd == CTRL_CMD_CLEAR_TRUSTED_SLOTS) {
+    s_clear_slots_seq = pkt->seq;
+    s_clear_slots_req = true;
+  } else if (cmd == CTRL_CMD_FORGET_SELF) {
+    s_forget_self_seq = pkt->seq;
+    s_forget_self_req = true;
   } else {
     // Unknown cmd IDs are acked as BAD_ARG in poll.
     s_rec_seq = pkt->seq;
@@ -584,7 +606,43 @@ bool control_on_packet(const Packet *pkt) {
   return true;
 }
 
+void control_send_cloud_secret(uint16_t seq) {
+  uint8_t key[CRYPTO_KEY_BYTES];
+  uint8_t secret[AUTH_CLOUD_SECRET_BYTES];
+  uint8_t nonce[CRYPTO_NONCE_BYTES];
+  uint8_t payload[2 + CRYPTO_NONCE_BYTES + AUTH_CLOUD_SECRET_BYTES + CRYPTO_TAG_BYTES];
+  if (!auth_get_session_key(key) || !auth_get_cloud_secret(secret)) {
+    control_send_cmd_resp(seq, CTRL_CMD_GET_CLOUD_SECRET, CTRL_ERR_DENIED, nullptr, 0);
+    return;
+  }
+  crypto_build_cloud_nonce(ble_session_id(), seq, nonce);
+  uint8_t aad[4] = {(uint8_t)PROTO_VER, (uint8_t)CTRL_CMD_GET_CLOUD_SECRET, (uint8_t)(seq & 0xFF), (uint8_t)((seq >> 8) & 0xFF)};
+  payload[0] = CTRL_CMD_GET_CLOUD_SECRET;
+  payload[1] = CTRL_OK;
+  memcpy(payload + 2, nonce, CRYPTO_NONCE_BYTES);
+  bool ok = crypto_aead_encrypt(key, nonce, secret, sizeof(secret), aad, sizeof(aad),
+                                payload + 2 + CRYPTO_NONCE_BYTES,
+                                payload + 2 + CRYPTO_NONCE_BYTES + AUTH_CLOUD_SECRET_BYTES);
+  if (ok) {
+    ble_send_packet(PKT_CMD_RESP, seq, payload, (uint16_t)sizeof(payload));
+  } else {
+    control_send_cmd_resp(seq, CTRL_CMD_GET_CLOUD_SECRET, CTRL_ERR_NOT_READY, nullptr, 0);
+  }
+  memset(key, 0, sizeof(key));
+  memset(secret, 0, sizeof(secret));
+  memset(nonce, 0, sizeof(nonce));
+  memset(payload, 0, sizeof(payload));
+}
+
 void control_poll() {
+  if (s_forget_self_pending) {
+    s_forget_self_pending = false;
+    auth_forget_self();
+  }
+  if (s_clear_slots_pending) {
+    s_clear_slots_pending = false;
+    auth_clear_slots();
+  }
   bool denied = false;
   bool status_req = false;
   uint16_t status_seq = 0;
@@ -620,6 +678,12 @@ void control_poll() {
   bool time_req = false;
   uint64_t time_unix_s = 0;
   uint16_t time_seq = 0;
+  bool cloud_req = false;
+  uint16_t cloud_seq = 0;
+  bool clear_slots_req = false;
+  uint16_t clear_slots_seq = 0;
+  bool forget_self_req = false;
+  uint16_t forget_self_seq = 0;
 
   portENTER_CRITICAL(&s_ctrl_mux);
   denied = s_denied_pending;
@@ -674,6 +738,15 @@ void control_poll() {
   time_unix_s = s_time_unix_s;
   time_seq = s_time_seq;
   s_time_req = false;
+  cloud_req = s_cloud_req;
+  cloud_seq = s_cloud_seq;
+  s_cloud_req = false;
+  clear_slots_req = s_clear_slots_req;
+  clear_slots_seq = s_clear_slots_seq;
+  s_clear_slots_req = false;
+  forget_self_req = s_forget_self_req;
+  forget_self_seq = s_forget_self_seq;
+  s_forget_self_req = false;
   portEXIT_CRITICAL(&s_ctrl_mux);
 
   if (denied) {
@@ -787,6 +860,26 @@ void control_poll() {
       uint8_t extra[4] = {(uint8_t)(echo & 0xFF), (uint8_t)((echo >> 8) & 0xFF),
                           (uint8_t)((echo >> 16) & 0xFF), (uint8_t)((echo >> 24) & 0xFF)};
       control_send_cmd_resp(time_seq, CTRL_CMD_TIME_SET, CTRL_OK, extra, sizeof(extra));
+    }
+  }
+
+  if (cloud_req) {
+    if (control_gate_ok()) {
+      control_send_cloud_secret(cloud_seq);
+    }
+  }
+
+  if (clear_slots_req) {
+    if (control_gate_ok()) {
+      control_send_cmd_resp(clear_slots_seq, CTRL_CMD_CLEAR_TRUSTED_SLOTS, CTRL_OK, nullptr, 0);
+      s_clear_slots_pending = true;
+    }
+  }
+
+  if (forget_self_req) {
+    if (control_gate_ok()) {
+      control_send_cmd_resp(forget_self_seq, CTRL_CMD_FORGET_SELF, CTRL_OK, nullptr, 0);
+      s_forget_self_pending = true;
     }
   }
 

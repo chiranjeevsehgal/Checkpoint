@@ -44,14 +44,12 @@ def test_sync_gate_no_retry_accounting():
 def test_sync_status_parity():
     cpp = (BASE / "control.cpp").read_text()
     assert "out[16] = s_sync_enabled" in cpp
-    cli = (HOST / "client - ingestion.py").read_text()
+    cli = (HOST / "client_app" / "config.py").read_text(encoding="utf-8")
     assert "CTRL_CMD_SYNC_SET = 0x12" in cli
     assert "CTRL_CMD_SYNC_GET = 0x13" in cli
     assert "CTRL_STATUS_LEN = 17" in cli
-    assert '"sync"' in cli or "'sync'" in cli
-    simple = (HOST / "client.py").read_text()
-    assert "CTRL_CMD_SYNC_SET = 0x12" in simple
-    assert "CTRL_STATUS_LEN = 17" in simple
+    ble = (HOST / "client_app" / "ble_client.py").read_text(encoding="utf-8")
+    assert '"sync"' in ble or "'sync'" in ble
     print("PASS sync status parity")
 
 
@@ -68,12 +66,12 @@ def test_sync_latch_discipline():
 
 
 def test_gui_sync_toggle():
-    gui = (HOST / "gui.py").read_text()
+    gui = ((HOST / "client_app" / "ui_cards.py").read_text(encoding="utf-8")
+           + (HOST / "client_app" / "ui_main.py").read_text(encoding="utf-8"))
     assert "Auto-sync" in gui
-    assert "on_sync_apply" in gui
+    assert "on_sync_toggle" in gui
     assert "_sync_flow" in gui
-    assert "sync_chk" in gui and "btn_sync_apply" in gui
-    assert "sync:on" in gui or "sync:" in gui
+    assert "sync_chk" in gui
     print("PASS gui sync toggle")
 
 

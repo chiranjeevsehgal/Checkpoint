@@ -17,7 +17,13 @@ import {
   TRANSFER_TICK_MS,
 } from './config.ts';
 import { clearEnrolledDeviceId, deleteCredential, getEnrolledDeviceId } from './credentials.ts';
-import { hexToBytes } from './crypto.ts';
+import { bytesToHex, hexToBytes } from './crypto.ts';
+import {
+  claimDevice,
+  getDevice,
+  isClaimDenied,
+  releaseDevice as releaseDeviceOnServer,
+} from './device.ts';
 import { IngestionUploader } from './ingestion.ts';
 import { networkMonitor } from './networkMonitor.ts';
 import type { HealthProbe } from './networkStatus.ts';
@@ -27,6 +33,7 @@ import { playback } from './playback.ts';
 import { nextRetryDelayMs } from './retry.ts';
 import { defaultSettings, type CheckpointSettings } from './settings.ts';
 import {
+  clearAllSaved,
   deleteSaved,
   loadTransfers,
   readSavedBytes,
@@ -49,6 +56,8 @@ import type {
   StorageInfo,
 } from './types.ts';
 import { checkSpeech, shouldUpload, vadSkipReason } from './vad.ts';
+
+import { getSessionToken } from '@/lib/session';
 
 export interface ListPage {
   start: number;
@@ -85,6 +94,7 @@ export interface EngineSnapshot {
   deviceId: string | null;
   enrolled: boolean;
   autoConnecting: boolean;
+  ownedDeviceId: string | null;
 }
 
 const INITIAL_SNAPSHOT: EngineSnapshot = {
@@ -106,6 +116,7 @@ const INITIAL_SNAPSHOT: EngineSnapshot = {
   deviceId: null,
   enrolled: false,
   autoConnecting: false,
+  ownedDeviceId: null,
 };
 
 function mapBluetoothState(state: State): BluetoothStatus {
@@ -147,6 +158,7 @@ class SyncEngine {
   private lastAutoConnectAt = 0;
   private connectTask: Promise<void> | null = null;
   private connectOrigin: 'user' | 'auto' | null = null;
+  private ownershipDenied = false;
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -161,8 +173,13 @@ class SyncEngine {
     this.settings = settings;
   }
 
+  setOwnedDevice(deviceId: string | null): void {
+    this.setState({ ownedDeviceId: deviceId });
+  }
+
   async start(): Promise<void> {
     if (this.started) return;
+    if (!getSessionToken()) return;
     this.started = true;
     this.appendLog('[sync] engine started');
     const stored = await loadTransfers();
@@ -187,6 +204,21 @@ class SyncEngine {
     this.lastAutoConnectAt = 0;
     this.setState({ enrolled: (await getEnrolledDeviceId()) !== null });
     await this.maybeAutoConnect();
+  }
+
+  async stopForAuthLoss(): Promise<void> {
+    await this.stop();
+  }
+
+  /** Removes every locally stored recording and the transfer history. */
+  clearLocalData(): void {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    clearAllSaved();
+    this.setState({ transfers: [] });
+    this.appendLog('[ui] local recordings cleared');
   }
 
   async stop(): Promise<void> {
@@ -407,8 +439,12 @@ class SyncEngine {
         this.patchRecord(record.fileId, { localUri: undefined });
         return;
       }
+      if (!this.snapshot.ownedDeviceId) {
+        this.appendLog('  [!] ingest skipped: no cloud-owned pendant');
+        return;
+      }
       this.appendLog(`  [ingest] uploading file_${record.fileId}.ogg (${bytes.length}B) ...`);
-      const uploader = new IngestionUploader(this.settings.serverUrl, this.settings.userId);
+      const uploader = new IngestionUploader(this.settings.serverUrl, this.snapshot.ownedDeviceId);
       try {
         const result = await uploader.upload(bytes, `file_${record.fileId}.ogg`, 'audio/ogg', {
           idempotencyKey: record.fileId,
@@ -509,6 +545,11 @@ class SyncEngine {
   }
 
   private async handleCompletedFile(file: CompletedFile): Promise<void> {
+    if (this.ownershipDenied) {
+      CheckpointClient.deleteLocalCopy(file.fileIdHex);
+      this.appendLog(`  [ui] dropped ${file.fileIdHex}: pendant not owned`);
+      return;
+    }
     const current = this.settings;
     const verdict = current.vadEnabled
       ? await checkSpeech(file.bytes, {
@@ -588,6 +629,7 @@ class SyncEngine {
     if (this.connectTask) await this.connectTask;
     if (this.snapshot.connected || this.snapshot.busy) return;
     this.connectOrigin = origin;
+    this.ownershipDenied = false;
     this.setState(
       origin === 'user'
         ? { busy: true, autoConnecting: false, linkState: 'connecting', needsSettings: false }
@@ -677,6 +719,11 @@ class SyncEngine {
           stopped: () => this.stopped,
           onReady: async () => {
             await this.syncClock(client);
+            const ownership = await this.ensureCloudOwnership(client);
+            if (ownership === 'denied') {
+              await this.rejectOwnership(client);
+              return;
+            }
             this.setState({ connected: true, busy: false, autoConnecting: false });
             this.setState({ deviceId: await getEnrolledDeviceId(), enrolled: true });
             this.appendLog('[ui] listening for file transfers …');
@@ -693,6 +740,7 @@ class SyncEngine {
             void this.drainQueue();
           },
           onAlive: () => {
+            if (this.ownershipDenied) return;
             this.setState({
               connected: true,
               busy: false,
@@ -723,7 +771,7 @@ class SyncEngine {
         connected: false,
         busy: false,
         autoConnecting: false,
-        linkState: 'idle',
+        linkState: this.ownershipDenied ? 'not owned' : 'idle',
         deviceId: null,
       });
       this.client = null;
@@ -789,6 +837,86 @@ class SyncEngine {
     await clearEnrolledDeviceId();
     this.setState({ enrolled: false, deviceId: null });
     this.appendLog('[ui] pendant forgotten');
+  }
+
+  private async ensureCloudOwnership(
+    client: CheckpointClient,
+  ): Promise<'owned' | 'denied' | 'unknown'> {
+    const token = getSessionToken();
+    if (!token) {
+      this.setOwnedDevice(null);
+      return 'unknown';
+    }
+    const enrolled = await getEnrolledDeviceId();
+    if (!enrolled) {
+      this.setOwnedDevice(null);
+      return 'unknown';
+    }
+    try {
+      const owned = await getDevice(this.settings.serverUrl, token);
+      if (owned?.device_id === enrolled) {
+        this.setOwnedDevice(owned.device_id);
+        return 'owned';
+      }
+      const secret = await client.getCloudSecret();
+      if (!secret) {
+        this.setOwnedDevice(null);
+        this.appendLog('[ui] pendant is not claimed to this account');
+        return 'unknown';
+      }
+      const claimed = await claimDevice(
+        this.settings.serverUrl,
+        token,
+        enrolled,
+        bytesToHex(secret),
+      );
+      this.setOwnedDevice(claimed.device_id);
+      this.appendLog('[ui] pendant claimed to this account');
+      return 'owned';
+    } catch (error) {
+      this.setOwnedDevice(null);
+      if (isClaimDenied(error)) {
+        return 'denied';
+      }
+      this.appendLog(
+        `[ui] cloud claim failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
+      return 'unknown';
+    }
+  }
+
+  private async rejectOwnership(client: CheckpointClient): Promise<void> {
+    this.ownershipDenied = true;
+    this.autoConnectSuppressed = true;
+    this.appendLog('[ui] pendant is linked to another account');
+    try {
+      await client.cmdSyncSet(false);
+    } catch {
+      // best effort: stop the device from pushing files
+    }
+    try {
+      await client.forgetSelf();
+    } catch {
+      // older firmware acks BAD_ARG; local cleanup still applies
+    }
+    await this.forgetDevice();
+  }
+
+  async releasePendant(): Promise<void> {
+    const token = getSessionToken();
+    if (!token) throw new Error('Not signed in.');
+    const client = this.client;
+    if (!client) throw new Error('Connect to the pendant first.');
+    const erase = await this.eraseStorage();
+    if (erase !== CTRL_OK) throw new Error('Local erase failed — cloud ownership unchanged.');
+    const cleared = await client.clearTrustedSlots();
+    if (cleared !== CTRL_OK) {
+      throw new Error('Could not clear pendant trust — cloud ownership unchanged.');
+    }
+    await releaseDeviceOnServer(this.settings.serverUrl, token);
+    await this.forgetDevice();
+    this.setOwnedDevice(null);
+    this.appendLog('[ui] pendant released');
   }
 
   refreshStatus = async (): Promise<void> => {

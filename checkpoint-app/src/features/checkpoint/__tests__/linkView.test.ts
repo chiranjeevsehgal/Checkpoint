@@ -27,6 +27,13 @@ describe('linkView', () => {
     assert.equal(linkView('reconnecting', 'Checkpoint').label, 'Reconnecting…');
   });
 
+  it('explains a pendant linked to another account', () => {
+    const view = linkView('not owned', 'Checkpoint');
+    assert.equal(view.label, 'Linked to another account');
+    assert.match(view.sub, /another Checkpoint account/);
+    assert.equal(view.openSettings, false);
+  });
+
   it('falls back to idle for unknown states', () => {
     assert.equal(linkView('something-else', 'Checkpoint').label, 'Not connected');
   });

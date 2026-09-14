@@ -79,8 +79,12 @@ def test_ino_wiring():
     print("PASS ino wiring")
 
 
+def read_host(*names):
+    return "\n".join((HOST / "client_app" / n).read_text(encoding="utf-8") for n in names)
+
+
 def test_host_ingestion_client():
-    cli = (HOST / "client - ingestion.py").read_text()
+    cli = read_host("config.py", "ble_client.py")
     for token in ("PKT_CMD = 0x20", "PKT_STATUS_REQ = 0x22",
                   "CTRL_CMD_REC_START", "CTRL_CMD_LED_SET",
                   "cmd_rec_start", "cmd_rec_stop",
@@ -91,18 +95,17 @@ def test_host_ingestion_client():
 
 
 def test_host_gui():
-    gui = (HOST / "gui.py").read_text()
-    for token in ("Rec Start", "Rec Stop", "Apply LED", "LED muted",
-                  "on_rec_start", "on_rec_stop", "on_led_apply",
-                  "on_status_refresh", "rec_status", "cmd_resp"):
+    gui = read_host("ui_cards.py", "ui_main.py", "ui_events.py")
+    for token in ("Rec", "LED muted", "on_rec_toggle",
+                  "on_led_toggle", "on_status_refresh", "rec_status", "cmd_resp"):
         assert token in gui, f"missing {token}"
     print("PASS host gui")
 
 
 def test_simple_client_parity():
-    cli = (HOST / "client.py").read_text()
-    assert "PKT_CMD = 0x20" in cli
-    assert "PKT_STATUS_RESP" in cli
+    cfg_src = read_host("config.py")
+    assert "PKT_CMD = 0x20" in cfg_src
+    assert "PKT_STATUS_RESP" in cfg_src
     print("PASS simple client parity")
 
 

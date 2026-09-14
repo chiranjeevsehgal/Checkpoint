@@ -47,10 +47,14 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      CHECKPOINT_REQUEST_PASSWORD: ${CHECKPOINT_REQUEST_PASSWORD:-checkpoint_request_password}
+      CHECKPOINT_WORKER_PASSWORD: ${CHECKPOINT_WORKER_PASSWORD:-checkpoint_worker_password}
+      KRATOS_DB_PASSWORD: ${KRATOS_DB_PASSWORD:-kratos_db_password}
       PGDATA: /var/lib/postgresql/data/pgdata
       TZ: Asia/Kolkata
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/bootstrap.sh:/docker-entrypoint-initdb.d/10-bootstrap.sh:ro
     command: >
       /bin/bash -c "ln -sf Kolkata /usr/share/zoneinfo/Asia/Calcutta && exec docker-entrypoint.sh postgres -c timezone=Asia/Kolkata"
     healthcheck:
@@ -137,6 +141,10 @@ services:
     environment:
       PORT: 8080
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      DATABASE_REQUEST_URL: postgres://checkpoint_request:${CHECKPOINT_REQUEST_PASSWORD:-checkpoint_request_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      DATABASE_WORKER_URL: postgres://checkpoint_worker:${CHECKPOINT_WORKER_PASSWORD:-checkpoint_worker_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      KRATOS_PUBLIC_URL: ${KRATOS_PUBLIC_URL:-http://kratos:4433}
+      KRATOS_ADMIN_URL: ${KRATOS_ADMIN_URL:-http://kratos:4434}
       MINIO_ENDPOINT: minio:9000
       MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-localhost:9000}
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
@@ -145,6 +153,7 @@ services:
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC_TRANSCRIPTION: ${KAFKA_TOPIC_TRANSCRIPTION:-transcription.jobs.v1}
       KAFKA_CLIENT_ID: ingestion-api
+    restart: unless-stopped
 
   kafka-init:
     image: apache/kafka:4.3.1
@@ -247,4 +256,48 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
       EMBEDDING_CHUNK_TOKENS: ${EMBEDDING_CHUNK_TOKENS:-1000}
       EMBEDDING_CHUNK_OVERLAP_TOKENS: ${EMBEDDING_CHUNK_OVERLAP_TOKENS:-100}
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: mailpit
+    networks:
+      - backend
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+  kratos-migrate:
+    image: oryd/kratos:v26.2.0
+    container_name: kratos-migrate
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DSN: postgres://kratos:${KRATOS_DB_PASSWORD:-kratos_db_password}@postgres:5432/kratos?sslmode=disable
+    command: migrate sql -e --yes
+    restart: on-failure
+
+  kratos:
+    image: oryd/kratos:v26.2.0
+    container_name: kratos
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kratos-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "4433:4433"
+    environment:
+      DSN: postgres://kratos:${KRATOS_DB_PASSWORD:-kratos_db_password}@postgres:5432/kratos?sslmode=disable
+      # Public URL advertised in flow ui.action; must be reachable by the
+      # client (a phone cannot resolve localhost). Override per environment.
+      SERVE_PUBLIC_BASE_URL: ${KRATOS_PUBLIC_BASE_URL:-http://localhost:4433/}
+    volumes:
+      - ./infra/kratos:/etc/config/kratos:ro
+    command: serve -c /etc/config/kratos/kratos.yml --watch-courier
     restart: unless-stopped

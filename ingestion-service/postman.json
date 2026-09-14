@@ -2,7 +2,7 @@
 	"info": {
 		"_postman_id": "c41a9c1e-7b2a-4f3e-9c1d-8e5f6a7b8c9d",
 		"name": "Checkpoint Ingestion Service",
-		"description": "Local-dev collection for the ingestion API (see ingestion-service/README or docs/SETUP.md).\n\nRun order: 1 Create → 2 PUT file → 3 Complete → 4 Get.\nBefore running: set the `fileSize` collection variable to the EXACT byte size of the file you attach in request 2, and attach the file itself (Body → Select File). `upload_id` and `uploadUrl` are filled in automatically by request 1's test script.",
+		"description": "Local-dev collection for the ingestion API (see ingestion-service/README or docs/SETUP.md).\n\nRun order: 1 Create → 2 PUT file → 3 Complete → 4 Get.\nBefore running: set `sessionToken` to a Kratos session token and `deviceId` to a pendant owned by that account; set the `fileSize` collection variable to the EXACT byte size of the file you attach in request 2, and attach the file itself (Body → Select File). `upload_id` and `uploadUrl` are filled in automatically by request 1's test script.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"auth": {
@@ -10,7 +10,7 @@
 		"bearer": [
 			{
 				"key": "token",
-				"value": "{{userId}}",
+				"value": "{{sessionToken}}",
 				"type": "string"
 			}
 		]
@@ -25,9 +25,14 @@
 			"value": "transcription.jobs.v1"
 		},
 		{
-			"key": "userId",
-			"value": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-			"description": "Dev stand-in identity: any UUID works as the Bearer token."
+			"key": "sessionToken",
+			"value": "",
+			"description": "Kratos session token. Obtain it from the Kratos public API (http://localhost:4433) and paste it here."
+		},
+		{
+			"key": "deviceId",
+			"value": "",
+			"description": "32-char lowercase hex device id of a pendant owned by the authenticated account."
 		},
 		{
 			"key": "fileSize",
@@ -61,7 +66,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"filename\": \"speech.ogg\",\n  \"content_type\": \"audio/ogg\",\n  \"size_bytes\": {{fileSize}},\n  \"recorded_at\": \"2026-09-13T10:15:00Z\"\n}",
+							"raw": "{\n  \"filename\": \"speech.ogg\",\n  \"content_type\": \"audio/ogg\",\n  \"size_bytes\": {{fileSize}},\n  \"recorded_at\": \"2026-09-13T10:15:00Z\",\n  \"device_id\": \"{{deviceId}}\"\n}",
 							"options": {
 								"raw": {
 									"language": "json"

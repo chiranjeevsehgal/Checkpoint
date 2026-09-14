@@ -13,8 +13,10 @@ import (
 	"sync"
 	"syscall"
 
+	"checkpoint/ingestion/internal/auth"
 	"checkpoint/ingestion/internal/cleanup"
 	"checkpoint/ingestion/internal/config"
+	"checkpoint/ingestion/internal/deletion"
 	apihttp "checkpoint/ingestion/internal/http"
 	"checkpoint/ingestion/internal/metrics"
 	"checkpoint/ingestion/internal/outbox"
@@ -39,9 +41,14 @@ func main() {
 	}
 
 	ctx := context.Background()
-	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL)
+	requestPool, err := postgres.NewPool(ctx, cfg.DatabaseRequestURL)
 	if err != nil {
-		logger.Error("postgres connect failed", "error", err)
+		logger.Error("postgres request pool connect failed", "error", err)
+		os.Exit(1)
+	}
+	workerPool, err := postgres.NewPool(ctx, cfg.DatabaseWorkerURL)
+	if err != nil {
+		logger.Error("postgres worker pool connect failed", "error", err)
 		os.Exit(1)
 	}
 
@@ -52,9 +59,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	uploads := service.NewUploadService(pool, pool, objectStorage, cfg.MinIOBucket, nil)
+	var kratosAdmin *auth.KratosAdmin
+	if cfg.KratosAdminURL != "" {
+		kratosAdmin = auth.NewKratosAdmin(cfg.KratosAdminURL, cfg.KratosTimeout)
+	}
+
+	authenticator := auth.NewKratosAuthenticator(cfg.KratosPublicURL, cfg.KratosTimeout)
+	uploads := service.NewUploadService(requestPool, requestPool, objectStorage, cfg.MinIOBucket, nil)
+	devices := service.NewDeviceService(requestPool)
+	accounts := service.NewAccountService(requestPool)
 	reg := metrics.NewRegistry()
-	mux := apihttp.NewRouter(uploads, pool, pool, objectStorage, reg)
+	deps := apihttp.RouterDeps{
+		Auth:     authenticator,
+		Accounts: requestPool,
+		Uploads:  uploads,
+		Devices:  devices,
+		Account:  accounts,
+		Idem:     requestPool,
+		DB:       requestPool,
+		Storage:  objectStorage,
+		Metrics:  reg,
+	}
+	if kratosAdmin != nil {
+		deps.Sessions = kratosAdmin
+	}
+	mux := apihttp.NewRouter(deps)
 
 	// The outbox dispatcher runs in-process. Every replica runs one, and
 	// SKIP LOCKED claiming keeps them from stepping on each other.
@@ -64,7 +93,7 @@ func main() {
 		logger.Error("kafka connect failed", "error", err)
 		os.Exit(1)
 	}
-	dispatcher := outbox.NewDispatcher(pool, publisher, instanceID(), logger, reg)
+	dispatcher := outbox.NewDispatcher(workerPool, publisher, instanceID(), logger, reg)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -78,12 +107,19 @@ func main() {
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	var identityDeleter auth.IdentityDeleter
+	if kratosAdmin != nil {
+		identityDeleter = kratosAdmin
+	}
+
 	runCtx, cancelRun := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() { defer wg.Done(); dispatcher.Run(runCtx) }()
-	cleaner := cleanup.NewCleaner(pool, objectStorage, cfg.UploadExpiry, cfg.CleanupInterval, logger)
+	cleaner := cleanup.NewCleaner(workerPool, objectStorage, cfg.UploadExpiry, cfg.CleanupInterval, logger)
 	go func() { defer wg.Done(); cleaner.Run(runCtx) }()
+	deletionWorker := deletion.NewWorker(workerPool, objectStorage, identityDeleter, logger)
+	go func() { defer wg.Done(); deletionWorker.Run(runCtx) }()
 
 	go func() {
 		logger.Info("ingestion api listening", "port", cfg.Port, "env", cfg.Env)
@@ -106,7 +142,8 @@ func main() {
 	cancelRun()
 	wg.Wait()
 	publisher.Close()
-	pool.Close()
+	requestPool.Close()
+	workerPool.Close()
 	logger.Info("shutdown complete")
 }
 

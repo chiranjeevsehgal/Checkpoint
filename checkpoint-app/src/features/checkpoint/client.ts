@@ -9,6 +9,9 @@ import {
   COMPLETED_CACHE_SIZE,
   CONNECT_ATTEMPT_LIMIT,
   CRYPTO_TAG_BYTES,
+  CTRL_CMD_CLEAR_TRUSTED_SLOTS,
+  CTRL_CMD_FORGET_SELF,
+  CTRL_CMD_GET_CLOUD_SECRET,
   CTRL_ERR_NOT_READY,
   CTRL_UUID,
   DATA_UUID,
@@ -63,6 +66,7 @@ import {
   deriveSessionKeyV3,
   finishProof,
   newId,
+  openCloudSecret,
 } from './crypto.ts';
 import { decodeUtf8, isOggOpus } from './ogg.ts';
 import {
@@ -691,7 +695,22 @@ export class CheckpointClient {
     if (packet.type === PKT_CMD_RESP) {
       const payload = packet.payload;
       if (payload.length < 2) return;
-      this.completePending(packet.seq, parseCmdResp(payload[0]!, payload));
+      const result = parseCmdResp(payload[0]!, payload);
+      if (
+        payload[0] === CTRL_CMD_GET_CLOUD_SECRET &&
+        result.status === 0 &&
+        this.sessionKey &&
+        this.sessionId !== null
+      ) {
+        const secret = openCloudSecret(
+          this.sessionKey,
+          this.sessionId,
+          packet.seq,
+          payload.subarray(2),
+        );
+        if (secret) result.secret = secret;
+      }
+      this.completePending(packet.seq, result);
       return;
     }
     if (packet.type === PKT_STATUS_RESP) {
@@ -1055,6 +1074,32 @@ export class CheckpointClient {
       buildStorageErasePayload(step),
       10000,
     )) as CmdResponse;
+  }
+
+  async getCloudSecret(): Promise<Uint8Array | null> {
+    const res = (await this.ctrlRoundtrip(
+      PKT_CMD,
+      new Uint8Array([CTRL_CMD_GET_CLOUD_SECRET]),
+    )) as CmdResponse;
+    return res.status === 0 ? (res.secret ?? null) : null;
+  }
+
+  async clearTrustedSlots(): Promise<number> {
+    const res = (await this.ctrlRoundtrip(
+      PKT_CMD,
+      new Uint8Array([CTRL_CMD_CLEAR_TRUSTED_SLOTS]),
+    )) as CmdResponse;
+    return res.status ?? CTRL_ERR_NOT_READY;
+  }
+
+  // Drops this phone's own trusted slot on the pendant (used when the backend
+  // refuses ownership). Older firmware acks BAD_ARG; callers treat it best-effort.
+  async forgetSelf(): Promise<number> {
+    const res = (await this.ctrlRoundtrip(
+      PKT_CMD,
+      new Uint8Array([CTRL_CMD_FORGET_SELF]),
+    )) as CmdResponse;
+    return res.status ?? CTRL_ERR_NOT_READY;
   }
 
   async supervise(

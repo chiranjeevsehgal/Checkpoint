@@ -90,6 +90,7 @@ export interface CmdResponse {
   led?: LedState;
   sync?: boolean;
   removed?: number;
+  secret?: Uint8Array;
 }
 
 export function parseCmdResp(cmd: number, payload: Uint8Array): CmdResponse {
@@ -200,10 +201,9 @@ export function formatBytes(value: number): string {
   return `${value}B`;
 }
 
-const UUID_PATTERN =
-  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const DEVICE_ID_PATTERN = /^[0-9a-f]{32}$/;
 
-/** Canonical UUID check for the ingestion user identity (server parses the same form). */
-export function isValidUserId(raw: string): boolean {
-  return UUID_PATTERN.test(raw.trim());
+/** Pendant device id: exactly 32 lowercase hex characters (server enforces the same). */
+export function isValidDeviceId(raw: string): boolean {
+  return DEVICE_ID_PATTERN.test(raw.trim());
 }

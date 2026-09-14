@@ -118,6 +118,27 @@ recover over USB (`auth list`, `auth forget 0|1`, `auth reset`), then
 re-enroll physically. Protocol v2 peers are rejected with version error
 `0x02`; pre-auth packets get `0x03`.
 
+## Cloud ownership
+
+The BLE claim key only enrolls this phone; it is never sent to the backend. A
+separate 32-byte `cloud_claim_secret` is generated on first boot and stored in
+NVS (`ckauth`/`cloud`). Provision it once over USB:
+
+```
+auth provision      # device <32hex>  cloud-sha256 <64hex>
+```
+
+Import the printed hash with the backend CLI (`device-admin provision`). The
+phone then fetches the plaintext secret over the authenticated BLE session,
+encrypted with the session key (AES-128-CCM, domain `checkpoint-cloud-v1`), and
+submits it to `POST /v1/device/claim`. The phone never stores the secret.
+
+Releasing ownership (app "Release pendant", after a fresh login) runs the
+`STORAGE_ERASE` arm/confirm, then `CLEAR_TRUSTED_SLOTS`, then the backend
+`release`. `CLEAR_TRUSTED_SLOTS` ACKs before clearing the two trusted slots and
+the session; the device id, claim key, cloud secret and master key are kept.
+"Forget pendant" is local-only and does not change cloud ownership.
+
 Lost a phone with no computer handy? Hold the button 15s: the LED flashes
 red 3 times and the first trusted slot is dropped (a second device slides
 into its place), then a fresh 60s enrollment window opens so you can enroll

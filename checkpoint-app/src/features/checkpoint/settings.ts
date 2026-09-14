@@ -1,6 +1,5 @@
 import {
   DEVICE_NAME,
-  INGEST_USER_ID_DEFAULT,
   resolveDeveloperMode,
   TRANSFER_RETENTION_HOURS,
   VAD_MIN_SPEECH_S_DEFAULT,
@@ -8,12 +7,12 @@ import {
 } from './config.ts';
 
 import { env } from '@/lib/env';
+import { getDevHost, loadServerConfig, resolveApiUrl } from '@/lib/server-config';
 import { storage } from '@/lib/storage';
 import { settingsKey } from '@/lib/storage/keys';
 
 export interface CheckpointSettings {
   serverUrl: string;
-  userId: string;
   deviceName: string;
   vadThreshold: number;
   minSpeechS: number;
@@ -26,7 +25,6 @@ export interface CheckpointSettings {
 
 const KEYS = {
   serverUrl: settingsKey('serverUrl'),
-  userId: settingsKey('userId'),
   deviceName: settingsKey('deviceName'),
   vadThreshold: settingsKey('vadThreshold'),
   minSpeechS: settingsKey('minSpeechS'),
@@ -39,8 +37,7 @@ const KEYS = {
 
 export function defaultSettings(): CheckpointSettings {
   return {
-    serverUrl: env.apiUrl,
-    userId: INGEST_USER_ID_DEFAULT,
+    serverUrl: resolveApiUrl(),
     deviceName: DEVICE_NAME,
     vadThreshold: VAD_THRESHOLD_DEFAULT,
     minSpeechS: VAD_MIN_SPEECH_S_DEFAULT,
@@ -59,10 +56,10 @@ function toNumber(raw: string | null, fallback: number): number {
 }
 
 export async function loadSettings(): Promise<CheckpointSettings> {
+  await loadServerConfig();
   const defaults = defaultSettings();
   const [
     serverUrl,
-    userId,
     deviceName,
     vadThreshold,
     minSpeechS,
@@ -73,7 +70,6 @@ export async function loadSettings(): Promise<CheckpointSettings> {
     developerMode,
   ] = await Promise.all([
     storage.get(KEYS.serverUrl),
-    storage.get(KEYS.userId),
     storage.get(KEYS.deviceName),
     storage.get(KEYS.vadThreshold),
     storage.get(KEYS.minSpeechS),
@@ -83,9 +79,12 @@ export async function loadSettings(): Promise<CheckpointSettings> {
     storage.get(KEYS.retentionHours),
     storage.get(KEYS.developerMode),
   ]);
+  const savedServerUrl = (serverUrl ?? '').trim();
+  const effectiveServerUrl = getDevHost()
+    ? defaults.serverUrl
+    : savedServerUrl || defaults.serverUrl;
   return {
-    serverUrl: (serverUrl ?? '').trim() || defaults.serverUrl,
-    userId: (userId ?? '').trim() || defaults.userId,
+    serverUrl: effectiveServerUrl,
     deviceName: (deviceName ?? '').trim() || defaults.deviceName,
     vadThreshold: toNumber(vadThreshold, defaults.vadThreshold),
     minSpeechS: toNumber(minSpeechS, defaults.minSpeechS),
@@ -100,7 +99,6 @@ export async function loadSettings(): Promise<CheckpointSettings> {
 export async function saveSettings(settings: CheckpointSettings): Promise<void> {
   await Promise.all([
     storage.set(KEYS.serverUrl, settings.serverUrl.trim()),
-    storage.set(KEYS.userId, settings.userId.trim()),
     storage.set(KEYS.deviceName, settings.deviceName.trim()),
     storage.set(KEYS.vadThreshold, String(settings.vadThreshold)),
     storage.set(KEYS.minSpeechS, String(settings.minSpeechS)),

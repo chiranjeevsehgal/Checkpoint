@@ -45,6 +45,11 @@ const VIEWS: Record<string, LinkView> = {
     sub: "This device doesn't support Bluetooth.",
     openSettings: false,
   },
+  'not owned': {
+    label: 'Linked to another account',
+    sub: 'This pendant is linked to another Checkpoint account. Ask the owner to release it.',
+    openSettings: false,
+  },
 };
 
 export function linkView(state: string, deviceName: string): LinkView {

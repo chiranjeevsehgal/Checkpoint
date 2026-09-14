@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -16,6 +17,10 @@ import (
 	"transcription-service/internal/provider"
 	"transcription-service/internal/storage"
 )
+
+// errStaleDeletedUser means the event belongs to an account that is being
+// deleted. The message is committed and dropped rather than retried.
+var errStaleDeletedUser = errors.New("stale event for deleted user")
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -75,7 +80,24 @@ func main() {
 			continue
 		}
 
+		if err := event.Validate(); err != nil {
+			// Malformed identifiers never succeed on redelivery, so drop the
+			// message instead of looping on it.
+			log.Printf("dropping invalid event: %v", err)
+			if cerr := consumer.Commit(ctx, msg); cerr != nil {
+				log.Printf("commit error for invalid event: %v", cerr)
+			}
+			continue
+		}
+
 		if err := handleMessage(ctx, event, transcriber, minioClient, pgStore, producer, cfg.Kafka); err != nil {
+			if errors.Is(err, errStaleDeletedUser) {
+				log.Printf("stale_deleted_user_event audio_id=%s", event.Data.AudioID)
+				if cerr := consumer.Commit(ctx, msg); cerr != nil {
+					log.Printf("commit error for stale event: %v", cerr)
+				}
+				continue
+			}
 			// Not committing here means this message will be
 			// redelivered on restart — intentional, so a failed
 			// transcription isn't silently lost.
@@ -101,6 +123,14 @@ func handleMessage(
 	data := event.Data
 	log.Printf("processing audio_id=%s bucket=%s key=%s", data.AudioID, data.Bucket, data.ObjectKey)
 
+	deleting, err := pgStore.IsUserDeleting(ctx, data.UserID)
+	if err != nil {
+		return err
+	}
+	if deleting {
+		return errStaleDeletedUser
+	}
+
 	audio, fetchedContentType, err := minioClient.FetchObject(ctx, data.Bucket, data.ObjectKey)
 	if err != nil {
 		return err
@@ -116,6 +146,16 @@ func handleMessage(
 	}
 	result.AudioID = data.AudioID
 	result.UserID = data.UserID
+
+	// Re-check immediately before persistence: the account may have been
+	// deleted while the expensive transcription ran.
+	deleting, err = pgStore.IsUserDeleting(ctx, data.UserID)
+	if err != nil {
+		return err
+	}
+	if deleting {
+		return errStaleDeletedUser
+	}
 
 	if err := pgStore.SaveTranscript(ctx, result); err != nil {
 		return err

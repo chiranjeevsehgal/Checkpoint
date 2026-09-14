@@ -19,6 +19,9 @@ enum CtrlCmd : uint8_t {
   CTRL_CMD_FILE_DELETE = 0x20,  // payload[1..] = full "/rec/..." path bytes
   CTRL_CMD_STORAGE_ERASE = 0x21, // payload[1] = CTRL_ERASE_ARM / CTRL_ERASE_CONFIRM
   CTRL_CMD_FILE_FETCH = 0x22,   // payload[1..] = full "/rec/..." path (preview, keeps file)
+  CTRL_CMD_GET_CLOUD_SECRET = 0x23,    // reply: [cmd,status, nonce12, cipher32, tag8]
+  CTRL_CMD_CLEAR_TRUSTED_SLOTS = 0x24, // ACK first, then wipe client slots + session
+  CTRL_CMD_FORGET_SELF = 0x25,         // ACK first, then drop the caller's own slot + session
 };
 
 // Status codes carried in PKT_CMD_RESP payload[1].
