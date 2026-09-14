@@ -1,5 +1,12 @@
 version: v1.3.1
 
+# Recovery (code) does not complete for API/native clients without this: Kratos
+# otherwise returns 422 browser_location_change_required and wants a settings
+# redirect. With it, the recovery response carries continue_with so the app can
+# read the session token and finish the settings flow.
+feature_flags:
+  use_continue_with_transitions: true
+
 serve:
   public:
     base_url: http://localhost:4433/

@@ -10,6 +10,7 @@ import {
   hasVerifiedEmail,
   identityEmail,
   logout,
+  recoverySessionToken,
   submitLogin,
   submitPasswordChange,
   submitRecoveryCode,
@@ -174,7 +175,7 @@ export async function confirmPasswordRecovery(code: string, newPassword: string)
   if (!pendingRecovery) throw new Error('Start password recovery first.');
   const result = await submitRecoveryCode(transport, pendingRecovery, code);
   pendingRecovery = null;
-  const token = result.session_token;
+  const token = recoverySessionToken(result);
   const identity = result.session?.identity ?? result.identity;
   if (!token) throw new Error('Recovery did not return a session.');
   const settings = await createSettingsFlow(transport, token);

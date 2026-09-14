@@ -11,10 +11,17 @@ export interface KratosIdentity {
   verifiable_addresses?: { via?: string; verified?: boolean; status?: string }[];
 }
 
+export interface KratosContinueWith {
+  action: string;
+  ory_session_token?: string;
+  flow?: { id?: string; url?: string };
+}
+
 export interface KratosAuthResult {
   session_token?: string;
   session?: { identity?: KratosIdentity; authenticated_at?: string };
   identity?: KratosIdentity;
+  continue_with?: KratosContinueWith[];
 }
 
 export interface KratosWhoami {
@@ -115,6 +122,17 @@ export function hasVerifiedEmail(identity: KratosIdentity | undefined): boolean 
 
 export function identityEmail(identity: KratosIdentity | undefined): string | null {
   return extractEmail(identity);
+}
+
+/**
+ * Kratos cannot finish recovery for API/native clients, so with
+ * `use_continue_with_transitions` enabled it returns the session token via
+ * `continue_with` instead of a top-level `session_token`.
+ */
+export function recoverySessionToken(result: KratosAuthResult): string | undefined {
+  if (result.session_token) return result.session_token;
+  return result.continue_with?.find((entry) => entry.action === 'set_ory_session_token')
+    ?.ory_session_token;
 }
 
 export function createRegistrationFlow(t: KratosTransport): Promise<KratosFlow> {

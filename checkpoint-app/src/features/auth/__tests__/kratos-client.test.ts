@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   hasVerifiedEmail,
   identityEmail,
+  recoverySessionToken,
   resolveRequestUrl,
   submitLogin,
   whoami,
@@ -49,6 +50,28 @@ describe('kratos helpers', () => {
   it('reads the email trait', () => {
     assert.equal(identityEmail({ id: 'x', traits: { email: 'a@b.c' } }), 'a@b.c');
     assert.equal(identityEmail(undefined), null);
+  });
+});
+
+describe('recoverySessionToken', () => {
+  it('prefers a top-level session token', () => {
+    assert.equal(recoverySessionToken({ session_token: 'top' }), 'top');
+  });
+
+  it('reads the token from continue_with', () => {
+    assert.equal(
+      recoverySessionToken({
+        continue_with: [
+          { action: 'show_settings_ui', flow: { id: 'settings-flow' } },
+          { action: 'set_ory_session_token', ory_session_token: 'recovered' },
+        ],
+      }),
+      'recovered',
+    );
+  });
+
+  it('returns undefined when no token is present', () => {
+    assert.equal(recoverySessionToken({ continue_with: [] }), undefined);
   });
 });
 
