@@ -23,6 +23,7 @@ CREATE POLICY account_deletions_tenant ON account_deletions
     USING (user_id = nullif(current_setting('app.user_id', true), '')::uuid)
     WITH CHECK (user_id = nullif(current_setting('app.user_id', true), '')::uuid);
 
+-- +goose StatementBegin
 DO $$
 BEGIN
     IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'checkpoint_request') THEN
@@ -36,6 +37,7 @@ BEGIN
     END IF;
 END
 $$;
+-- +goose StatementEnd
 
 -- +goose Down
 DROP INDEX IF EXISTS idx_account_deletions_due;
