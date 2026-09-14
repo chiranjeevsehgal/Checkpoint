@@ -154,7 +154,7 @@ func (p *PostgresStore) ClaimBatch(ctx context.Context, userID, extractionType s
 	var jobs []model.Job
 	for rows.Next() {
 		var j model.Job
-		if err := rows.Scan(&j.ID, &j.UserID, &j.AudioID, &j.ExtractionType, &j.Text, &j.Language, &j.Attempts); err != nil {
+		if err := rows.Scan(&j.ID, &j.UserID, &j.AudioID, &j.ExtractionType, &j.Text, &j.Language, &j.RecordedAt, &j.Attempts); err != nil {
 			return nil, fmt.Errorf("scanning claimed job: %w", err)
 		}
 		jobs = append(jobs, j)
