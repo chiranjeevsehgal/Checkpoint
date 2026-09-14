@@ -1,0 +1,31 @@
+kafka:
+  brokers:
+    - kafka:9092
+  consume_topic: extraction.jobs.v1
+  consumer_group: extraction-service
+  dlq_topic: extraction.jobs.v1.dlq
+
+postgres:
+  dsn_env: POSTGRES_DSN
+
+groq:
+  api_key_env: GROQ_API_KEY
+  model: openai/gpt-oss-120b
+  base_url: https://api.groq.com/openai/v1
+  timeout_seconds: 120
+  max_completion_tokens: 8192
+  temperature: 0
+
+batch:
+  # Exactly-N batching: one LLM call per user once this many transcripts are
+  size: 10
+  poll_interval_seconds: 5
+  # 0 = strict exactly-N (a user with fewer items waits indefinitely for
+  # more). > 0 flushes a partial batch once its oldest item is this old.
+  max_wait_seconds: 0
+  worker_concurrency: 3
+  max_attempts: 5
+  reclaim_after_seconds: 300
+  # Soft cap on total transcript chars per LLM call; a claimed batch larger
+  # than this is split into multiple calls before hitting Groq.
+  max_batch_chars: 200000

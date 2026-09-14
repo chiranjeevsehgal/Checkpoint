@@ -1,10 +1,11 @@
 # AGENTS.md — Checkpoint
 
-Monorepo with two separate Go modules plus firmware. No root module, no lint config, no Go CI.
+Monorepo with three separate Go modules plus firmware and a Python worker. No root module, no lint config, no Go CI.
 
 - `ingestion-service/` (module `checkpoint/ingestion`) — HTTP API `:8080`, in-process outbox dispatcher, upload cleanup, and account-deletion worker. Entrypoints: `cmd/api/main.go`, `cmd/migrate/main.go`, `cmd/device-admin/main.go`.
 - `transcription-service/` (module `transcription-service`) — Kafka worker. Entrypoint: `cmd/main.go`, `cmd/migrate/`.
-- `embedding-service/` — Python Kafka worker (pgvector). Migrations: `migrate.py up`. Omitted from older docs but in Compose.
+- `extraction-service/` (module `extraction-service`) — Kafka worker → LLM (Groq) todo extractor. Entrypoints: `cmd/main.go`, `cmd/migrate/`.
+- `embedding-service/` — Python Kafka worker, bge-m3 → pgvector. Entrypoint: `app/main.py`, `migrate.py`.
 - `firmware/checkpoint/` — PROD ESP32-S3 pendant (Arduino `.ino`). Pins/timings single source: `config.h`.
 - `firmware/tests/` — host-side pytest (grep/logic, no hardware). `firmware/host/checkpoint_client/` — Python BLE client.
 - `vad-service/` — empty placeholder (`.gitkeep` only). Ignore.
@@ -22,7 +23,7 @@ docker compose ps        # postgres + kafka should be healthy
 ```
 
 - Local dev (from `ingestion-service/`): `make infra-up` → `make migrate` (needs `DATABASE_URL`) → `make run` (API on `:8080`).
-- Compose runs `ingestion-migrate` / `transcription-migrate` / `embedding-migrate` to `service_completed_successfully` before starting their workers. Migrations are goose (`make migrate`, `make status`).
+- Compose runs `ingestion-migrate` / `transcription-migrate` / `embedding-migrate` / `extraction-migrate` to `service_completed_successfully` before starting their workers. Migrations are goose (`make migrate`, `make status`).
 - Postgres init (`infra/postgres/bootstrap.sh`, first volume only) creates role `checkpoint_request` (`NOBYPASSRLS`), `checkpoint_worker` (`BYPASSRLS`) and the separate `kratos` database. Changing those passwords in `.env` later is ignored; wipe with `make infra-reset`.
 - Migrations `00007`–`00009` add `uploads.device_id NOT NULL` and device-aware idempotency, so an old dev volume must be reset (data is disposable).
 - Kratos public API is `http://localhost:4433`; the admin API is bridge-only (never published). Mailpit UI is `http://localhost:8025`.
@@ -69,6 +70,14 @@ docker compose ps        # postgres + kafka should be healthy
 
 - Config: `CONFIG_PATH` (default `config.yaml`, `/app/config.yaml` in container). `TRANSCRIPTION_PROVIDER` env overrides yaml (`elevenlabs` default, `deepgram` alt); the matching `*_API_KEY` env must be set or `Load` fails.
 - Consumes `transcription.jobs.v1`, publishes `embedding.jobs.v1` + `extraction.jobs.v1`. Failed messages are deliberately not committed → redelivered on restart. Malformed `audio_id`/`user_id` are dropped (committed); events for tombstoned accounts are logged as `stale_deleted_user_event` and dropped.
+
+## Extraction worker quirks
+
+- Kafka is only the trigger: the consumer validates `EXTRACTION_REQUESTED` (schema v2, same envelope transcription publishes), inserts a pending `extraction_jobs` row, commits. Poison → `extraction.jobs.v1.dlq` + commit.
+- Postgres is the batch queue: batcher claims `batch.size` (default 10) rows per user with `FOR UPDATE SKIP LOCKED` → one Groq call per batch (`openai/gpt-oss-120b`, `response_format: json_object`) → todos replaced per audio in one tx.
+- Job states `pending|processing|done|failed`; retryable failures release back to `pending` with attempts+1, `failed` after `batch.max_attempts` (requeue: `UPDATE ... SET status='pending', attempts=0`). Stuck `processing` rows are reclaimed after `batch.reclaim_after_seconds`.
+- Strict exactly-N: `batch.max_wait_seconds: 0` means a user with fewer than N items waits indefinitely. `GROQ_API_KEY` and `POSTGRES_DSN` must be set or the worker fails fast at startup.
+- New extraction types = implement `extractor.Extractor` + register + one migration; consumer/batcher/claim/retry are shared.
 
 ## Test / verify
 
