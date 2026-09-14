@@ -6,6 +6,7 @@ import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 import { Text } from '@/components/ui/text';
 import { applyServerConfig } from '@/features/auth/auth-store';
 import { useAuth } from '@/features/auth/hooks/useAuth';
@@ -75,9 +76,9 @@ export function SignInScreen() {
               onChangeText={setEmail}
               editable={!busy}
             />
-            <Input
+            <PasswordInput
               placeholder="Password"
-              secureTextEntry
+              autoComplete="current-password"
               value={password}
               onChangeText={setPassword}
               editable={!busy}

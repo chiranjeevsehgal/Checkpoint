@@ -6,6 +6,7 @@ import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 import { Text } from '@/components/ui/text';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 
@@ -87,9 +88,9 @@ export function RecoveryScreen() {
                   onChangeText={setCode}
                   editable={!busy}
                 />
-                <Input
+                <PasswordInput
                   placeholder="New password"
-                  secureTextEntry
+                  autoComplete="new-password"
                   value={password}
                   onChangeText={setPassword}
                   editable={!busy}
