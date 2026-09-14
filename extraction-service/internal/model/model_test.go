@@ -81,3 +81,28 @@ func TestUnmarshalMatchesTranscriptionContract(t *testing.T) {
 		t.Fatalf("expected published event to validate: %v", err)
 	}
 }
+
+func TestUnmarshalCarriesRecordedAt(t *testing.T) {
+	raw := `{
+		"schema_version": 2,
+		"event_id": "evt-2",
+		"event_type": "EXTRACTION_REQUESTED",
+		"occurred_at": "2026-09-14T10:00:00.000Z",
+		"data": {
+			"audio_id": "04f232ee-4a3f-4883-aac6-cdfe1c133cad",
+			"user_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+			"text": "I need to call the dentist tomorrow.",
+			"recorded_at": "2026-09-13T10:15:00Z"
+		}
+	}`
+	var e ExtractionJobRequestedEvent
+	if err := json.Unmarshal([]byte(raw), &e); err != nil {
+		t.Fatalf("unmarshalling: %v", err)
+	}
+	if e.Data.RecordedAt != "2026-09-13T10:15:00Z" {
+		t.Fatalf("recorded_at = %q, want 2026-09-13T10:15:00Z", e.Data.RecordedAt)
+	}
+	if err := e.Validate(); err != nil {
+		t.Fatalf("event with recorded_at must validate: %v", err)
+	}
+}
