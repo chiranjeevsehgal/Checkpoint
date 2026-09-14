@@ -75,6 +75,16 @@ func main() {
 			continue
 		}
 
+		if err := event.Validate(); err != nil {
+			// Malformed identifiers never succeed on redelivery, so drop the
+			// message instead of looping on it.
+			log.Printf("dropping invalid event: %v", err)
+			if cerr := consumer.Commit(ctx, msg); cerr != nil {
+				log.Printf("commit error for invalid event: %v", cerr)
+			}
+			continue
+		}
+
 		if err := handleMessage(ctx, event, transcriber, minioClient, pgStore, producer, cfg.Kafka); err != nil {
 			// Not committing here means this message will be
 			// redelivered on restart — intentional, so a failed

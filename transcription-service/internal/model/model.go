@@ -1,5 +1,22 @@
 package model
 
+import (
+	"fmt"
+
+	"github.com/google/uuid"
+)
+
+// Validate ensures tenant identifiers are canonical UUIDs before any work.
+func (e TranscriptionRequestedEvent) Validate() error {
+	if _, err := uuid.Parse(e.Data.AudioID); err != nil {
+		return fmt.Errorf("invalid audio_id: %w", err)
+	}
+	if _, err := uuid.Parse(e.Data.UserID); err != nil {
+		return fmt.Errorf("invalid user_id: %w", err)
+	}
+	return nil
+}
+
 // Envelope fields shared by every event on the bus — consumed and produced.
 type Envelope struct {
 	SchemaVersion int    `json:"schema_version"`
