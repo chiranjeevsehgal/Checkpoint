@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // Envelope fields shared by every event on the bus — consumed and produced.
@@ -76,11 +78,11 @@ func (e *ExtractionJobRequestedEvent) Validate() error {
 	if e.EventType != EventTypeExtractionRequested {
 		return &InvalidEvent{fmt.Sprintf("unexpected event_type: %q", e.EventType)}
 	}
-	if strings.TrimSpace(e.Data.AudioID) == "" {
-		return &InvalidEvent{"missing audio_id"}
+	if _, err := uuid.Parse(e.Data.AudioID); err != nil {
+		return &InvalidEvent{"invalid audio_id: must be a UUID"}
 	}
-	if strings.TrimSpace(e.Data.UserID) == "" {
-		return &InvalidEvent{"missing user_id"}
+	if _, err := uuid.Parse(e.Data.UserID); err != nil {
+		return &InvalidEvent{"invalid user_id: must be a UUID"}
 	}
 	if strings.TrimSpace(e.Data.Text) == "" {
 		return &InvalidEvent{"missing text"}

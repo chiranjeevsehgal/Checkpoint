@@ -2,9 +2,11 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"extraction-service/internal/model"
@@ -33,6 +35,22 @@ func (p *PostgresStore) Close() {
 	p.pool.Close()
 }
 
+// IsUserDeleting reports whether a deletion tombstone exists for the user.
+// A missing table means downstream runs against a separate database, so
+// there is nothing to gate on.
+func (p *PostgresStore) IsUserDeleting(ctx context.Context, userID string) (bool, error) {
+	var deleting bool
+	err := p.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM account_deletions WHERE user_id = $1::uuid)`, userID).Scan(&deleting)
+	if err != nil {
+		if p.missingTombstoneTable(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("checking tombstone for %s: %w", userID, err)
+	}
+	return deleting, nil
+}
+
 // EnqueueJob inserts one pending row per (user, audio, type). Idempotent
 // under Kafka redelivery: a duplicate event is a no-op.
 func (p *PostgresStore) EnqueueJob(ctx context.Context, j model.Job) error {
@@ -49,15 +67,38 @@ func (p *PostgresStore) EnqueueJob(ctx context.Context, j model.Job) error {
 
 // ReadyUsers returns user_ids whose pending rows form a full batch, or —
 // when maxWait > 0 — a partial batch whose oldest row has waited that long.
-// One GROUP BY covers every user; nothing is tracked in memory.
+// One GROUP BY covers every user; nothing is tracked in memory. Deleted
+// accounts are excluded so tombstoned transcripts never reach the LLM.
 func (p *PostgresStore) ReadyUsers(ctx context.Context, extractionType string, batchSize int, maxWait time.Duration) ([]string, error) {
+	users, err := p.readyUsers(ctx, true, extractionType, batchSize, maxWait)
+	if err != nil && p.missingTombstoneTable(err) {
+		users, err = p.readyUsers(ctx, false, extractionType, batchSize, maxWait)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying ready users: %w", err)
+	}
+	return users, nil
+}
+
+// readyUsers scans ReadyUsers' queue query; withTombstoneGate joins the
+// account_deletions table to skip deleted accounts.
+func (p *PostgresStore) readyUsers(ctx context.Context, withTombstoneGate bool, extractionType string, batchSize int, maxWait time.Duration) ([]string, error) {
 	query := `
 		SELECT user_id
 		FROM extraction_jobs
-		WHERE status = 'pending' AND extraction_type = $1
+		WHERE status = 'pending' AND extraction_type = $1`
+	args := []interface{}{extractionType}
+	if withTombstoneGate {
+		query += `
+		  AND NOT EXISTS (
+			SELECT 1 FROM account_deletions tt
+			WHERE tt.user_id = extraction_jobs.user_id::uuid
+		  )`
+	}
+	query += `
 		GROUP BY user_id
 		HAVING count(*) >= $2`
-	args := []interface{}{extractionType, batchSize}
+	args = append(args, batchSize)
 	if maxWait > 0 {
 		query += ` OR min(created_at) <= now() - make_interval(secs => $3)`
 		args = append(args, int(maxWait.Seconds()))
@@ -67,7 +108,7 @@ func (p *PostgresStore) ReadyUsers(ctx context.Context, extractionType string, b
 
 	rows, err := p.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("querying ready users: %w", err)
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -75,11 +116,18 @@ func (p *PostgresStore) ReadyUsers(ctx context.Context, extractionType string, b
 	for rows.Next() {
 		var u string
 		if err := rows.Scan(&u); err != nil {
-			return nil, fmt.Errorf("scanning ready user: %w", err)
+			return nil, err
 		}
 		users = append(users, u)
 	}
 	return users, rows.Err()
+}
+
+// missingTombstoneTable reports whether the error is the account_deletions
+// table not existing (a worker pointed at a DB without the ingestion schema).
+func (p *PostgresStore) missingTombstoneTable(err error) bool {
+	var pgErr *pgconn.PgError
+	return err != nil && errors.As(err, &pgErr) && pgErr.Code == "42P01"
 }
 
 // ClaimBatch atomically moves up to n pending rows for one user+type into

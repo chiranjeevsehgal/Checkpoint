@@ -14,8 +14,8 @@ func validEvent() ExtractionJobRequestedEvent {
 			OccurredAt:    "2026-09-14T10:00:00.000Z",
 		},
 		Data: ExtractionJobData{
-			AudioID: "audio-1",
-			UserID:  "user-1",
+			AudioID: "a5a3a0ae-1e56-4cc0-8aae-6d38170c2b31",
+			UserID:  "df38ec6e-cb33-4f10-b5e2-4d24c17e4c26",
 			Text:    "please send the report",
 		},
 	}
@@ -32,9 +32,10 @@ func TestValidateRejectsPoison(t *testing.T) {
 	cases := map[string]func(*ExtractionJobRequestedEvent){
 		"wrong schema_version":  func(e *ExtractionJobRequestedEvent) { e.SchemaVersion = 1 },
 		"wrong event_type":      func(e *ExtractionJobRequestedEvent) { e.EventType = "SOMETHING_ELSE" },
-		"missing audio_id":      func(e *ExtractionJobRequestedEvent) { e.Data.AudioID = "" },
-		"whitespace audio_id":   func(e *ExtractionJobRequestedEvent) { e.Data.AudioID = "   " },
-		"missing user_id":       func(e *ExtractionJobRequestedEvent) { e.Data.UserID = "" },
+		"empty audio_id":        func(e *ExtractionJobRequestedEvent) { e.Data.AudioID = "" },
+		"non-uuid audio_id":     func(e *ExtractionJobRequestedEvent) { e.Data.AudioID = "audio-1" },
+		"empty user_id":         func(e *ExtractionJobRequestedEvent) { e.Data.UserID = "" },
+		"non-uuid user_id":      func(e *ExtractionJobRequestedEvent) { e.Data.UserID = "user-1" },
 		"missing text":          func(e *ExtractionJobRequestedEvent) { e.Data.Text = "" },
 		"whitespace text":       func(e *ExtractionJobRequestedEvent) { e.Data.Text = "\n\t " },
 	}
