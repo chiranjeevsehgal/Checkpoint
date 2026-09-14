@@ -10,6 +10,7 @@ import {
   CONNECT_ATTEMPT_LIMIT,
   CRYPTO_TAG_BYTES,
   CTRL_CMD_CLEAR_TRUSTED_SLOTS,
+  CTRL_CMD_FORGET_SELF,
   CTRL_CMD_GET_CLOUD_SECRET,
   CTRL_ERR_NOT_READY,
   CTRL_UUID,
@@ -1087,6 +1088,16 @@ export class CheckpointClient {
     const res = (await this.ctrlRoundtrip(
       PKT_CMD,
       new Uint8Array([CTRL_CMD_CLEAR_TRUSTED_SLOTS]),
+    )) as CmdResponse;
+    return res.status ?? CTRL_ERR_NOT_READY;
+  }
+
+  // Drops this phone's own trusted slot on the pendant (used when the backend
+  // refuses ownership). Older firmware acks BAD_ARG; callers treat it best-effort.
+  async forgetSelf(): Promise<number> {
+    const res = (await this.ctrlRoundtrip(
+      PKT_CMD,
+      new Uint8Array([CTRL_CMD_FORGET_SELF]),
     )) as CmdResponse;
     return res.status ?? CTRL_ERR_NOT_READY;
   }

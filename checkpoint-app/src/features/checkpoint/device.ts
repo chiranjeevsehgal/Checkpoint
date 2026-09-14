@@ -34,3 +34,9 @@ export async function claimDevice(
 export async function releaseDevice(baseUrl: string, token: string): Promise<void> {
   await apiFetch<{ status: string }>(`${baseUrl}/v1/device/release`, { method: 'POST' }, token);
 }
+
+// The backend collapses every claim failure to 409 DEVICE_CLAIM_FAILED, so a
+// conflict means the pendant is not available to this account.
+export function isClaimDenied(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409;
+}

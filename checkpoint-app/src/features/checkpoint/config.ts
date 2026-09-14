@@ -143,6 +143,7 @@ export const CTRL_CMD_STORAGE_ERASE = 0x21;
 export const CTRL_CMD_FILE_FETCH = 0x22;
 export const CTRL_CMD_GET_CLOUD_SECRET = 0x23;
 export const CTRL_CMD_CLEAR_TRUSTED_SLOTS = 0x24;
+export const CTRL_CMD_FORGET_SELF = 0x25;
 
 export const CTRL_OK = 0x00;
 export const CTRL_ERR_NOT_READY = 0x01;

@@ -18,7 +18,12 @@ import {
 } from './config.ts';
 import { clearEnrolledDeviceId, deleteCredential, getEnrolledDeviceId } from './credentials.ts';
 import { bytesToHex, hexToBytes } from './crypto.ts';
-import { claimDevice, getDevice, releaseDevice as releaseDeviceOnServer } from './device.ts';
+import {
+  claimDevice,
+  getDevice,
+  isClaimDenied,
+  releaseDevice as releaseDeviceOnServer,
+} from './device.ts';
 import { IngestionUploader } from './ingestion.ts';
 import { networkMonitor } from './networkMonitor.ts';
 import type { HealthProbe } from './networkStatus.ts';
@@ -152,6 +157,7 @@ class SyncEngine {
   private lastAutoConnectAt = 0;
   private connectTask: Promise<void> | null = null;
   private connectOrigin: 'user' | 'auto' | null = null;
+  private ownershipDenied = false;
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -527,6 +533,11 @@ class SyncEngine {
   }
 
   private async handleCompletedFile(file: CompletedFile): Promise<void> {
+    if (this.ownershipDenied) {
+      CheckpointClient.deleteLocalCopy(file.fileIdHex);
+      this.appendLog(`  [ui] dropped ${file.fileIdHex}: pendant not owned`);
+      return;
+    }
     const current = this.settings;
     const verdict = current.vadEnabled
       ? await checkSpeech(file.bytes, {
@@ -606,6 +617,7 @@ class SyncEngine {
     if (this.connectTask) await this.connectTask;
     if (this.snapshot.connected || this.snapshot.busy) return;
     this.connectOrigin = origin;
+    this.ownershipDenied = false;
     this.setState(
       origin === 'user'
         ? { busy: true, autoConnecting: false, linkState: 'connecting', needsSettings: false }
@@ -695,9 +707,13 @@ class SyncEngine {
           stopped: () => this.stopped,
           onReady: async () => {
             await this.syncClock(client);
+            const ownership = await this.ensureCloudOwnership(client);
+            if (ownership === 'denied') {
+              await this.rejectOwnership(client);
+              return;
+            }
             this.setState({ connected: true, busy: false, autoConnecting: false });
             this.setState({ deviceId: await getEnrolledDeviceId(), enrolled: true });
-            await this.ensureCloudOwnership(client);
             this.appendLog('[ui] listening for file transfers …');
             await this.applyDesiredSync(client);
             try {
@@ -712,6 +728,7 @@ class SyncEngine {
             void this.drainQueue();
           },
           onAlive: () => {
+            if (this.ownershipDenied) return;
             this.setState({
               connected: true,
               busy: false,
@@ -742,7 +759,7 @@ class SyncEngine {
         connected: false,
         busy: false,
         autoConnecting: false,
-        linkState: 'idle',
+        linkState: this.ownershipDenied ? 'not owned' : 'idle',
         deviceId: null,
       });
       this.client = null;
@@ -810,28 +827,30 @@ class SyncEngine {
     this.appendLog('[ui] pendant forgotten');
   }
 
-  private async ensureCloudOwnership(client: CheckpointClient): Promise<void> {
+  private async ensureCloudOwnership(
+    client: CheckpointClient,
+  ): Promise<'owned' | 'denied' | 'unknown'> {
     const token = getSessionToken();
     if (!token) {
       this.setOwnedDevice(null);
-      return;
+      return 'unknown';
     }
     const enrolled = await getEnrolledDeviceId();
     if (!enrolled) {
       this.setOwnedDevice(null);
-      return;
+      return 'unknown';
     }
     try {
       const owned = await getDevice(this.settings.serverUrl, token);
       if (owned?.device_id === enrolled) {
         this.setOwnedDevice(owned.device_id);
-        return;
+        return 'owned';
       }
       const secret = await client.getCloudSecret();
       if (!secret) {
         this.setOwnedDevice(null);
         this.appendLog('[ui] pendant is not claimed to this account');
-        return;
+        return 'unknown';
       }
       const claimed = await claimDevice(
         this.settings.serverUrl,
@@ -841,12 +860,34 @@ class SyncEngine {
       );
       this.setOwnedDevice(claimed.device_id);
       this.appendLog('[ui] pendant claimed to this account');
+      return 'owned';
     } catch (error) {
       this.setOwnedDevice(null);
+      if (isClaimDenied(error)) {
+        return 'denied';
+      }
       this.appendLog(
         `[ui] cloud claim failed: ${error instanceof Error ? error.message : 'unknown'}`,
       );
+      return 'unknown';
     }
+  }
+
+  private async rejectOwnership(client: CheckpointClient): Promise<void> {
+    this.ownershipDenied = true;
+    this.autoConnectSuppressed = true;
+    this.appendLog('[ui] pendant is linked to another account');
+    try {
+      await client.cmdSyncSet(false);
+    } catch {
+      // best effort: stop the device from pushing files
+    }
+    try {
+      await client.forgetSelf();
+    } catch {
+      // older firmware acks BAD_ARG; local cleanup still applies
+    }
+    await this.forgetDevice();
   }
 
   async releasePendant(): Promise<void> {
