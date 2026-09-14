@@ -237,7 +237,50 @@ docker-compose exec postgres psql -U <POSTGRES_USER> -d <POSTGRES_DB> -c \
 
 ---
 
-## 8. Stop containers
+## 8. Native app (Expo)
+
+The app authenticates against Kratos directly (no SDK). Point it at the Kratos
+public API with `EXPO_PUBLIC_KRATOS_URL` (defaults to `http://localhost:4433`,
+but a phone needs the host LAN IP, e.g. `http://192.168.1.5:4433`) as well as
+`EXPO_PUBLIC_API_URL` for the ingestion API. Web authentication is out of scope;
+the session token is stored with SecureStore on native only.
+
+Flow: register → verify the email code (view it in Mailpit at
+`http://localhost:8025`) → BLE-enroll the pendant with its claim key → the app
+fetches the cloud claim secret over the authenticated BLE session and calls
+`POST /v1/device/claim` → uploads carry `Authorization: Bearer <session token>`
+and `device_id`.
+
+Pendant provisioning (offline, USB serial):
+
+```bash
+# On the pendant serial console:
+auth provision          # prints: device <32hex>  cloud-sha256 <64hex>
+auth export             # prints the BLE claim key + checkpoint://claim URI
+```
+
+Register the printed hash with the privileged CLI:
+
+```bash
+cd ingestion-service
+DATABASE_URL=postgres://... go run ./cmd/device-admin provision \
+  -device <32hex> -claim-hash <64hex>
+```
+
+Release (in the app) requires a fresh login, erases local recordings, clears the
+pendant's trusted BLE slots, then releases cloud ownership. `Forget` is local
+only and leaves cloud ownership unchanged.
+
+Run the checks from `checkpoint-app/`:
+
+```bash
+npm run check
+npm test
+```
+
+---
+
+## 9. Stop containers
 
 Stop and remove containers:
 

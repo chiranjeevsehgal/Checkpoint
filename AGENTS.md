@@ -52,6 +52,14 @@ docker compose ps        # postgres + kafka should be healthy
 - Outbox dispatcher runs in-process in every API replica (`SKIP LOCKED` claiming) and retries broker errors indefinitely by design.
 - `config.Load()` is strict: bad `MINIO_USE_SSL`/`PORT`/negative durations fail fast; production requires `DATABASE_URL`, `DATABASE_REQUEST_URL`, `DATABASE_WORKER_URL`, `KRATOS_PUBLIC_URL`, `MINIO_ACCESS_KEY/SECRET_KEY`, `MINIO_BUCKET`, `KAFKA_BROKERS`. In development the request/worker URLs fall back to `DATABASE_URL`. `CONFIG_FILE` overrides the yaml path.
 
+## Native app quirks (`checkpoint-app/`)
+
+- Auth is Kratos-native, no SDK: `features/auth/kratos-client.ts` over a small `KratosTransport` (raw fetch). Session (`sessionToken` + `identityId`) lives in `lib/session` on SecureStore (native only; web auth out of scope).
+- Auth states: `loading | anonymous | unverified | authenticated | unavailable | deleting`. 401 clears the session, 503 keeps it (never auto-logout); 403 `VERIFICATION_REQUIRED` routes to verify-email.
+- `EXPO_PUBLIC_KRATOS_URL` (default localhost:4433, LAN IP for hardware) — same resolution rules as `EXPO_PUBLIC_API_URL` in `lib/env.ts`.
+- Uploads send `Bearer <session token>` and `device_id`; the app claims the pendant via `GET/POST /v1/device*` after BLE enrollment. BLE credentials are namespaced `Checkpoint.<identityId>.<deviceId>`.
+- Forget is local-only; Release = fresh re-auth + BLE erase + clear trusted slots + cloud release. Test glob is `src/**/__tests__/*.test.ts` (`npm test`).
+
 ## Transcription worker quirks
 
 - Config: `CONFIG_PATH` (default `config.yaml`, `/app/config.yaml` in container). `TRANSCRIPTION_PROVIDER` env overrides yaml (`elevenlabs` default, `deepgram` alt); the matching `*_API_KEY` env must be set or `Load` fails.
@@ -71,9 +79,10 @@ TEST_MINIO_ENDPOINT=... TEST_MINIO_ACCESS_KEY=... TEST_MINIO_SECRET_KEY=... TEST
 ```
 
 - k6: `k6 run loadtest/ingestion-service/smoke.js` (`BASE_URL` env, default `http://localhost:8080`).
-- Firmware host tests: `pytest firmware/tests -v`. BLE client: `pip install bleak cryptography && python firmware/host/checkpoint_client/client.py --bench`.
+- Firmware host tests: `pytest firmware/tests -v`. BLE client: `pip install bleak cryptography && python -m client_app --cli --session-token <kratos> --device-id <32hex>` (from `firmware/host/checkpoint_client`).
 - Embedding: `cd embedding-service && python -m unittest discover -s tests -v`.
-- Device provisioning CLI: `DATABASE_URL=... go run ./cmd/device-admin provision -device <32hex> -claim-hash <64hex>` (also `status`, `unquarantine`).
+- Device provisioning CLI: `DATABASE_URL=... go run ./cmd/device-admin provision -device <32hex> -claim-hash <64hex>` (also `status`, `unquarantine`). The pendant emits the hash over USB with `auth provision`.
+- App: `cd checkpoint-app && npm run check && npm test`.
 
 ## Firmware build
 
