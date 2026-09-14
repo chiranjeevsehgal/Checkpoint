@@ -184,7 +184,11 @@ export async function confirmPasswordRecovery(code: string, newPassword: string)
     email: identityEmail(identity),
     token,
   });
-  await logout(transport, token);
+  try {
+    await logout(transport, token);
+  } catch {
+    // The password is already changed; still drop the local session.
+  }
   await clearSession();
   resetToAnonymous();
 }

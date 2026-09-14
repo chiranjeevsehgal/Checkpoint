@@ -214,7 +214,7 @@ export function whoami(t: KratosTransport, token: string): Promise<KratosWhoami>
 }
 
 export function logout(t: KratosTransport, token: string): Promise<void> {
-  return t.request<void>('POST', '/self-service/logout/api', { session_token: token });
+  return t.request<void>('DELETE', '/self-service/logout/api', { session_token: token });
 }
 
 export function deleteOtherSessions(t: KratosTransport, token: string): Promise<void> {

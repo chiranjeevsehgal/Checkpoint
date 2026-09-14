@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   hasVerifiedEmail,
   identityEmail,
+  logout,
   recoverySessionToken,
   resolveRequestUrl,
   submitLogin,
@@ -93,6 +94,18 @@ describe('kratos flow submissions', () => {
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.method, 'POST');
     assert.deepEqual(calls[0]?.body, { method: 'password', identifier: 'a@b.c', password: 'pw' });
+  });
+
+  it('logs out with DELETE', async () => {
+    const calls: { method: string; body: unknown }[] = [];
+    const transport: KratosTransport = {
+      request(method, _path, body) {
+        calls.push({ method, body });
+        return Promise.resolve(undefined as never);
+      },
+    };
+    await logout(transport, 'sess');
+    assert.deepEqual(calls, [{ method: 'DELETE', body: { session_token: 'sess' } }]);
   });
 
   it('whoami forwards the session token', async () => {
