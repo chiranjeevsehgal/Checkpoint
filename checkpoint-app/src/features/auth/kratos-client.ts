@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from '../../lib/http.ts';
+
 export interface KratosFlow {
   id: string;
   ui: { action: string; method: string };
@@ -69,7 +71,7 @@ export function resolveRequestUrl(baseUrl: string, path: string): string {
 export function createFetchTransport(baseUrl: string): KratosTransport {
   return {
     async request<T>(method: string, path: string, body?: unknown, token?: string): Promise<T> {
-      const res = await fetch(resolveRequestUrl(baseUrl, path), {
+      const res = await fetchWithTimeout(resolveRequestUrl(baseUrl, path), {
         method,
         headers: {
           'Content-Type': 'application/json',

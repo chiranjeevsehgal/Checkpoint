@@ -1,10 +1,11 @@
 import { Redirect, Stack } from 'expo-router';
 
+import { LoadingScreen } from '@/components/shared/loading-screen';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 
 export default function PublicLayout() {
   const { status } = useAuth();
-  if (status === 'loading') return null;
+  if (status === 'loading') return <LoadingScreen message="Starting…" />;
   if (status === 'authenticated' || status === 'unavailable') {
     return <Redirect href="/(app)/(tabs)/connect" />;
   }

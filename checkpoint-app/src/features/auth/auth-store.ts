@@ -25,7 +25,13 @@ import {
 import { initialAuthState, type AuthState } from './types';
 
 import { loadServerConfig, resolveKratosUrl } from '@/lib/server-config';
-import { clearSession, getSessionToken, loadSession, saveSession } from '@/lib/session';
+import {
+  clearSession,
+  getSessionToken,
+  loadSession,
+  saveSession,
+  type Session,
+} from '@/lib/session';
 
 let state: AuthState = initialAuthState;
 const listeners = new Set<() => void>();
@@ -79,14 +85,15 @@ async function persistFromAuthResult(
 
 export async function initializeAuth(): Promise<void> {
   setState({ status: 'loading' });
-  await loadServerConfig();
-  applyServerConfig();
-  const session = await loadSession();
-  if (!session) {
-    resetToAnonymous();
-    return;
-  }
+  let session: Session | null = null;
   try {
+    await loadServerConfig();
+    applyServerConfig();
+    session = await loadSession();
+    if (!session) {
+      resetToAnonymous();
+      return;
+    }
     const result = await whoami(transport, session.token);
     const identity = result.identity;
     const email = identityEmail(identity);
@@ -101,8 +108,12 @@ export async function initializeAuth(): Promise<void> {
       resetToAnonymous();
       return;
     }
-    // Transient outage: keep the token so the user is not silently logged out.
-    setState({ status: 'unavailable', identityId: session.identityId, email: null });
+    if (session) {
+      // Transient outage: keep the token so the user is not silently logged out.
+      setState({ status: 'unavailable', identityId: session.identityId, email: null });
+    } else {
+      resetToAnonymous();
+    }
   }
 }
 

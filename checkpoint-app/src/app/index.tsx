@@ -1,10 +1,11 @@
 import { Redirect } from 'expo-router';
 
+import { LoadingScreen } from '@/components/shared/loading-screen';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 
 export default function Index() {
   const { status } = useAuth();
-  if (status === 'loading') return null;
+  if (status === 'loading') return <LoadingScreen message="Starting…" />;
   if (status === 'unverified') return <Redirect href="/(public)/verify-email" />;
   if (status === 'authenticated' || status === 'unavailable') {
     return <Redirect href="/(app)/(tabs)/connect" />;

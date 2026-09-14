@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from '@/lib/http';
 import { resolveApiUrl } from '@/lib/server-config';
 
 export class ApiError extends Error {
@@ -23,7 +24,7 @@ function errorCode(body: string): string | undefined {
 export async function apiFetch<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
   const url = path.startsWith('http') ? path : `${resolveApiUrl()}${path}`;
   const { headers: initHeaders, ...restInit } = init ?? {};
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     ...restInit,
     headers: {
       'Content-Type': 'application/json',
