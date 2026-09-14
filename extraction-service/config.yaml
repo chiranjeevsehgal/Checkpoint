@@ -13,8 +13,10 @@ groq:
   model: openai/gpt-oss-120b
   base_url: https://api.groq.com/openai/v1
   timeout_seconds: 120
-  max_completion_tokens: 8192
-  temperature: 0
+  max_completion_tokens: 5000
+  temperature: 0.3
+  top_p: 1
+  reasoning_effort: low
 
 batch:
   # Exactly-N batching: one LLM call per user once this many transcripts are
