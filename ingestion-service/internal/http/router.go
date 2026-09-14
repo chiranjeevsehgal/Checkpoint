@@ -18,12 +18,13 @@ type Pinger interface {
 
 // Router wires health and upload routes with middleware.
 type Router struct {
-	handler *Handler
-	devices *DeviceHandler
-	account *AccountHandler
-	db      Pinger
-	storage Pinger
-	reg     *metrics.Registry
+	handler  *Handler
+	devices  *DeviceHandler
+	account  *AccountHandler
+	sessions *SessionHandler
+	db       Pinger
+	storage  Pinger
+	reg      *metrics.Registry
 }
 
 // RouterDeps carries the router's collaborators.
@@ -33,6 +34,7 @@ type RouterDeps struct {
 	Uploads  uploadService
 	Devices  deviceService
 	Account  accountService
+	Sessions sessionRevoker
 	Idem     repository.IdempotencyRepository
 	DB       Pinger
 	Storage  Pinger
@@ -43,12 +45,13 @@ type RouterDeps struct {
 // stay outside Auth; everything under /v1 requires it.
 func NewRouter(deps RouterDeps) http.Handler {
 	r := &Router{
-		handler: NewHandler(deps.Uploads, deps.Devices, deps.Idem, deps.Metrics),
-		devices: NewDeviceHandler(deps.Devices, deps.Metrics),
-		account: NewAccountHandler(deps.Account, deps.Metrics),
-		db:      deps.DB,
-		storage: deps.Storage,
-		reg:     deps.Metrics,
+		handler:  NewHandler(deps.Uploads, deps.Devices, deps.Idem, deps.Metrics),
+		devices:  NewDeviceHandler(deps.Devices, deps.Metrics),
+		account:  NewAccountHandler(deps.Account, deps.Metrics),
+		sessions: NewSessionHandler(deps.Sessions),
+		db:       deps.DB,
+		storage:  deps.Storage,
+		reg:      deps.Metrics,
 	}
 
 	mux := http.NewServeMux()
@@ -66,6 +69,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 	mux.Handle("POST /v1/device/claim", protected(r.devices.Claim))
 	mux.Handle("POST /v1/device/release", protected(r.devices.Release))
 	mux.Handle("DELETE /v1/me", protected(r.account.Delete))
+	mux.Handle("DELETE /v1/me/sessions", protected(r.sessions.Delete))
 	return mux
 }
 

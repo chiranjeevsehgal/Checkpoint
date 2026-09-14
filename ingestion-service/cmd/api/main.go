@@ -59,12 +59,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	var kratosAdmin *auth.KratosAdmin
+	if cfg.KratosAdminURL != "" {
+		kratosAdmin = auth.NewKratosAdmin(cfg.KratosAdminURL, cfg.KratosTimeout)
+	}
+
 	authenticator := auth.NewKratosAuthenticator(cfg.KratosPublicURL, cfg.KratosTimeout)
 	uploads := service.NewUploadService(requestPool, requestPool, objectStorage, cfg.MinIOBucket, nil)
 	devices := service.NewDeviceService(requestPool)
 	accounts := service.NewAccountService(requestPool)
 	reg := metrics.NewRegistry()
-	mux := apihttp.NewRouter(apihttp.RouterDeps{
+	deps := apihttp.RouterDeps{
 		Auth:     authenticator,
 		Accounts: requestPool,
 		Uploads:  uploads,
@@ -74,7 +79,11 @@ func main() {
 		DB:       requestPool,
 		Storage:  objectStorage,
 		Metrics:  reg,
-	})
+	}
+	if kratosAdmin != nil {
+		deps.Sessions = kratosAdmin
+	}
+	mux := apihttp.NewRouter(deps)
 
 	// The outbox dispatcher runs in-process. Every replica runs one, and
 	// SKIP LOCKED claiming keeps them from stepping on each other.
@@ -99,8 +108,8 @@ func main() {
 	defer stop()
 
 	var identityDeleter auth.IdentityDeleter
-	if cfg.KratosAdminURL != "" {
-		identityDeleter = auth.NewKratosAdmin(cfg.KratosAdminURL, cfg.KratosTimeout)
+	if kratosAdmin != nil {
+		identityDeleter = kratosAdmin
 	}
 
 	runCtx, cancelRun := context.WithCancel(context.Background())

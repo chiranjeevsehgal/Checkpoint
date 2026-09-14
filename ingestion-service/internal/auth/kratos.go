@@ -27,9 +27,11 @@ var (
 )
 
 // Principal is the authenticated caller. There is deliberately no email:
-// authorization only needs the immutable identity and its session age.
+// authorization only needs the immutable identity, the current session and
+// its age.
 type Principal struct {
 	UserID          string
+	SessionID       string
 	AuthenticatedAt time.Time
 }
 
@@ -53,6 +55,7 @@ func NewKratosAuthenticator(publicURL string, timeout time.Duration) *KratosAuth
 }
 
 type whoamiSession struct {
+	ID              string `json:"id"`
 	Active          bool   `json:"active"`
 	AuthenticatedAt string `json:"authenticated_at"`
 	Identity        struct {
@@ -108,7 +111,7 @@ func (a *KratosAuthenticator) Authenticate(ctx context.Context, sessionToken str
 	if err != nil {
 		return Principal{}, fmt.Errorf("%w: invalid authenticated_at", ErrProviderUnavailable)
 	}
-	return Principal{UserID: userID.String(), AuthenticatedAt: authenticatedAt.UTC()}, nil
+	return Principal{UserID: userID.String(), SessionID: session.ID, AuthenticatedAt: authenticatedAt.UTC()}, nil
 }
 
 // IdentityDeleter removes identities through the private Kratos Admin API.
@@ -134,6 +137,73 @@ func NewKratosAdmin(adminURL string, timeout time.Duration) *KratosAdmin {
 // is treated as already deleted.
 func (a *KratosAdmin) DeleteIdentity(ctx context.Context, identityID string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, a.adminURL+"/admin/identities/"+identityID, nil)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
+	}
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("%w: kratos admin status %d", ErrProviderUnavailable, resp.StatusCode)
+	}
+	return nil
+}
+
+// RevokeOtherSessions invalidates every session of an identity except the
+// one making the call. A missing identity is treated as already revoked.
+func (a *KratosAdmin) RevokeOtherSessions(ctx context.Context, identityID, keepSessionID string) error {
+	sessions, err := a.listIdentitySessions(ctx, identityID)
+	if err != nil {
+		return err
+	}
+	for _, session := range sessions {
+		if session.ID == keepSessionID {
+			continue
+		}
+		if err := a.disableSession(ctx, session.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type adminSession struct {
+	ID string `json:"id"`
+}
+
+func (a *KratosAdmin) listIdentitySessions(ctx context.Context, identityID string) ([]adminSession, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.adminURL+"/admin/identities/"+identityID+"/sessions", nil)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("%w: kratos admin status %d", ErrProviderUnavailable, resp.StatusCode)
+	}
+	var sessions []adminSession
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&sessions); err != nil {
+		return nil, fmt.Errorf("%w: decode sessions: %v", ErrProviderUnavailable, err)
+	}
+	return sessions, nil
+}
+
+func (a *KratosAdmin) disableSession(ctx context.Context, sessionID string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, a.adminURL+"/admin/sessions/"+sessionID, nil)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
 	}

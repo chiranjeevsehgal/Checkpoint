@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -78,6 +79,46 @@ func TestKratosAuthenticateNetworkError(t *testing.T) {
 
 	authn := NewKratosAuthenticator(url, 200*time.Millisecond)
 	if _, err := authn.Authenticate(context.Background(), "token"); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("got %v, want ErrProviderUnavailable", err)
+	}
+}
+
+func TestKratosAdminRevokeOtherSessions(t *testing.T) {
+	const identityID = "11111111-1111-1111-1111-111111111111"
+	disabled := map[string]bool{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/admin/identities/"+identityID+"/sessions":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"id":"keep"},{"id":"other-1"},{"id":"other-2"}]`))
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/admin/sessions/"):
+			disabled[strings.TrimPrefix(r.URL.Path, "/admin/sessions/")] = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	admin := NewKratosAdmin(server.URL, time.Second)
+	if err := admin.RevokeOtherSessions(context.Background(), identityID, "keep"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if disabled["keep"] || !disabled["other-1"] || !disabled["other-2"] {
+		t.Fatalf("disabled sessions = %v", disabled)
+	}
+}
+
+func TestKratosAdminRevokeOtherSessionsProviderError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	admin := NewKratosAdmin(server.URL, time.Second)
+	if err := admin.RevokeOtherSessions(context.Background(), "id", "keep"); !errors.Is(err, ErrProviderUnavailable) {
 		t.Fatalf("got %v, want ErrProviderUnavailable", err)
 	}
 }

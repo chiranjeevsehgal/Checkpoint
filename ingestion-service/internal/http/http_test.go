@@ -57,8 +57,21 @@ func (f *fakeAccounts) RequestDeletion(_ context.Context, _ string) error {
 	return nil
 }
 
+type fakeSessions struct {
+	revoked int
+	current []string
+	err     error
+}
+
+func (f *fakeSessions) RevokeOtherSessions(_ context.Context, _, currentSessionID string) error {
+	f.revoked++
+	f.current = append(f.current, currentSessionID)
+	return f.err
+}
+
 type fakeAuthenticator struct {
 	authenticatedAt time.Time
+	sessionID       string
 }
 
 func (a fakeAuthenticator) Authenticate(_ context.Context, token string) (Principal, error) {
@@ -69,7 +82,7 @@ func (a fakeAuthenticator) Authenticate(_ context.Context, token string) (Princi
 	if at.IsZero() {
 		at = time.Now()
 	}
-	return Principal{UserID: testUser, AuthenticatedAt: at}, nil
+	return Principal{UserID: testUser, SessionID: a.sessionID, AuthenticatedAt: at}, nil
 }
 
 type fakeService struct {
@@ -578,6 +591,8 @@ func TestNormalizeRoute(t *testing.T) {
 		"/v1/uploads":                  "/v1/uploads",
 		"/v1/uploads/abc-123":          "/v1/uploads/{id}",
 		"/v1/uploads/abc-123/complete": "/v1/uploads/{id}/complete",
+		"/v1/me":                       "/v1/me",
+		"/v1/me/sessions":              "/v1/me/sessions",
 		"/health/live":                 "/health/live",
 		"/metrics":                     "/metrics",
 		"/something/else/123":          "other",
@@ -732,5 +747,51 @@ func TestDeleteMeRequiresRecentAuth(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("stale session delete must be 403, got %d (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteSessionsRevokesOthers(t *testing.T) {
+	sessions := &fakeSessions{}
+	r := NewRouter(RouterDeps{
+		Auth:     fakeAuthenticator{sessionID: "current-session"},
+		Uploads:  &fakeService{},
+		Devices:  &fakeDevices{owned: map[string]bool{}},
+		Sessions: sessions,
+		Idem:     &fakeIdem{rows: map[string]repository.IdempotencyRecord{}},
+		Metrics:  metrics.NewRegistry(),
+	})
+
+	req := httptest.NewRequest("DELETE", "/v1/me/sessions", nil)
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("revoke sessions must be 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if sessions.revoked != 1 {
+		t.Fatalf("sessions revoked %d times, want 1", sessions.revoked)
+	}
+	if len(sessions.current) != 1 || sessions.current[0] != "current-session" {
+		t.Fatalf("current session passed = %v, want [current-session]", sessions.current)
+	}
+}
+
+func TestDeleteSessionsUnavailable(t *testing.T) {
+	r := NewRouter(RouterDeps{
+		Auth:     fakeAuthenticator{},
+		Uploads:  &fakeService{},
+		Devices:  &fakeDevices{owned: map[string]bool{}},
+		Sessions: &fakeSessions{err: auth.ErrProviderUnavailable},
+		Idem:     &fakeIdem{rows: map[string]repository.IdempotencyRecord{}},
+		Metrics:  metrics.NewRegistry(),
+	})
+
+	req := httptest.NewRequest("DELETE", "/v1/me/sessions", nil)
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("provider outage must be 503, got %d (%s)", rec.Code, rec.Body.String())
 	}
 }

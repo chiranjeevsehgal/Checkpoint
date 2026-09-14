@@ -6,7 +6,6 @@ import {
   createRegistrationFlow,
   createSettingsFlow,
   createVerificationFlow,
-  deleteOtherSessions,
   hasVerifiedEmail,
   identityEmail,
   logout,
@@ -25,6 +24,7 @@ import {
 } from './kratos-client';
 import { initialAuthState, type AuthState } from './types';
 
+import { revokeSessions } from '@/lib/api/account-api';
 import { loadServerConfig, resolveKratosUrl } from '@/lib/server-config';
 import {
   clearSession,
@@ -198,7 +198,7 @@ export async function changePassword(email: string | null, newPassword: string):
   if (!token) throw new Error('Not signed in.');
   const flow = await createSettingsFlow(transport, token);
   await submitPasswordChange(transport, flow, { password: newPassword, email, token });
-  await deleteOtherSessions(transport, token);
+  await revokeSessions(token);
 }
 
 export async function signOut(): Promise<void> {
@@ -218,7 +218,7 @@ export async function signOutEverywhere(): Promise<void> {
   const token = getSessionToken();
   if (token) {
     try {
-      await deleteOtherSessions(transport, token);
+      await revokeSessions(token);
     } catch {
       // best effort
     }

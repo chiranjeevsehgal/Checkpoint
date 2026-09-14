@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"checkpoint/ingestion/internal/auth"
 	"checkpoint/ingestion/internal/domain"
 	"checkpoint/ingestion/internal/repository"
 	"checkpoint/ingestion/internal/service"
@@ -61,6 +62,8 @@ func writeError(w http.ResponseWriter, r *http.Request, code int, errCode, messa
 // the LLD status-code table.
 func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, auth.ErrProviderUnavailable):
+		writeError(w, r, http.StatusServiceUnavailable, CodeAuthUnavailable, "Authentication is temporarily unavailable.")
 	case errors.Is(err, repository.ErrNotFound):
 		writeError(w, r, http.StatusNotFound, CodeUploadNotFound, "Upload was not found.")
 	case errors.Is(err, repository.ErrInvalidState):
@@ -88,5 +91,3 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusInternalServerError, CodeInternal, "Unexpected internal error.")
 	}
 }
-
-

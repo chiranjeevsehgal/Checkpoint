@@ -91,6 +91,12 @@ func normalizeRoute(path string) string {
 			return "/v1/uploads/{id}/complete"
 		}
 	}
+	if len(parts) >= 2 && parts[0] == "v1" && parts[1] == "me" {
+		if len(parts) == 3 && parts[2] == "sessions" {
+			return "/v1/me/sessions"
+		}
+		return "/v1/me"
+	}
 	return "other"
 }
 

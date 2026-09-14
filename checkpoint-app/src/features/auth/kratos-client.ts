@@ -217,10 +217,6 @@ export function logout(t: KratosTransport, token: string): Promise<void> {
   return t.request<void>('DELETE', '/self-service/logout/api', { session_token: token });
 }
 
-export function deleteOtherSessions(t: KratosTransport, token: string): Promise<void> {
-  return t.request<void>('DELETE', '/self-service/sessions', undefined, token);
-}
-
 export function createSettingsFlow(t: KratosTransport, token: string): Promise<KratosFlow> {
   return t.request<KratosFlow>('GET', '/self-service/settings/api', undefined, token);
 }
