@@ -167,6 +167,7 @@ func handleMessage(
 	}
 	result.AudioID = data.AudioID
 	result.UserID = data.UserID
+	result.RecordedAt = data.RecordedAt
 
 	// Re-check immediately before persistence: the account may have been
 	// deleted while the expensive transcription ran.
@@ -215,6 +216,7 @@ func publishExtractionJob(ctx context.Context, producer *kafka.Producer, topic s
 			Text:            result.Text,
 			Language:        result.Language,
 			SpeakerSegments: result.SpeakerSegments,
+			RecordedAt:      result.RecordedAt,
 		},
 	}
 	return producer.Publish(ctx, topic, result.AudioID, evt)
