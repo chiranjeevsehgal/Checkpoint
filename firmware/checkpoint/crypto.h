@@ -4,6 +4,13 @@
 
 bool crypto_init();
 bool crypto_set_key(const uint8_t key[CRYPTO_KEY_BYTES]);
+// SHA-256 digest. out must hold 32 bytes.
+bool crypto_sha256(const uint8_t *in, size_t len, uint8_t out[32]);
+// AES-128-CCM with an explicit key, leaving the global master key untouched.
+bool crypto_aead_encrypt(const uint8_t key[CRYPTO_KEY_BYTES], const uint8_t nonce[CRYPTO_NONCE_BYTES], const uint8_t *plain, size_t plain_len, const uint8_t *aad, size_t aad_len, uint8_t *cipher, uint8_t tag[CRYPTO_TAG_BYTES]);
+bool crypto_aead_decrypt(const uint8_t key[CRYPTO_KEY_BYTES], const uint8_t nonce[CRYPTO_NONCE_BYTES], const uint8_t *cipher, size_t cipher_len, const uint8_t *aad, size_t aad_len, const uint8_t tag[CRYPTO_TAG_BYTES], uint8_t *plain);
+// 96-bit nonce for control-plane AEAD keyed by the session key.
+void crypto_build_cloud_nonce(uint32_t session_id, uint16_t seq, uint8_t out[CRYPTO_NONCE_BYTES]);
 bool crypto_encrypt(const uint8_t nonce[CRYPTO_NONCE_BYTES], const uint8_t *plain, size_t plain_len, const uint8_t *aad, size_t aad_len, uint8_t *cipher, uint8_t tag[CRYPTO_TAG_BYTES]);
 bool crypto_decrypt(const uint8_t nonce[CRYPTO_NONCE_BYTES], const uint8_t *cipher, size_t cipher_len, const uint8_t *aad, size_t aad_len, const uint8_t tag[CRYPTO_TAG_BYTES], uint8_t *plain);
 void crypto_build_nonce(uint32_t session_id, uint64_t file_uid, uint16_t seq, uint8_t out[CRYPTO_NONCE_BYTES]);
