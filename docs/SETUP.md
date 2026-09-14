@@ -115,24 +115,50 @@ Or the full composed stack (API + migrate + Kafka):
 docker compose up --build
 ```
 
-Smoke flow (Bearer token is the dev user UUID):
+Authentication is an opaque Ory Kratos session token. Register/login through
+the Kratos public API at `http://localhost:4433`, then send the returned
+`session_token` as `Authorization: Bearer <token>`; there is no UUID-bearer
+shortcut. Compose starts `kratos`/`kratos-migrate` and `mailpit`
+(verification/recovery email UI at `http://localhost:8025`); the Kratos admin
+API is bridge-only and never published. The `checkpoint_request` (RLS) and
+`checkpoint_worker` roles are created by `infra/postgres/bootstrap.sh` on the
+first Postgres volume.
 
-Uploads are OGG-only (`audio/ogg`) and capped at 10 MB — anything else
-is rejected with 415/413 before any bytes move.
+Before uploading, claim your pendant (one per account):
 
 ```bash
-UID=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+TOKEN=<kratos session token>
+DEVICE=<32 lowercase hex device id>
+curl localhost:8080/v1/device -H "Authorization: Bearer $TOKEN"
+curl -X POST localhost:8080/v1/device/claim -H "Authorization: Bearer $TOKEN" \
+  -d '{"device_id":"'"$DEVICE"'","cloud_claim_secret":"<64 hex chars>"}'
+```
+
+Uploads are OGG-only (`audio/ogg`) and capped at 10 MB — anything else
+is rejected with 415/413 before any bytes move. `device_id` is required and
+must be a pendant owned by the caller.
+
+```bash
 curl -X POST localhost:8080/v1/uploads \
-  -H "Authorization: Bearer $UID" \
-  -d '{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":8}'
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":8,"device_id":"'"$DEVICE"'"}'
 # PUT 8 bytes to the returned upload.url, then:
 curl -X POST localhost:8080/v1/uploads/<id>/complete \
-  -H "Authorization: Bearer $UID" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{"size_bytes":8}'
 # GET /v1/uploads/<id> flips READY -> SUBMITTED once the outbox dispatcher
 # publishes to Kafka (transcription.jobs.v1, ~2s). Verify with:
 # docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --topic transcription.jobs.v1 --bootstrap-server kafka:9092
 ```
+
+`DELETE /v1/me` records a deletion tombstone (202) and returns immediately; the
+in-process deletion worker purges MinIO objects, uploads, transcripts,
+embeddings and finally the Kratos identity. Release a pendant with
+`POST /v1/device/release` only within 5 minutes of a fresh login.
+
+Migrations `00007`–`00009` add `uploads.device_id NOT NULL` and device-aware
+idempotency, so an existing dev volume must be reset
+(`docker compose down` + remove the `postgres-data` volume) before `up`.
 
 Idempotency: `Idempotency-Key` retries return the same `upload_id` with a
 freshly minted 15m `upload.url`. `/complete` verifies MinIO size and
