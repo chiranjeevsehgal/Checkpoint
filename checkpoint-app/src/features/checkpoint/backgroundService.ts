@@ -6,6 +6,8 @@ import { hasBlePermissions } from './permissions.ts';
 import { loadSettings } from './settings.ts';
 import { syncEngine } from './syncEngine.ts';
 
+import { getSessionToken, loadSession } from '@/lib/session';
+
 const CHANNEL_ID = 'checkpoint-sync';
 const NOTIFICATION_ID = 'checkpoint-sync';
 
@@ -31,6 +33,11 @@ if (Platform.OS === 'android') {
 
 async function bootBackgroundSync(): Promise<void> {
   console.debug('[bg] booting engine');
+  await loadSession();
+  if (!getSessionToken()) {
+    console.debug('[bg] no session — engine not started');
+    return;
+  }
   const settings = await loadSettings();
   syncEngine.configure(settings);
   networkMonitor.configure(settings.serverUrl);

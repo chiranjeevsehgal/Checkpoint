@@ -2,9 +2,11 @@ import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 
 import {
+  AUTH_CLOUD_SECRET_BYTES,
   CRYPTO_KEY_BYTES,
   CRYPTO_NONCE_BYTES,
   CRYPTO_TAG_BYTES,
+  CTRL_CMD_GET_CLOUD_SECRET,
   PKT_DATA,
   PROTO_VER,
 } from './config.ts';
@@ -16,6 +18,7 @@ const SESSION_INFO = 'checkpoint-session-v3';
 const ENROLL_INFO = 'checkpoint-client-v3';
 const FILE_INFO = 'checkpoint-file-v1';
 const NONCE_INFO = 'checkpoint-nonce-v1';
+const CLOUD_NONCE_INFO = 'checkpoint-cloud-v1';
 
 const textEncoder = new TextEncoder();
 
@@ -329,6 +332,43 @@ function ccmCrypt(key: Uint8Array, nonce: Uint8Array, message: Uint8Array): Uint
     for (let i = offset; i < end; i++) out[i] = message[i]! ^ keystream[i - offset]!;
   }
   return out;
+}
+
+export function buildCloudNonce(sessionId: number, seq: number): Uint8Array {
+  const seqBytes = new Uint8Array(2);
+  new DataView(seqBytes.buffer).setUint16(0, seq & 0xffff, true);
+  return sha256(
+    concat(textEncoder.encode(CLOUD_NONCE_INFO), packSession(sessionId), seqBytes),
+  ).slice(0, CRYPTO_NONCE_BYTES);
+}
+
+/** Opens the GET_CLOUD_SECRET response: nonce(12) || cipher(32) || tag(8). */
+export function openCloudSecret(
+  sessionKey: Uint8Array,
+  sessionId: number,
+  seq: number,
+  envelope: Uint8Array,
+): Uint8Array | null {
+  const expectedLen = CRYPTO_NONCE_BYTES + AUTH_CLOUD_SECRET_BYTES + CRYPTO_TAG_BYTES;
+  if (envelope.length !== expectedLen) return null;
+  const nonce = envelope.slice(0, CRYPTO_NONCE_BYTES);
+  if (!constantTimeEqual(nonce, buildCloudNonce(sessionId, seq))) return null;
+  const body = envelope.slice(CRYPTO_NONCE_BYTES);
+  const cipher = body.slice(0, AUTH_CLOUD_SECRET_BYTES);
+  const receivedTag = body.slice(AUTH_CLOUD_SECRET_BYTES);
+  const aad = new Uint8Array(4);
+  aad[0] = PROTO_VER;
+  aad[1] = CTRL_CMD_GET_CLOUD_SECRET;
+  aad[2] = seq & 0xff;
+  aad[3] = (seq >> 8) & 0xff;
+  const plain = ccmCrypt(sessionKey, nonce, cipher);
+  const mac = ccmMac(sessionKey, nonce, aad, plain);
+  const mask = aesEncryptBlock(sessionKey, ccmCounterBlock(nonce, 0));
+  const expectedTag = new Uint8Array(CRYPTO_TAG_BYTES);
+  for (let i = 0; i < CRYPTO_TAG_BYTES; i++) {
+    expectedTag[i] = mac[i]! ^ mask[i]!;
+  }
+  return constantTimeEqual(expectedTag, receivedTag) ? plain : null;
 }
 
 export function decryptFragment(

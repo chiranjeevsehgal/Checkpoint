@@ -17,7 +17,8 @@ import {
   TRANSFER_TICK_MS,
 } from './config.ts';
 import { clearEnrolledDeviceId, deleteCredential, getEnrolledDeviceId } from './credentials.ts';
-import { hexToBytes } from './crypto.ts';
+import { bytesToHex, hexToBytes } from './crypto.ts';
+import { claimDevice, getDevice, releaseDevice as releaseDeviceOnServer } from './device.ts';
 import { IngestionUploader } from './ingestion.ts';
 import { networkMonitor } from './networkMonitor.ts';
 import type { HealthProbe } from './networkStatus.ts';
@@ -49,6 +50,8 @@ import type {
   StorageInfo,
 } from './types.ts';
 import { checkSpeech, shouldUpload, vadSkipReason } from './vad.ts';
+
+import { getSessionToken } from '@/lib/session';
 
 export interface ListPage {
   start: number;
@@ -85,6 +88,7 @@ export interface EngineSnapshot {
   deviceId: string | null;
   enrolled: boolean;
   autoConnecting: boolean;
+  ownedDeviceId: string | null;
 }
 
 const INITIAL_SNAPSHOT: EngineSnapshot = {
@@ -106,6 +110,7 @@ const INITIAL_SNAPSHOT: EngineSnapshot = {
   deviceId: null,
   enrolled: false,
   autoConnecting: false,
+  ownedDeviceId: null,
 };
 
 function mapBluetoothState(state: State): BluetoothStatus {
@@ -161,8 +166,13 @@ class SyncEngine {
     this.settings = settings;
   }
 
+  setOwnedDevice(deviceId: string | null): void {
+    this.setState({ ownedDeviceId: deviceId });
+  }
+
   async start(): Promise<void> {
     if (this.started) return;
+    if (!getSessionToken()) return;
     this.started = true;
     this.appendLog('[sync] engine started');
     const stored = await loadTransfers();
@@ -187,6 +197,10 @@ class SyncEngine {
     this.lastAutoConnectAt = 0;
     this.setState({ enrolled: (await getEnrolledDeviceId()) !== null });
     await this.maybeAutoConnect();
+  }
+
+  async stopForAuthLoss(): Promise<void> {
+    await this.stop();
   }
 
   async stop(): Promise<void> {
@@ -407,8 +421,12 @@ class SyncEngine {
         this.patchRecord(record.fileId, { localUri: undefined });
         return;
       }
+      if (!this.snapshot.ownedDeviceId) {
+        this.appendLog('  [!] ingest skipped: no cloud-owned pendant');
+        return;
+      }
       this.appendLog(`  [ingest] uploading file_${record.fileId}.ogg (${bytes.length}B) ...`);
-      const uploader = new IngestionUploader(this.settings.serverUrl, this.settings.userId);
+      const uploader = new IngestionUploader(this.settings.serverUrl, this.snapshot.ownedDeviceId);
       try {
         const result = await uploader.upload(bytes, `file_${record.fileId}.ogg`, 'audio/ogg', {
           idempotencyKey: record.fileId,
@@ -679,6 +697,7 @@ class SyncEngine {
             await this.syncClock(client);
             this.setState({ connected: true, busy: false, autoConnecting: false });
             this.setState({ deviceId: await getEnrolledDeviceId(), enrolled: true });
+            await this.ensureCloudOwnership(client);
             this.appendLog('[ui] listening for file transfers …');
             await this.applyDesiredSync(client);
             try {
@@ -789,6 +808,62 @@ class SyncEngine {
     await clearEnrolledDeviceId();
     this.setState({ enrolled: false, deviceId: null });
     this.appendLog('[ui] pendant forgotten');
+  }
+
+  private async ensureCloudOwnership(client: CheckpointClient): Promise<void> {
+    const token = getSessionToken();
+    if (!token) {
+      this.setOwnedDevice(null);
+      return;
+    }
+    const enrolled = await getEnrolledDeviceId();
+    if (!enrolled) {
+      this.setOwnedDevice(null);
+      return;
+    }
+    try {
+      const owned = await getDevice(this.settings.serverUrl, token);
+      if (owned?.device_id === enrolled) {
+        this.setOwnedDevice(owned.device_id);
+        return;
+      }
+      const secret = await client.getCloudSecret();
+      if (!secret) {
+        this.setOwnedDevice(null);
+        this.appendLog('[ui] pendant is not claimed to this account');
+        return;
+      }
+      const claimed = await claimDevice(
+        this.settings.serverUrl,
+        token,
+        enrolled,
+        bytesToHex(secret),
+      );
+      this.setOwnedDevice(claimed.device_id);
+      this.appendLog('[ui] pendant claimed to this account');
+    } catch (error) {
+      this.setOwnedDevice(null);
+      this.appendLog(
+        `[ui] cloud claim failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
+    }
+  }
+
+  async releasePendant(): Promise<void> {
+    const token = getSessionToken();
+    if (!token) throw new Error('Not signed in.');
+    const client = this.client;
+    if (!client) throw new Error('Connect to the pendant first.');
+    const erase = await this.eraseStorage();
+    if (erase !== CTRL_OK) throw new Error('Local erase failed — cloud ownership unchanged.');
+    const cleared = await client.clearTrustedSlots();
+    if (cleared !== CTRL_OK) {
+      throw new Error('Could not clear pendant trust — cloud ownership unchanged.');
+    }
+    await releaseDeviceOnServer(this.settings.serverUrl, token);
+    await this.forgetDevice();
+    this.setOwnedDevice(null);
+    this.appendLog('[ui] pendant released');
   }
 
   refreshStatus = async (): Promise<void> => {

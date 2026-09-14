@@ -31,6 +31,7 @@ export function ManageDeviceSheet({ visible, onClose, onSetup }: ManageDeviceShe
     disconnect,
     stopConnection,
     requestForget,
+    requestRelease,
   } = useCheckpoint();
   const { showToast } = useToast();
   const [name, setName] = useState(deviceName);
@@ -120,24 +121,13 @@ export function ManageDeviceSheet({ visible, onClose, onSetup }: ManageDeviceShe
               )}
               <Button
                 variant="outline"
-                disabled={busy}
+                disabled={busy || !enrolled}
                 onPress={() => {
-                  onSetup();
                   onClose();
+                  requestRelease();
                 }}
               >
-                <Text>Set up another pendant</Text>
-              </Button>
-              <Button
-                variant="outline"
-                disabled={busy}
-                onPress={() => {
-                  onSetup();
-                  onClose();
-                  requestForget();
-                }}
-              >
-                <Text>Replace pendant</Text>
+                <Text className="text-destructive">Release pendant</Text>
               </Button>
               <Button
                 variant="outline"

@@ -47,7 +47,7 @@ export const RECONNECT_DELAY_MAX_MS = 30000;
 export const AUTO_CONNECT_COOLDOWN_MS = 60_000;
 export const COMPLETED_CACHE_SIZE = 16;
 
-export const INGEST_USER_ID_DEFAULT = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+export const AUTH_CLOUD_SECRET_BYTES = 32;
 export const INGEST_TIMEOUT_S = 15;
 export const INGEST_MAX_BYTES = 10 * 1024 * 1024;
 export const INGEST_POLL_TIMEOUT_S = 30;
@@ -141,6 +141,8 @@ export const CTRL_CMD_TIME_SET = 0x14;
 export const CTRL_CMD_FILE_DELETE = 0x20;
 export const CTRL_CMD_STORAGE_ERASE = 0x21;
 export const CTRL_CMD_FILE_FETCH = 0x22;
+export const CTRL_CMD_GET_CLOUD_SECRET = 0x23;
+export const CTRL_CMD_CLEAR_TRUSTED_SLOTS = 0x24;
 
 export const CTRL_OK = 0x00;
 export const CTRL_ERR_NOT_READY = 0x01;
