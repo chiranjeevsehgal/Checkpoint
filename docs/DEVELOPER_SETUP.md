@@ -127,6 +127,21 @@ go run ./cmd/device-admin status    -device <32hex>   # state=unowned, owner=non
 
 An unprovisioned pendant cannot be claimed by the app.
 
+### Bootstrap GUI (optional)
+
+Steps 4–5 have a desktop shortcut. From `firmware/host/checkpoint_bootstrap`:
+
+```powershell
+pip install -r requirements.txt
+python -m bootstrap_app
+```
+
+The window selects the `arduino-cli` path and COM port, compiles/uploads the
+firmware, drives the serial console (`auth list`, `auth export`,
+`auth provision`, `auth reset`, `auth forget 0|1`, `power sleep`), and registers
+the device (it parses `auth provision` and runs `device-admin provision` for
+you). `DATABASE_URL` is prefilled from the repo `.env` when present.
+
 ## 6. Build the mobile app
 
 ```bash

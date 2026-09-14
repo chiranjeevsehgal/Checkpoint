@@ -28,6 +28,8 @@ firmware/
     checkpoint_client/      # Python BLE client for checkpoint (moved from firmware/client)
       client_app/            #   protocol v3 client package (ble_client/crypto/ingestion)
       benchmark_capture.py   #   wraps client + serial tail
+    checkpoint_bootstrap/    # Python GUI: flash firmware, serial console, register device
+      bootstrap_app/          #   ttkbootstrap window + pure parsers/command builders
   tests/                    # host-side grep tests (pytest firmware/tests -v)
   docs/
     UPLOAD_GUIDE.md         #   Arduino IDE upload steps
@@ -40,3 +42,5 @@ Arduino IDE: `File -> Open -> firmware/checkpoint/checkpoint.ino` (folder==ino r
 Host client: `pip install bleak cryptography && python -m client_app --cli --session-token <kratos> --device-id <32hex>` (from `firmware/host/checkpoint_client`).
 
 Serial commands: `auth list | auth forget 0|1 | auth reset | auth export | auth provision | power sleep`. `auth provision` prints `device <32hex>` and `cloud-sha256 <64hex>` for the backend `device-admin provision` import; `auth export` prints the BLE claim key/URI.
+
+Bootstrap GUI: `pip install -r firmware/host/checkpoint_bootstrap/requirements.txt` then `python -m bootstrap_app` (from `firmware/host/checkpoint_bootstrap`). Flashes firmware, drives the serial console, and registers the device via `device-admin`.
