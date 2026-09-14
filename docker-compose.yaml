@@ -293,6 +293,9 @@ services:
       - "4433:4433"
     environment:
       DSN: postgres://kratos:${KRATOS_DB_PASSWORD:-kratos_db_password}@postgres:5432/kratos?sslmode=disable
+      # Public URL advertised in flow ui.action; must be reachable by the
+      # client (a phone cannot resolve localhost). Override per environment.
+      SERVE_PUBLIC_BASE_URL: ${KRATOS_PUBLIC_BASE_URL:-http://localhost:4433/}
     volumes:
       - ./infra/kratos:/etc/config/kratos:ro
     command: serve -c /etc/config/kratos/kratos.yml --watch-courier
