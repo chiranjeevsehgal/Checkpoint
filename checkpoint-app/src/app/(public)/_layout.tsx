@@ -1,6 +1,13 @@
-import { Stack } from 'expo-router';
+import { Redirect, Stack } from 'expo-router';
+
+import { useAuth } from '@/features/auth/hooks/useAuth';
 
 export default function PublicLayout() {
+  const { status } = useAuth();
+  if (status === 'loading') return null;
+  if (status === 'authenticated' || status === 'unavailable') {
+    return <Redirect href="/(app)/(tabs)/connect" />;
+  }
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="sign-in" options={{ title: 'Sign in' }} />
