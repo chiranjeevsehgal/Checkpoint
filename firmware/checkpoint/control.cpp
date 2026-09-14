@@ -609,7 +609,7 @@ void control_send_cloud_secret(uint16_t seq) {
     return;
   }
   crypto_build_cloud_nonce(ble_session_id(), seq, nonce);
-  uint8_t aad[4] = {PROTO_VER, CTRL_CMD_GET_CLOUD_SECRET, (uint8_t)(seq & 0xFF), (uint8_t)((seq >> 8) & 0xFF)};
+  uint8_t aad[4] = {(uint8_t)PROTO_VER, (uint8_t)CTRL_CMD_GET_CLOUD_SECRET, (uint8_t)(seq & 0xFF), (uint8_t)((seq >> 8) & 0xFF)};
   payload[0] = CTRL_CMD_GET_CLOUD_SECRET;
   payload[1] = CTRL_OK;
   memcpy(payload + 2, nonce, CRYPTO_NONCE_BYTES);
@@ -617,7 +617,7 @@ void control_send_cloud_secret(uint16_t seq) {
                                 payload + 2 + CRYPTO_NONCE_BYTES,
                                 payload + 2 + CRYPTO_NONCE_BYTES + AUTH_CLOUD_SECRET_BYTES);
   if (ok) {
-    ble_send_packet(PKT_CMD_RESP, seq, payload, sizeof(payload));
+    ble_send_packet(PKT_CMD_RESP, seq, payload, (uint16_t)sizeof(payload));
   } else {
     control_send_cmd_resp(seq, CTRL_CMD_GET_CLOUD_SECRET, CTRL_ERR_NOT_READY, nullptr, 0);
   }
