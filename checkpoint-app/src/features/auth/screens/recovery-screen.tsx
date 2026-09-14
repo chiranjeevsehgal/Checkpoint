@@ -39,8 +39,8 @@ export function RecoveryScreen() {
     try {
       await confirmPasswordRecovery(code.trim(), password);
       router.replace('/(public)/sign-in');
-    } catch {
-      setError('That code was not accepted, or the password was too weak.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reset the password.');
     } finally {
       setBusy(false);
     }
