@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"checkpoint/ingestion/internal/auth"
 	"checkpoint/ingestion/internal/metrics"
 )
 
@@ -54,11 +56,12 @@ func sanitizeRequestID(v string) string {
 	return v
 }
 
-// Principal is the authenticated caller. TenantID is reserved for the
-// future multi-tenant identity integration.
-type Principal struct {
-	UserID string
-}
+// Principal is the authenticated caller, sourced only from the identity
+// provider.
+type Principal = auth.Principal
+
+// RecentAuthWindow is how fresh a session must be for destructive actions.
+const RecentAuthWindow = 5 * time.Minute
 
 // PrincipalFrom returns the caller attached by Auth.
 func PrincipalFrom(ctx context.Context) (Principal, bool) {
@@ -122,26 +125,70 @@ func Observe(reg *metrics.Registry, next http.Handler) http.Handler {
 	})
 }
 
-// Auth enforces Authorization on protected routes.
-//
-// TODO(auth): replace the dev stand-in with real JWT validation against
-// the identity system and populate TenantID. For V1 the bearer token is
-// the user's UUID, which keeps the ownership contract testable without
-// an IdP.
-func Auth(next http.Handler) http.Handler {
+// Authenticator validates a bearer session token.
+type Authenticator interface {
+	Authenticate(ctx context.Context, sessionToken string) (Principal, error)
+}
+
+// AccountGuard reports whether an identity is being deleted.
+type AccountGuard interface {
+	IsDeleting(ctx context.Context, userID string) (bool, error)
+}
+
+// Auth validates the bearer session against the identity provider and
+// attaches the resulting Principal. A provider outage is a 503, never a 401.
+func Auth(authenticator Authenticator, guard AccountGuard, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		const prefix = "Bearer "
-		header := r.Header.Get("Authorization")
-		if len(header) <= len(prefix) || header[:len(prefix)] != prefix {
+		token, ok := bearerToken(r.Header.Get("Authorization"))
+		if !ok {
 			writeError(w, r, http.StatusUnauthorized, CodeUnauthorized, "Missing or invalid authorization.")
 			return
 		}
-		userID := header[len(prefix):]
-		if _, err := uuid.Parse(userID); err != nil {
-			writeError(w, r, http.StatusUnauthorized, CodeUnauthorized, "Missing or invalid authorization.")
+		principal, err := authenticator.Authenticate(r.Context(), token)
+		if err != nil {
+			writeAuthError(w, r, err)
 			return
 		}
-		ctx := context.WithValue(r.Context(), principalKey{}, Principal{UserID: userID})
+		if guard != nil {
+			deleting, err := guard.IsDeleting(r.Context(), principal.UserID)
+			if err != nil {
+				writeError(w, r, http.StatusServiceUnavailable, CodeAuthUnavailable, "Authentication is temporarily unavailable.")
+				return
+			}
+			if deleting {
+				writeError(w, r, http.StatusForbidden, CodeAccountDeleting, "This account is being deleted.")
+				return
+			}
+		}
+		ctx := context.WithValue(r.Context(), principalKey{}, principal)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func bearerToken(header string) (string, bool) {
+	const prefix = "Bearer "
+	if len(header) <= len(prefix) || header[:len(prefix)] != prefix {
+		return "", false
+	}
+	token := strings.TrimSpace(header[len(prefix):])
+	if token == "" {
+		return "", false
+	}
+	return token, true
+}
+
+func writeAuthError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, auth.ErrInvalidSession):
+		writeError(w, r, http.StatusUnauthorized, CodeUnauthorized, "Missing or invalid authorization.")
+	case errors.Is(err, auth.ErrVerificationRequired):
+		writeError(w, r, http.StatusForbidden, CodeVerificationRequired, "Email verification is required.")
+	default:
+		writeError(w, r, http.StatusServiceUnavailable, CodeAuthUnavailable, "Authentication is temporarily unavailable.")
+	}
+}
+
+// HasRecentAuth reports whether the session was re-authenticated recently.
+func HasRecentAuth(principal Principal, now time.Time) bool {
+	return !principal.AuthenticatedAt.IsZero() && now.Sub(principal.AuthenticatedAt) <= RecentAuthWindow
 }

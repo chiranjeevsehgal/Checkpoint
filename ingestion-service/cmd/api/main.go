@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 
+	"checkpoint/ingestion/internal/auth"
 	"checkpoint/ingestion/internal/cleanup"
 	"checkpoint/ingestion/internal/config"
 	apihttp "checkpoint/ingestion/internal/http"
@@ -39,9 +40,14 @@ func main() {
 	}
 
 	ctx := context.Background()
-	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL)
+	requestPool, err := postgres.NewPool(ctx, cfg.DatabaseRequestURL)
 	if err != nil {
-		logger.Error("postgres connect failed", "error", err)
+		logger.Error("postgres request pool connect failed", "error", err)
+		os.Exit(1)
+	}
+	workerPool, err := postgres.NewPool(ctx, cfg.DatabaseWorkerURL)
+	if err != nil {
+		logger.Error("postgres worker pool connect failed", "error", err)
 		os.Exit(1)
 	}
 
@@ -52,9 +58,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	uploads := service.NewUploadService(pool, pool, objectStorage, cfg.MinIOBucket, nil)
+	authenticator := auth.NewKratosAuthenticator(cfg.KratosPublicURL, cfg.KratosTimeout)
+	uploads := service.NewUploadService(requestPool, requestPool, objectStorage, cfg.MinIOBucket, nil)
+	devices := service.NewDeviceService(requestPool)
 	reg := metrics.NewRegistry()
-	mux := apihttp.NewRouter(uploads, pool, pool, objectStorage, reg)
+	mux := apihttp.NewRouter(apihttp.RouterDeps{
+		Auth:    authenticator,
+		Uploads: uploads,
+		Devices: devices,
+		Idem:    requestPool,
+		DB:      requestPool,
+		Storage: objectStorage,
+		Metrics: reg,
+	})
 
 	// The outbox dispatcher runs in-process. Every replica runs one, and
 	// SKIP LOCKED claiming keeps them from stepping on each other.
@@ -64,7 +80,7 @@ func main() {
 		logger.Error("kafka connect failed", "error", err)
 		os.Exit(1)
 	}
-	dispatcher := outbox.NewDispatcher(pool, publisher, instanceID(), logger, reg)
+	dispatcher := outbox.NewDispatcher(workerPool, publisher, instanceID(), logger, reg)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -82,7 +98,7 @@ func main() {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); dispatcher.Run(runCtx) }()
-	cleaner := cleanup.NewCleaner(pool, objectStorage, cfg.UploadExpiry, cfg.CleanupInterval, logger)
+	cleaner := cleanup.NewCleaner(workerPool, objectStorage, cfg.UploadExpiry, cfg.CleanupInterval, logger)
 	go func() { defer wg.Done(); cleaner.Run(runCtx) }()
 
 	go func() {
@@ -106,7 +122,8 @@ func main() {
 	cancelRun()
 	wg.Wait()
 	publisher.Close()
-	pool.Close()
+	requestPool.Close()
+	workerPool.Close()
 	logger.Info("shutdown complete")
 }
 

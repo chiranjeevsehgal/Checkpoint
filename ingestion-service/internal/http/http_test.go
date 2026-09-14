@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"checkpoint/ingestion/internal/auth"
 	"checkpoint/ingestion/internal/domain"
 	"checkpoint/ingestion/internal/metrics"
 	"checkpoint/ingestion/internal/repository"
@@ -17,6 +18,50 @@ import (
 )
 
 const testUser = "11111111-1111-1111-1111-111111111111"
+
+const testDevice = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+type fakeDevices struct {
+	owned    map[string]bool
+	device   *domain.Device
+	claimErr error
+	releaseN int
+}
+
+func (f *fakeDevices) Get(_ context.Context, _ string) (*domain.Device, error) {
+	return f.device, nil
+}
+
+func (f *fakeDevices) IsOwnedBy(_ context.Context, userID, deviceID string) (bool, error) {
+	return f.owned[userID+"/"+deviceID], nil
+}
+
+func (f *fakeDevices) Claim(_ context.Context, _, deviceID, _ string) (*domain.Device, error) {
+	if f.claimErr != nil {
+		return nil, f.claimErr
+	}
+	return &domain.Device{DeviceID: deviceID, State: domain.DeviceStateOwned}, nil
+}
+
+func (f *fakeDevices) Release(_ context.Context, _ string) error {
+	f.releaseN++
+	return nil
+}
+
+type fakeAuthenticator struct {
+	authenticatedAt time.Time
+}
+
+func (a fakeAuthenticator) Authenticate(_ context.Context, token string) (Principal, error) {
+	if token != "test-session" {
+		return Principal{}, auth.ErrInvalidSession
+	}
+	at := a.authenticatedAt
+	if at.IsZero() {
+		at = time.Now()
+	}
+	return Principal{UserID: testUser, AuthenticatedAt: at}, nil
+}
 
 type fakeService struct {
 	upload    *domain.Upload
@@ -122,11 +167,27 @@ func testRouter(svc *fakeService) http.Handler {
 	if svc.complete == nil {
 		svc.complete = func() (*domain.Upload, error) { return svc.upload, nil }
 	}
-	return NewRouter(svc, &fakeIdem{rows: map[string]repository.IdempotencyRecord{}}, nil, nil, metrics.NewRegistry())
+	return newRouter(svc, &fakeIdem{rows: map[string]repository.IdempotencyRecord{}}, metrics.NewRegistry())
+}
+
+func newRouter(svc *fakeService, idem repository.IdempotencyRepository, reg *metrics.Registry) http.Handler {
+	return newRouterWithDevices(svc, idem, reg, &fakeDevices{
+		owned: map[string]bool{testUser + "/" + testDevice: true},
+	})
+}
+
+func newRouterWithDevices(svc *fakeService, idem repository.IdempotencyRepository, reg *metrics.Registry, devices deviceService) http.Handler {
+	return NewRouter(RouterDeps{
+		Auth:    fakeAuthenticator{},
+		Uploads: svc,
+		Devices: devices,
+		Idem:    idem,
+		Metrics: reg,
+	})
 }
 
 func authed(req *http.Request) {
-	req.Header.Set("Authorization", "Bearer "+testUser)
+	req.Header.Set("Authorization", "Bearer test-session")
 }
 
 func TestUnauthorized(t *testing.T) {
@@ -148,7 +209,7 @@ func TestUnauthorized(t *testing.T) {
 func TestCreateUpload(t *testing.T) {
 	svc := &fakeService{}
 	r := testRouter(svc)
-	body := `{"filename":"meeting.ogg","content_type":"audio/ogg","size_bytes":100}`
+	body := `{"filename":"meeting.ogg","content_type":"audio/ogg","size_bytes":100,"device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
 	req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(body))
 	authed(req)
 	rec := httptest.NewRecorder()
@@ -172,8 +233,8 @@ func TestCreateUpload(t *testing.T) {
 func TestCreateIdempotencyReplay(t *testing.T) {
 	svc := &fakeService{}
 	idem := &fakeIdem{rows: map[string]repository.IdempotencyRecord{}}
-	r := NewRouter(svc, idem, nil, nil, metrics.NewRegistry())
-	body := `{"filename":"meeting.ogg","content_type":"audio/ogg","size_bytes":100}`
+	r := newRouter(svc, idem, metrics.NewRegistry())
+	body := `{"filename":"meeting.ogg","content_type":"audio/ogg","size_bytes":100,"device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
 
 	first := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(body))
@@ -202,7 +263,7 @@ func TestCreateIdempotencyReplay(t *testing.T) {
 	}
 
 	other := httptest.NewRecorder()
-	req = httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(`{"filename":"other.ogg","content_type":"audio/ogg","size_bytes":50}`))
+	req = httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(`{"filename":"other.ogg","content_type":"audio/ogg","size_bytes":50,"device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`))
 	authed(req)
 	req.Header.Set("Idempotency-Key", "key-1")
 	r.ServeHTTP(other, req)
@@ -213,9 +274,9 @@ func TestCreateIdempotencyReplay(t *testing.T) {
 
 func TestCreateIdempotencyCanonicalHash(t *testing.T) {
 	svc := &fakeService{}
-	r := NewRouter(svc, &fakeIdem{rows: map[string]repository.IdempotencyRecord{}}, nil, nil, metrics.NewRegistry())
-	first := `{"filename":"meeting.ogg","content_type":"audio/ogg","size_bytes":100}`
-	second := "{ \"size_bytes\" : 100 , \"filename\" : \"meeting.ogg\" , \"content_type\" : \"audio/ogg\" }"
+	r := newRouter(svc, &fakeIdem{rows: map[string]repository.IdempotencyRecord{}}, metrics.NewRegistry())
+	first := `{"filename":"meeting.ogg","content_type":"audio/ogg","size_bytes":100,"device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
+	second := "{ \"size_bytes\" : 100 , \"filename\" : \"meeting.ogg\" , \"content_type\" : \"audio/ogg\" , \"device_id\" : \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }"
 	for i, body := range []string{first, second} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(body))
@@ -232,7 +293,7 @@ func TestCreateIdempotencyCanonicalHash(t *testing.T) {
 }
 
 func TestCreateRecordedAt(t *testing.T) {
-	valid := `{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"recorded_at":"2020-01-01T00:00:00Z"}`
+	valid := `{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"recorded_at":"2020-01-01T00:00:00Z","device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(valid))
 	authed(req)
@@ -242,8 +303,8 @@ func TestCreateRecordedAt(t *testing.T) {
 	}
 
 	for _, bad := range []string{
-		`{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"recorded_at":"not-a-date"}`,
-		`{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"recorded_at":"2999-01-01T00:00:00Z"}`,
+		`{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"recorded_at":"not-a-date","device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
+		`{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"recorded_at":"2999-01-01T00:00:00Z","device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
 	} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(bad))
@@ -257,9 +318,9 @@ func TestCreateRecordedAt(t *testing.T) {
 
 func TestCreateIdempotencyRecordedAtChangesHash(t *testing.T) {
 	svc := &fakeService{}
-	r := NewRouter(svc, &fakeIdem{rows: map[string]repository.IdempotencyRecord{}}, nil, nil, metrics.NewRegistry())
-	first := `{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"recorded_at":"2020-01-01T00:00:00Z"}`
-	second := `{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"recorded_at":"2020-01-02T00:00:00Z"}`
+	r := newRouter(svc, &fakeIdem{rows: map[string]repository.IdempotencyRecord{}}, metrics.NewRegistry())
+	first := `{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"recorded_at":"2020-01-01T00:00:00Z","device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
+	second := `{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"recorded_at":"2020-01-02T00:00:00Z","device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(first))
 	authed(req)
@@ -291,7 +352,7 @@ func TestCreateBodyTooLargeAndBadKey(t *testing.T) {
 	}
 
 	r = testRouter(&fakeService{})
-	req = httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(`{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100}`))
+	req = httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(`{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`))
 	authed(req)
 	req.Header.Set("Idempotency-Key", strings.Repeat("k", 200))
 	rec = httptest.NewRecorder()
@@ -303,7 +364,7 @@ func TestCreateBodyTooLargeAndBadKey(t *testing.T) {
 
 func TestRequestIDSanitized(t *testing.T) {
 	r := testRouter(&fakeService{})
-	req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(`{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100}`))
+	req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(`{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`))
 	authed(req)
 	req.Header.Set("X-Request-ID", "bad\r\ninjected")
 	rec := httptest.NewRecorder()
@@ -329,7 +390,7 @@ func TestErrorMapping(t *testing.T) {
 				return testRouter(&fakeService{createErr: domain.ErrUnsupportedMediaType})
 			},
 			method: "POST", target: "/v1/uploads",
-			body:     `{"filename":"a.ogg","content_type":"audio/ogg","size_bytes":10}`,
+			body:     `{"filename":"a.ogg","content_type":"audio/ogg","size_bytes":10,"device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
 			wantCode: http.StatusUnsupportedMediaType, wantErr: CodeUnsupportedMediaType,
 		},
 		{
@@ -338,7 +399,7 @@ func TestErrorMapping(t *testing.T) {
 				return testRouter(&fakeService{createErr: domain.ErrTooLarge})
 			},
 			method: "POST", target: "/v1/uploads",
-			body:     `{"filename":"a.ogg","content_type":"audio/ogg","size_bytes":10}`,
+			body:     `{"filename":"a.ogg","content_type":"audio/ogg","size_bytes":10,"device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
 			wantCode: http.StatusRequestEntityTooLarge, wantErr: CodeUploadTooLarge,
 		},
 		{
@@ -473,9 +534,9 @@ func TestMetricsEndpoint(t *testing.T) {
 	svc.upload = ready
 	svc.complete = func() (*domain.Upload, error) { return ready, nil }
 	reg := metrics.NewRegistry()
-	r := NewRouter(svc, &fakeIdem{rows: map[string]repository.IdempotencyRecord{}}, nil, nil, reg)
+	r := newRouter(svc, &fakeIdem{rows: map[string]repository.IdempotencyRecord{}}, reg)
 
-	body := `{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100}`
+	body := `{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
 	req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(body))
 	authed(req)
 	rec := httptest.NewRecorder()
@@ -524,10 +585,10 @@ func TestNormalizeRoute(t *testing.T) {
 // retries safely.
 func TestCreateIdempotentPersistenceError(t *testing.T) {
 	svc := &fakeService{createErr: errors.New("db down")}
-	r := NewRouter(svc, &fakeIdem{rows: map[string]repository.IdempotencyRecord{}}, nil, nil, metrics.NewRegistry())
+	r := newRouter(svc, &fakeIdem{rows: map[string]repository.IdempotencyRecord{}}, metrics.NewRegistry())
 
 	req := httptest.NewRequest("POST", "/v1/uploads",
-		strings.NewReader(`{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100}`))
+		strings.NewReader(`{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`))
 	authed(req)
 	req.Header.Set("Idempotency-Key", "key-err")
 	rec := httptest.NewRecorder()
@@ -542,5 +603,82 @@ func TestCreateIdempotentPersistenceError(t *testing.T) {
 	}
 	if env.Error.Code != CodeInternal {
 		t.Fatalf("code: got %q, want %q", env.Error.Code, CodeInternal)
+	}
+}
+
+func TestCreateUploadForeignDevice(t *testing.T) {
+	svc := &fakeService{}
+	r := newRouterWithDevices(svc, &fakeIdem{rows: map[string]repository.IdempotencyRecord{}}, metrics.NewRegistry(),
+		&fakeDevices{owned: map[string]bool{}})
+
+	body := `{"filename":"m.ogg","content_type":"audio/ogg","size_bytes":100,"device_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`
+	req := httptest.NewRequest("POST", "/v1/uploads", strings.NewReader(body))
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("foreign device must be 404, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if svc.createN != 0 {
+		t.Fatalf("foreign device must not create an upload")
+	}
+}
+
+func TestDeviceRoutes(t *testing.T) {
+	devices := &fakeDevices{
+		owned:  map[string]bool{},
+		device: &domain.Device{DeviceID: testDevice, State: domain.DeviceStateOwned},
+	}
+	r := newRouterWithDevices(&fakeService{}, &fakeIdem{rows: map[string]repository.IdempotencyRecord{}}, metrics.NewRegistry(), devices)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/v1/device", nil)
+	authed(req)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get device: got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	claim := `{"device_id":"` + testDevice + `","cloud_claim_secret":"` + strings.Repeat("ab", 32) + `"}`
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/v1/device/claim", strings.NewReader(claim))
+	authed(req)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("claim device: got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/v1/device/release", nil)
+	authed(req)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || devices.releaseN != 1 {
+		t.Fatalf("release device: got %d, releases=%d", rec.Code, devices.releaseN)
+	}
+}
+
+func TestDeviceReleaseRequiresRecentAuth(t *testing.T) {
+	r := NewRouter(RouterDeps{
+		Auth:    fakeAuthenticator{authenticatedAt: time.Now().Add(-10 * time.Minute)},
+		Uploads: &fakeService{},
+		Devices: &fakeDevices{owned: map[string]bool{}},
+		Idem:    &fakeIdem{rows: map[string]repository.IdempotencyRecord{}},
+		Metrics: metrics.NewRegistry(),
+	})
+
+	req := httptest.NewRequest("POST", "/v1/device/release", nil)
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("stale session release must be 403, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var env errorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Error.Code != CodeReauthRequired {
+		t.Fatalf("code: got %q, want %q", env.Error.Code, CodeReauthRequired)
 	}
 }

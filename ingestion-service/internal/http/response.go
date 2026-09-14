@@ -22,6 +22,13 @@ const (
 	CodeUploadTooLarge       = "UPLOAD_TOO_LARGE"
 	CodeUnsupportedMediaType = "UNSUPPORTED_MEDIA_TYPE"
 	CodeInternal             = "INTERNAL_ERROR"
+	CodeVerificationRequired = "VERIFICATION_REQUIRED"
+	CodeAuthUnavailable      = "AUTH_UNAVAILABLE"
+	CodeAccountDeleting      = "ACCOUNT_DELETING"
+	CodeReauthRequired       = "REAUTH_REQUIRED"
+	CodeDeviceNotFound       = "DEVICE_NOT_FOUND"
+	CodeDeviceClaimFailed    = "DEVICE_CLAIM_FAILED"
+	CodeDeviceStateConflict  = "DEVICE_STATE_CONFLICT"
 )
 
 type errorBody struct {
@@ -58,6 +65,10 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusNotFound, CodeUploadNotFound, "Upload was not found.")
 	case errors.Is(err, repository.ErrInvalidState):
 		writeError(w, r, http.StatusConflict, CodeInvalidState, "Upload is not in a state for this operation.")
+	case errors.Is(err, repository.ErrDeviceClaimFailed):
+		writeError(w, r, http.StatusConflict, CodeDeviceClaimFailed, "The pendant could not be claimed.")
+	case errors.Is(err, repository.ErrDeviceNotFound):
+		writeError(w, r, http.StatusNotFound, CodeDeviceNotFound, "Device was not found.")
 	case errors.Is(err, storage.ErrObjectNotFound):
 		writeError(w, r, http.StatusConflict, CodeObjectNotFound, "No uploaded object found. Upload the file first.")
 	case errors.Is(err, service.ErrSizeMismatch):
@@ -69,7 +80,9 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, domain.ErrInvalidFilename),
 		errors.Is(err, domain.ErrInvalidSize),
 		errors.Is(err, domain.ErrInvalidChecksum),
-		errors.Is(err, domain.ErrInvalidRecordedAt):
+		errors.Is(err, domain.ErrInvalidRecordedAt),
+		errors.Is(err, domain.ErrInvalidDeviceID),
+		errors.Is(err, domain.ErrInvalidClaimSecret):
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, err.Error())
 	default:
 		writeError(w, r, http.StatusInternalServerError, CodeInternal, "Unexpected internal error.")

@@ -25,9 +25,17 @@ type Config struct {
 	Port string
 	Env  string
 
-	// DatabaseURL is the PostgreSQL connection string.
-	// Consumed from task 2 (migrations) onwards.
-	DatabaseURL string
+	// DatabaseURL is the privileged PostgreSQL connection string used by
+	// migrations. DatabaseRequestURL is the NOBYPASSRLS request role and
+	// DatabaseWorkerURL the trusted background role; both default to
+	// DatabaseURL in development.
+	DatabaseURL        string
+	DatabaseRequestURL string
+	DatabaseWorkerURL  string
+
+	// KratosPublicURL validates opaque session tokens via /sessions/whoami.
+	KratosPublicURL string
+	KratosTimeout   time.Duration
 
 	// MinIO settings, consumed from task 5 onwards.
 	MinIOEndpoint  string
@@ -86,10 +94,18 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	kratosSeconds, err := parsePositiveIntStrict("KRATOS_TIMEOUT_SECONDS", 5)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		Port:                envOr("PORT", defaultPort),
 		Env:                 envOr("ENV", defaultEnv),
 		DatabaseURL:         os.Getenv("DATABASE_URL"),
+		DatabaseRequestURL:  envOr("DATABASE_REQUEST_URL", os.Getenv("DATABASE_URL")),
+		DatabaseWorkerURL:   envOr("DATABASE_WORKER_URL", os.Getenv("DATABASE_URL")),
+		KratosPublicURL:     strings.TrimRight(os.Getenv("KRATOS_PUBLIC_URL"), "/"),
+		KratosTimeout:       time.Duration(kratosSeconds) * time.Second,
 		MinIOEndpoint:       envOr("MINIO_ENDPOINT", "localhost:9000"),
 		MinIOAccessKey:      os.Getenv("MINIO_ACCESS_KEY"),
 		MinIOSecretKey:      os.Getenv("MINIO_SECRET_KEY"),
@@ -129,6 +145,15 @@ func Load() (Config, error) {
 	if strings.EqualFold(cfg.Env, "production") {
 		if cfg.DatabaseURL == "" {
 			return Config{}, fmt.Errorf("DATABASE_URL must be set in production")
+		}
+		if strings.TrimSpace(os.Getenv("DATABASE_REQUEST_URL")) == "" {
+			return Config{}, fmt.Errorf("DATABASE_REQUEST_URL must be set in production")
+		}
+		if strings.TrimSpace(os.Getenv("DATABASE_WORKER_URL")) == "" {
+			return Config{}, fmt.Errorf("DATABASE_WORKER_URL must be set in production")
+		}
+		if cfg.KratosPublicURL == "" {
+			return Config{}, fmt.Errorf("KRATOS_PUBLIC_URL must be set in production")
 		}
 		if cfg.MinIOAccessKey == "" || cfg.MinIOSecretKey == "" {
 			return Config{}, fmt.Errorf("MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set in production")

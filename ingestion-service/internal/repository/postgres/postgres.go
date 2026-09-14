@@ -5,6 +5,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -47,4 +48,23 @@ func (p *Pool) Ping(ctx context.Context) error {
 // Close drains the pool. Called last during graceful shutdown.
 func (p *Pool) Close() {
 	p.inner.Close()
+}
+
+// WithUserTx runs fn in a transaction whose RLS user context is userID.
+// set_config(..., true) is transaction-local, so the value cannot leak
+// when pgx returns the connection to the pool.
+func (p *Pool) WithUserTx(ctx context.Context, userID string, fn func(pgx.Tx) error) error {
+	tx, err := p.inner.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.user_id', $1, true)`, userID); err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

@@ -18,19 +18,21 @@ func (p *Pool) Create(ctx context.Context, upload *domain.Upload) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	_, err := p.inner.Exec(ctx, `
-		INSERT INTO uploads (
-			id, user_id, bucket, object_key,
-			original_filename, content_type,
-			expected_size_bytes, status, recorded_at,
-			upload_url_expires_at, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`,
-		upload.ID, upload.UserID, upload.Bucket, upload.ObjectKey,
-		upload.OriginalFilename, upload.ContentType,
-		nullableInt(upload.ExpectedSize), upload.Status, nullableTime(upload.RecordedAt),
-		nullableTime(upload.UploadExpiresAt), upload.CreatedAt,
-	)
-	return err
+	return p.WithUserTx(ctx, upload.UserID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO uploads (
+				id, user_id, device_id, bucket, object_key,
+				original_filename, content_type,
+				expected_size_bytes, status, recorded_at,
+				upload_url_expires_at, created_at, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)`,
+			upload.ID, upload.UserID, upload.DeviceID, upload.Bucket, upload.ObjectKey,
+			upload.OriginalFilename, upload.ContentType,
+			nullableInt(upload.ExpectedSize), upload.Status, nullableTime(upload.RecordedAt),
+			nullableTime(upload.UploadExpiresAt), upload.CreatedAt,
+		)
+		return err
+	})
 }
 
 // CreateUploadIdempotent claims the idempotency key and inserts the
@@ -48,21 +50,25 @@ func (p *Pool) CreateUploadIdempotent(ctx context.Context, params repository.Ide
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.user_id', $1, true)`, params.UserID); err != nil {
+		return nil, err
+	}
+
 	var claimed bool
 	err = tx.QueryRow(ctx, `
-		INSERT INTO idempotency_keys (key, user_id, request_hash, response_status, response_body)
-		VALUES ($1,$2,$3,$4,$5)
-		ON CONFLICT (user_id, key) DO NOTHING
+		INSERT INTO idempotency_keys (key, user_id, device_id, request_hash, response_status, response_body)
+		VALUES ($1,$2,$3,$4,$5,$6)
+		ON CONFLICT (user_id, device_id, key) DO NOTHING
 		RETURNING TRUE`,
-		params.Key, params.UserID, params.RequestHash, params.ResponseStatus, params.ResponseBody).Scan(&claimed)
+		params.Key, params.UserID, params.DeviceID, params.RequestHash, params.ResponseStatus, params.ResponseBody).Scan(&claimed)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			var stored repository.IdempotencyRecord
 			if err := tx.QueryRow(ctx, `
-				SELECT key, user_id, request_hash, response_status, response_body
-				FROM idempotency_keys WHERE user_id = $1 AND key = $2`,
-				params.UserID, params.Key).Scan(
-				&stored.Key, &stored.UserID, &stored.RequestHash,
+				SELECT key, user_id, device_id, request_hash, response_status, response_body
+				FROM idempotency_keys WHERE user_id = $1 AND device_id = $2 AND key = $3`,
+				params.UserID, params.DeviceID, params.Key).Scan(
+				&stored.Key, &stored.UserID, &stored.DeviceID, &stored.RequestHash,
 				&stored.ResponseStatus, &stored.ResponseBody); err != nil {
 				return nil, err
 			}
@@ -77,12 +83,12 @@ func (p *Pool) CreateUploadIdempotent(ctx context.Context, params repository.Ide
 	upload := params.Upload
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO uploads (
-			id, user_id, bucket, object_key,
+			id, user_id, device_id, bucket, object_key,
 			original_filename, content_type,
 			expected_size_bytes, status, recorded_at,
 			upload_url_expires_at, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`,
-		upload.ID, upload.UserID, upload.Bucket, upload.ObjectKey,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)`,
+		upload.ID, upload.UserID, upload.DeviceID, upload.Bucket, upload.ObjectKey,
 		upload.OriginalFilename, upload.ContentType,
 		nullableInt(upload.ExpectedSize), upload.Status, nullableTime(upload.RecordedAt),
 		nullableTime(upload.UploadExpiresAt), upload.CreatedAt,
@@ -101,21 +107,28 @@ func (p *Pool) GetByIDForUser(ctx context.Context, userID, uploadID string) (*do
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	rows, err := p.inner.Query(ctx, `
-		SELECT id, user_id, bucket, object_key,
-			original_filename, content_type,
-			expected_size_bytes, actual_size_bytes, checksum_sha256,
-			status, recorded_at, upload_url_expires_at,
-			uploaded_at, submitted_at, created_at, updated_at
-		FROM uploads WHERE id = $1 AND user_id = $2`, uploadID, userID)
-	if err != nil {
-		return nil, err
-	}
-	upload, err := pgx.CollectOneRow(rows, scanUpload)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, repository.ErrNotFound
+	var upload *domain.Upload
+	err := p.WithUserTx(ctx, userID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT id, user_id, device_id, bucket, object_key,
+				original_filename, content_type,
+				expected_size_bytes, actual_size_bytes, checksum_sha256,
+				status, recorded_at, upload_url_expires_at,
+				uploaded_at, submitted_at, created_at, updated_at
+			FROM uploads WHERE id = $1 AND user_id = $2`, uploadID, userID)
+		if err != nil {
+			return err
 		}
+		upload, err = pgx.CollectOneRow(rows, scanUpload)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return repository.ErrNotFound
+			}
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return upload, nil
@@ -135,6 +148,10 @@ func (p *Pool) MarkReadyAndCreateEvent(ctx context.Context, params repository.Co
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.user_id', $1, true)`, params.UserID); err != nil {
+		return nil, err
+	}
 
 	var status string
 	err = tx.QueryRow(ctx,
@@ -195,7 +212,7 @@ func (p *Pool) MarkReadyAndCreateEvent(ctx context.Context, params repository.Co
 
 func getTxUpload(ctx context.Context, tx pgx.Tx, uploadID, userID string) (*domain.Upload, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT id, user_id, bucket, object_key,
+		SELECT id, user_id, device_id, bucket, object_key,
 			original_filename, content_type,
 			expected_size_bytes, actual_size_bytes, checksum_sha256,
 			status, recorded_at, upload_url_expires_at,
@@ -213,7 +230,7 @@ func scanUpload(row pgx.CollectableRow) (*domain.Upload, error) {
 	var checksum pgtype.Text
 	var recorded, expires, uploaded, submitted pgtype.Timestamptz
 	err := row.Scan(
-		&u.ID, &u.UserID, &u.Bucket, &u.ObjectKey,
+		&u.ID, &u.UserID, &u.DeviceID, &u.Bucket, &u.ObjectKey,
 		&u.OriginalFilename, &u.ContentType,
 		&expected, &actual, &checksum,
 		&u.Status, &recorded, &expires,
