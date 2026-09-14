@@ -293,7 +293,7 @@ services:
       CONFIG_PATH: /app/config.yaml
       KAFKA_BROKERS: kafka:9092
       GROQ_API_KEY: ${GROQ_API_KEY}
-      POSTGRES_DSN: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      POSTGRES_DSN: postgres://checkpoint_worker:${CHECKPOINT_WORKER_PASSWORD:-checkpoint_worker_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable
     restart: unless-stopped
 
   mailpit:
