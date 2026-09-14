@@ -24,9 +24,15 @@
               "via": "email"
             }
           }
+        },
+        "name": {
+          "type": "string",
+          "title": "Name",
+          "minLength": 1,
+          "maxLength": 100
         }
       },
-      "required": ["email"],
+      "required": ["email", "name"],
       "additionalProperties": false
     }
   }

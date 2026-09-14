@@ -4,7 +4,7 @@ import { ScrollView } from 'react-native';
 import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 import { Text } from '@/components/ui/text';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { deleteAccount } from '@/lib/api/account-api';
@@ -12,7 +12,8 @@ import { ApiError } from '@/lib/api/api-client';
 import { getSessionToken } from '@/lib/session';
 
 export function AccountScreen() {
-  const { email, status, changePassword, signOut, signOutEverywhere, signIn } = useAuth();
+  const { email, name, status, changePassword, signOut, signOutEverywhere, signIn } = useAuth();
+  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [reauthPassword, setReauthPassword] = useState('');
   const [needsReauth, setNeedsReauth] = useState(false);
@@ -25,11 +26,12 @@ export function AccountScreen() {
     setError(null);
     setMessage(null);
     try {
-      await changePassword(email, newPassword);
+      await changePassword(email, currentPassword, newPassword);
+      setCurrentPassword('');
       setNewPassword('');
       setMessage('Password updated. Other sessions were signed out.');
-    } catch {
-      setError('Could not change the password.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not change the password.');
     } finally {
       setBusy(false);
     }
@@ -82,20 +84,30 @@ export function AccountScreen() {
         <Card>
           <CardHeader>
             <CardTitle>Account</CardTitle>
-            <CardDescription>{email ?? 'Signed in'}</CardDescription>
+            <CardDescription>{name ?? email ?? 'Signed in'}</CardDescription>
           </CardHeader>
           <CardContent className="gap-4">
             <Text className="text-muted-foreground">
               {status === 'authenticated' ? 'Email verified' : 'Email not verified'}
             </Text>
-            <Input
+            <PasswordInput
+              placeholder="Current password"
+              autoComplete="current-password"
+              value={currentPassword}
+              onChangeText={setCurrentPassword}
+              editable={!busy}
+            />
+            <PasswordInput
               placeholder="New password"
-              secureTextEntry
+              autoComplete="new-password"
               value={newPassword}
               onChangeText={setNewPassword}
               editable={!busy}
             />
-            <Button onPress={() => void change()} disabled={busy || !newPassword}>
+            <Button
+              onPress={() => void change()}
+              disabled={busy || !currentPassword || !newPassword}
+            >
               <Text>Change password</Text>
             </Button>
             {message ? <Text className="text-primary-text">{message}</Text> : null}
@@ -120,9 +132,9 @@ export function AccountScreen() {
                 <Text className="text-muted-foreground">
                   Confirm your password to delete the account.
                 </Text>
-                <Input
+                <PasswordInput
                   placeholder="Password"
-                  secureTextEntry
+                  autoComplete="current-password"
                   value={reauthPassword}
                   onChangeText={setReauthPassword}
                   editable={!busy}

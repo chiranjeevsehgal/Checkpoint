@@ -4,10 +4,13 @@ import { describe, it } from 'node:test';
 import {
   hasVerifiedEmail,
   identityEmail,
+  identityName,
   logout,
   recoverySessionToken,
   resolveRequestUrl,
   submitLogin,
+  submitPasswordChange,
+  submitRegistration,
   whoami,
   type KratosTransport,
 } from '../kratos-client.ts';
@@ -52,6 +55,12 @@ describe('kratos helpers', () => {
     assert.equal(identityEmail({ id: 'x', traits: { email: 'a@b.c' } }), 'a@b.c');
     assert.equal(identityEmail(undefined), null);
   });
+
+  it('reads the name trait', () => {
+    assert.equal(identityName({ id: 'x', traits: { name: 'Jane' } }), 'Jane');
+    assert.equal(identityName({ id: 'x', traits: { email: 'a@b.c' } }), null);
+    assert.equal(identityName(undefined), null);
+  });
 });
 
 describe('recoverySessionToken', () => {
@@ -94,6 +103,47 @@ describe('kratos flow submissions', () => {
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.method, 'POST');
     assert.deepEqual(calls[0]?.body, { method: 'password', identifier: 'a@b.c', password: 'pw' });
+  });
+
+  it('submits registration with the email and name traits', async () => {
+    const calls: { method: string; path: string; body: unknown }[] = [];
+    const transport: KratosTransport = {
+      request(method, path, body) {
+        calls.push({ method, path, body });
+        return Promise.resolve({} as never);
+      },
+    };
+    await submitRegistration(
+      transport,
+      { id: 'f', ui: { action: '/self-service/registration?flow=f', method: 'POST' } },
+      { email: 'a@b.c', name: 'Jane' },
+      'pw',
+    );
+    assert.deepEqual(calls[0]?.body, {
+      method: 'password',
+      traits: { email: 'a@b.c', name: 'Jane' },
+      password: 'pw',
+    });
+  });
+
+  it('changes the password without sending traits', async () => {
+    const calls: { method: string; token: string | undefined; body: unknown }[] = [];
+    const transport: KratosTransport = {
+      request(method, path, body, token) {
+        calls.push({ method, token, body });
+        return Promise.resolve(undefined as never);
+      },
+    };
+    await submitPasswordChange(
+      transport,
+      { id: 'f', ui: { action: '/self-service/settings?flow=f', method: 'POST' } },
+      { password: 'new', token: 'sess' },
+    );
+    assert.deepEqual(calls[0], {
+      method: 'POST',
+      token: 'sess',
+      body: { method: 'password', password: 'new' },
+    });
   });
 
   it('logs out with DELETE', async () => {

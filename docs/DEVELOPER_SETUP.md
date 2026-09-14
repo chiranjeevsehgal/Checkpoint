@@ -164,7 +164,7 @@ For a Metro/dev-client loop instead, use `npm run android`.
 
 ## 7. First run (app + pendant)
 
-1. **Create account**: Sign up with an email + password (min 12 chars).
+1. **Create account**: Sign up with a name, email + password (min 12 chars).
 2. **Verify email**: tap "Send code", then read the 6-digit code in Mailpit
    (`http://localhost:8025`) and enter it.
 3. **Pair pendant**: hold the button 5 s (60 s window), open

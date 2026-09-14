@@ -8,6 +8,7 @@ import {
   createVerificationFlow,
   hasVerifiedEmail,
   identityEmail,
+  identityName,
   logout,
   recoverySessionToken,
   submitLogin,
@@ -65,7 +66,7 @@ function setState(next: Partial<AuthState>): void {
 }
 
 function resetToAnonymous(): void {
-  setState({ status: 'anonymous', identityId: null, email: null });
+  setState({ status: 'anonymous', identityId: null, email: null, name: null });
 }
 
 function isNetworkError(error: unknown): boolean {
@@ -98,10 +99,21 @@ export async function initializeAuth(): Promise<void> {
     const result = await whoami(transport, session.token);
     const identity = result.identity;
     const email = identityEmail(identity);
+    const name = identityName(identity);
     if (hasVerifiedEmail(identity)) {
-      setState({ status: 'authenticated', identityId: identity?.id ?? session.identityId, email });
+      setState({
+        status: 'authenticated',
+        identityId: identity?.id ?? session.identityId,
+        email,
+        name,
+      });
     } else {
-      setState({ status: 'unverified', identityId: identity?.id ?? session.identityId, email });
+      setState({
+        status: 'unverified',
+        identityId: identity?.id ?? session.identityId,
+        email,
+        name,
+      });
     }
   } catch (error) {
     if (error instanceof KratosError && error.status === 401) {
@@ -111,18 +123,18 @@ export async function initializeAuth(): Promise<void> {
     }
     if (session) {
       // Transient outage: keep the token so the user is not silently logged out.
-      setState({ status: 'unavailable', identityId: session.identityId, email: null });
+      setState({ status: 'unavailable', identityId: session.identityId, email: null, name: null });
     } else {
       resetToAnonymous();
     }
   }
 }
 
-export async function signUp(email: string, password: string): Promise<void> {
+export async function signUp(name: string, email: string, password: string): Promise<void> {
   const flow = await createRegistrationFlow(transport);
-  const result = await submitRegistration(transport, flow, email, password);
+  const result = await submitRegistration(transport, flow, { email, name }, password);
   await persistFromAuthResult(result.identity ?? result.session?.identity, result.session_token);
-  setState({ status: 'unverified', identityId: result.identity?.id ?? null, email });
+  setState({ status: 'unverified', identityId: result.identity?.id ?? null, email, name });
 }
 
 export async function signIn(email: string, password: string): Promise<void> {
@@ -138,6 +150,7 @@ export async function signIn(email: string, password: string): Promise<void> {
     status: verified ? 'authenticated' : 'unverified',
     identityId: identity?.id ?? null,
     email,
+    name: identityName(identity),
   });
 }
 
@@ -162,6 +175,7 @@ export async function confirmEmailVerification(code: string): Promise<void> {
     status: hasVerifiedEmail(result.identity) ? 'authenticated' : 'unverified',
     identityId: result.identity?.id ?? state.identityId,
     email,
+    name: identityName(result.identity),
   });
 }
 
@@ -176,14 +190,9 @@ export async function confirmPasswordRecovery(code: string, newPassword: string)
   const result = await submitRecoveryCode(transport, pendingRecovery, code);
   pendingRecovery = null;
   const token = recoverySessionToken(result);
-  const identity = result.session?.identity ?? result.identity;
   if (!token) throw new Error('Recovery did not return a session.');
   const settings = await createSettingsFlow(transport, token);
-  await submitPasswordChange(transport, settings, {
-    password: newPassword,
-    email: identityEmail(identity),
-    token,
-  });
+  await submitPasswordChange(transport, settings, { password: newPassword, token });
   try {
     await logout(transport, token);
   } catch {
@@ -193,11 +202,26 @@ export async function confirmPasswordRecovery(code: string, newPassword: string)
   resetToAnonymous();
 }
 
-export async function changePassword(email: string | null, newPassword: string): Promise<void> {
+export async function changePassword(
+  email: string | null,
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  if (!email) throw new Error('Missing account email.');
+  // Re-authenticating proves the current password and refreshes the privileged
+  // session Kratos requires for settings changes (privileged_session_max_age).
+  try {
+    await signIn(email, currentPassword);
+  } catch (error) {
+    if (error instanceof KratosError && (error.status === 400 || error.status === 401)) {
+      throw new Error('Current password is incorrect.');
+    }
+    throw error;
+  }
   const token = getSessionToken();
   if (!token) throw new Error('Not signed in.');
   const flow = await createSettingsFlow(transport, token);
-  await submitPasswordChange(transport, flow, { password: newPassword, email, token });
+  await submitPasswordChange(transport, flow, { password: newPassword, token });
   await revokeSessions(token);
 }
 

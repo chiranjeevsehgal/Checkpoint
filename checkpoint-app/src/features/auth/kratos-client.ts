@@ -7,7 +7,7 @@ export interface KratosFlow {
 
 export interface KratosIdentity {
   id: string;
-  traits?: { email?: string };
+  traits?: { email?: string; name?: string };
   verifiable_addresses?: { via?: string; verified?: boolean; status?: string }[];
 }
 
@@ -124,6 +124,10 @@ export function identityEmail(identity: KratosIdentity | undefined): string | nu
   return extractEmail(identity);
 }
 
+export function identityName(identity: KratosIdentity | undefined): string | null {
+  return identity?.traits?.name ?? null;
+}
+
 /**
  * Kratos cannot finish recovery for API/native clients, so with
  * `use_continue_with_transitions` enabled it returns the session token via
@@ -142,12 +146,12 @@ export function createRegistrationFlow(t: KratosTransport): Promise<KratosFlow> 
 export function submitRegistration(
   t: KratosTransport,
   flow: KratosFlow,
-  email: string,
+  traits: { email: string; name: string },
   password: string,
 ): Promise<KratosAuthResult> {
   return t.request<KratosAuthResult>('POST', flow.ui.action, {
     method: 'password',
-    traits: { email },
+    traits,
     password,
   });
 }
@@ -224,16 +228,12 @@ export function createSettingsFlow(t: KratosTransport, token: string): Promise<K
 export function submitPasswordChange(
   t: KratosTransport,
   flow: KratosFlow,
-  options: { password: string; email: string | null; token: string },
+  options: { password: string; token: string },
 ): Promise<unknown> {
   return t.request<unknown>(
     'POST',
     flow.ui.action,
-    {
-      method: 'password',
-      password: options.password,
-      ...(options.email ? { traits: { email: options.email } } : {}),
-    },
+    { method: 'password', password: options.password },
     options.token,
   );
 }
