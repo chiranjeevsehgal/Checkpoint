@@ -5,12 +5,13 @@ import {
   assertValidStoreKey,
   credentialKey,
   isValidStoreKey,
+  sessionKey,
   settingsKey,
 } from '../../../lib/storage/keys.ts';
 
 describe('store key builders', () => {
   it('builds valid settings keys without slashes', () => {
-    for (const name of ['serverUrl', 'userId', 'vadThreshold']) {
+    for (const name of ['serverUrl', 'vadThreshold']) {
       const key = settingsKey(name);
       assert.ok(!key.includes('/'), key);
       assert.ok(isValidStoreKey(key), key);
@@ -21,6 +22,11 @@ describe('store key builders', () => {
     const key = credentialKey('474f8bcaff162d3f18fbda36a168f201');
     assert.equal(key, 'Checkpoint.474f8bcaff162d3f18fbda36a168f201');
     assert.ok(isValidStoreKey(key));
+  });
+
+  it('builds a valid session key', () => {
+    assert.equal(sessionKey(), 'checkpoint.session');
+    assert.ok(isValidStoreKey(sessionKey()));
   });
 });
 

@@ -2,10 +2,21 @@ import { env } from '@/lib/env';
 
 export class ApiError extends Error {
   status: number;
+  code?: string;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
+  }
+}
+
+function errorCode(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as { error?: { code?: unknown } };
+    return typeof parsed.error?.code === 'string' ? parsed.error.code : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -22,7 +33,11 @@ export async function apiFetch<T>(path: string, init?: RequestInit, token?: stri
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new ApiError(res.status, `Request failed: ${res.status} ${body.slice(0, 300)}`);
+    throw new ApiError(
+      res.status,
+      `Request failed: ${res.status} ${body.slice(0, 300)}`,
+      errorCode(body),
+    );
   }
   return (await res.json()) as T;
 }

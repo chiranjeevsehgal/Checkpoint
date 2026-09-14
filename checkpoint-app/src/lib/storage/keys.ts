@@ -22,6 +22,10 @@ export function prefKey(name: string): string {
   return `checkpoint.pref.${name}`;
 }
 
+export function sessionKey(): string {
+  return 'checkpoint.session';
+}
+
 export function credentialKey(deviceIdHex: string): string {
   return `Checkpoint.${deviceIdHex}`;
 }
