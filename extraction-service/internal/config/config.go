@@ -44,6 +44,8 @@ type GroqConfig struct {
 	TimeoutSeconds      int     `yaml:"timeout_seconds"`
 	MaxCompletionTokens int     `yaml:"max_completion_tokens"`
 	Temperature         float64 `yaml:"temperature"`
+	TopP                float64 `yaml:"top_p"`
+	ReasoningEffort     string  `yaml:"reasoning_effort"`
 	apiKey              string
 }
 
