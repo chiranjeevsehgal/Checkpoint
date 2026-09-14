@@ -143,6 +143,7 @@ func runConsumer(ctx context.Context, consumer *kafka.Consumer, store *storage.P
 				ExtractionType:  typ,
 				Text:            event.Data.Text,
 				Language:        event.Data.Language,
+				RecordedAt:      event.Data.RecordedAt,
 			}
 			if err := store.EnqueueJob(ctx, job); err != nil {
 				enqueueErr = err

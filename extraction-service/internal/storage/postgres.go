@@ -55,10 +55,11 @@ func (p *PostgresStore) IsUserDeleting(ctx context.Context, userID string) (bool
 // under Kafka redelivery: a duplicate event is a no-op.
 func (p *PostgresStore) EnqueueJob(ctx context.Context, j model.Job) error {
 	_, err := p.pool.Exec(ctx, `
-		INSERT INTO extraction_jobs (user_id, audio_id, extraction_type, text, language)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (user_id, audio_id, extraction_type) DO NOTHING`,
-		j.UserID, j.AudioID, j.ExtractionType, j.Text, j.Language)
+		INSERT INTO extraction_jobs (user_id, audio_id, extraction_type, text, language, recorded_at)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::timestamptz)
+		ON CONFLICT (user_id, audio_id, extraction_type) DO UPDATE SET
+			recorded_at = COALESCE(extraction_jobs.recorded_at, EXCLUDED.recorded_at)`,
+		j.UserID, j.AudioID, j.ExtractionType, j.Text, j.Language, j.RecordedAt)
 	if err != nil {
 		return fmt.Errorf("enqueueing extraction job: %w", err)
 	}
@@ -143,7 +144,7 @@ func (p *PostgresStore) ClaimBatch(ctx context.Context, userID, extractionType s
 			LIMIT $3
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, user_id, audio_id, extraction_type, text, language, attempts`,
+		RETURNING id, user_id, audio_id, extraction_type, text, language, COALESCE(recorded_at::text, ''), attempts`,
 		userID, extractionType, n)
 	if err != nil {
 		return nil, fmt.Errorf("claiming batch for user %s: %w", userID, err)
@@ -177,10 +178,10 @@ func (p *PostgresStore) CompleteBatch(ctx context.Context, results []model.Resul
 		}
 		for _, text := range r.Todos {
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO todos (user_id, audio_id, text, model)
-				VALUES ($1, $2, $3, $4)
+				INSERT INTO todos (user_id, audio_id, text, model, recorded_at)
+				VALUES ($1, $2, $3, $4, NULLIF($5, '')::timestamptz)
 				ON CONFLICT (user_id, audio_id, text) DO NOTHING`,
-				r.UserID, r.AudioID, text, llmModel); err != nil {
+				r.UserID, r.AudioID, text, llmModel, r.RecordedAt); err != nil {
 				return fmt.Errorf("inserting todo for %s: %w", r.AudioID, err)
 			}
 		}

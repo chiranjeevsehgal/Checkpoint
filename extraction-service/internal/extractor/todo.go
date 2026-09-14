@@ -54,7 +54,7 @@ func (TodoExtractor) Parse(content string, items []model.Job) ([]model.Result, e
 	// items" outcome must still replace any stale rows for that audio.
 	results := make([]model.Result, len(items))
 	for i, it := range items {
-		results[i] = model.Result{JobID: it.ID, UserID: it.UserID, AudioID: it.AudioID}
+		results[i] = model.Result{JobID: it.ID, UserID: it.UserID, AudioID: it.AudioID, RecordedAt: it.RecordedAt}
 	}
 	for _, t := range payload.Todos {
 		idx := t.Item - 1

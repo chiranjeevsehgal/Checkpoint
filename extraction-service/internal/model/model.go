@@ -30,10 +30,11 @@ type ExtractionJobRequestedEvent struct {
 }
 
 type ExtractionJobData struct {
-	AudioID         string           `json:"audio_id"`
-	UserID          string           `json:"user_id"`
-	Text            string           `json:"text"`
-	Language        string           `json:"language"`
+	AudioID         string `json:"audio_id"`
+	UserID          string `json:"user_id"`
+	Text            string `json:"text"`
+	Language        string `json:"language"`
+	RecordedAt      string `json:"recorded_at,omitempty"`
 	SpeakerSegments []SpeakerSegment `json:"speaker_segments"`
 }
 
@@ -100,6 +101,7 @@ type Job struct {
 	ExtractionType string
 	Text           string
 	Language       string
+	RecordedAt     string
 	// Attempts is the value after claiming (claim increments before use).
 	Attempts int
 }
@@ -111,8 +113,9 @@ type Job struct {
 // Future extraction types (insights, summaries, ...) add their own field
 // here plus a matching Complete* store method; see Explain.md.
 type Result struct {
-	JobID   int64
-	UserID  string
-	AudioID string
-	Todos   []string
+	JobID      int64
+	UserID     string
+	AudioID    string
+	RecordedAt string
+	Todos      []string
 }
