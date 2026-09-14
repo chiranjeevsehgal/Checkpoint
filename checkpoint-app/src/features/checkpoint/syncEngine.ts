@@ -33,6 +33,7 @@ import { playback } from './playback.ts';
 import { nextRetryDelayMs } from './retry.ts';
 import { defaultSettings, type CheckpointSettings } from './settings.ts';
 import {
+  clearAllSaved,
   deleteSaved,
   loadTransfers,
   readSavedBytes,
@@ -207,6 +208,17 @@ class SyncEngine {
 
   async stopForAuthLoss(): Promise<void> {
     await this.stop();
+  }
+
+  /** Removes every locally stored recording and the transfer history. */
+  clearLocalData(): void {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    clearAllSaved();
+    this.setState({ transfers: [] });
+    this.appendLog('[ui] local recordings cleared');
   }
 
   async stop(): Promise<void> {

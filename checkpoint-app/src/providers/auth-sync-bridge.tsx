@@ -20,6 +20,9 @@ export function AuthSyncBridge({ children }: PropsWithChildren) {
         syncEngine.setOwnedDevice(null);
         void syncEngine.stopForAuthLoss();
         void stopSyncService();
+        if (status === 'anonymous' || status === 'deleting') {
+          syncEngine.clearLocalData();
+        }
       }
       return;
     }

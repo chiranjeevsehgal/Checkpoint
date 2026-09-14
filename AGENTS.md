@@ -59,6 +59,7 @@ docker compose ps        # postgres + kafka should be healthy
 - `EXPO_PUBLIC_KRATOS_URL` (default localhost:4433, LAN IP for hardware) — same resolution rules as `EXPO_PUBLIC_API_URL` in `lib/env.ts`.
 - Uploads send `Bearer <session token>` and `device_id`; the app claims the pendant via `GET/POST /v1/device*` after BLE enrollment. BLE credentials are namespaced `Checkpoint.<identityId>.<deviceId>`.
 - Forget is local-only; Release = fresh re-auth + BLE erase + clear trusted slots + cloud release. Test glob is `src/**/__tests__/*.test.ts` (`npm test`).
+- Sign-out, account deletion and 401 session loss wipe local recordings: `AuthSyncBridge` calls `syncEngine.clearLocalData()`, deleting `document/checkpoint/` (received audio, part files, `transfers.json`). A transient `unavailable` status never clears.
 - Signup collects a mandatory `name` (Kratos trait `name` is `required` in `infra/kratos/identity.schema.json`). Changing a password re-authenticates with the current password first, then refreshes the privileged session Kratos needs (`privileged_session_max_age: 5m`); recovery (forgot password) never asks for it.
 
 ## Transcription worker quirks
