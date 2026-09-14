@@ -50,10 +50,26 @@ function messagesFrom(body: unknown): string[] {
   return texts;
 }
 
+/**
+ * Resolves a request path against the transport origin. Kratos returns flow
+ * actions as absolute URLs built from its own public base URL, which may differ
+ * from the address the client actually reaches (e.g. localhost on a phone).
+ * Absolute paths are re-pointed at the transport origin; relative paths are
+ * appended.
+ */
+export function resolveRequestUrl(baseUrl: string, path: string): string {
+  if (!/^https?:\/\//i.test(path)) return `${baseUrl}${path}`;
+  const base = new URL(baseUrl);
+  const target = new URL(path);
+  target.protocol = base.protocol;
+  target.host = base.host;
+  return target.toString();
+}
+
 export function createFetchTransport(baseUrl: string): KratosTransport {
   return {
     async request<T>(method: string, path: string, body?: unknown, token?: string): Promise<T> {
-      const res = await fetch(`${baseUrl}${path}`, {
+      const res = await fetch(resolveRequestUrl(baseUrl, path), {
         method,
         headers: {
           'Content-Type': 'application/json',

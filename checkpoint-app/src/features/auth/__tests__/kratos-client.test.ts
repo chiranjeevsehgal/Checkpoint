@@ -4,10 +4,30 @@ import { describe, it } from 'node:test';
 import {
   hasVerifiedEmail,
   identityEmail,
+  resolveRequestUrl,
   submitLogin,
   whoami,
   type KratosTransport,
 } from '../kratos-client.ts';
+
+describe('resolveRequestUrl', () => {
+  it('appends relative paths to the transport origin', () => {
+    assert.equal(
+      resolveRequestUrl('http://192.168.1.5:4433', '/sessions/whoami'),
+      'http://192.168.1.5:4433/sessions/whoami',
+    );
+  });
+
+  it('re-points absolute flow actions at the transport origin', () => {
+    assert.equal(
+      resolveRequestUrl(
+        'http://192.168.1.5:4433',
+        'http://localhost:4433/self-service/registration?flow=abc',
+      ),
+      'http://192.168.1.5:4433/self-service/registration?flow=abc',
+    );
+  });
+});
 
 describe('kratos helpers', () => {
   it('detects a completed email verification', () => {
