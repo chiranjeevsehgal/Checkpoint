@@ -39,6 +39,24 @@ class Store:
         self.close()
         self.connect()
 
+    def is_user_deleting(self, user_id: str) -> bool:
+        """True when a deletion tombstone exists. A missing table means
+        downstream runs against a separate database; nothing to gate on."""
+        if self._conn is None:
+            self.connect()
+        assert self._conn is not None
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT EXISTS (SELECT 1 FROM account_deletions WHERE user_id = %s::uuid)",
+                    (user_id,),
+                )
+                row = cur.fetchone()
+                return bool(row and row[0])
+        except psycopg.errors.UndefinedTable:
+            self._conn.rollback()
+            return False
+
     def save(
         self,
         user_id: str,

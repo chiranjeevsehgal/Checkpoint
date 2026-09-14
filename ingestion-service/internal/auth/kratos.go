@@ -111,6 +111,47 @@ func (a *KratosAuthenticator) Authenticate(ctx context.Context, sessionToken str
 	return Principal{UserID: userID.String(), AuthenticatedAt: authenticatedAt.UTC()}, nil
 }
 
+// IdentityDeleter removes identities through the private Kratos Admin API.
+type IdentityDeleter interface {
+	DeleteIdentity(ctx context.Context, identityID string) error
+}
+
+// KratosAdmin is the private-infrastructure client for identity deletion.
+type KratosAdmin struct {
+	adminURL string
+	client   *http.Client
+}
+
+// NewKratosAdmin builds a client for the Kratos admin API.
+func NewKratosAdmin(adminURL string, timeout time.Duration) *KratosAdmin {
+	return &KratosAdmin{
+		adminURL: strings.TrimRight(adminURL, "/"),
+		client:   &http.Client{Timeout: timeout},
+	}
+}
+
+// DeleteIdentity deletes an identity and its sessions. A missing identity
+// is treated as already deleted.
+func (a *KratosAdmin) DeleteIdentity(ctx context.Context, identityID string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, a.adminURL+"/admin/identities/"+identityID, nil)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
+	}
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("%w: kratos admin status %d", ErrProviderUnavailable, resp.StatusCode)
+	}
+	return nil
+}
+
 func hasVerifiedEmail(session whoamiSession) bool {
 	for _, address := range session.Identity.VerifiableAddresses {
 		if address.Via == "email" && address.Verified && address.Status == "completed" {

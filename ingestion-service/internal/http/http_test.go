@@ -48,6 +48,15 @@ func (f *fakeDevices) Release(_ context.Context, _ string) error {
 	return nil
 }
 
+type fakeAccounts struct {
+	requested int
+}
+
+func (f *fakeAccounts) RequestDeletion(_ context.Context, _ string) error {
+	f.requested++
+	return nil
+}
+
 type fakeAuthenticator struct {
 	authenticatedAt time.Time
 }
@@ -680,5 +689,48 @@ func TestDeviceReleaseRequiresRecentAuth(t *testing.T) {
 	}
 	if env.Error.Code != CodeReauthRequired {
 		t.Fatalf("code: got %q, want %q", env.Error.Code, CodeReauthRequired)
+	}
+}
+
+func TestDeleteMeAccepted(t *testing.T) {
+	accounts := &fakeAccounts{}
+	r := NewRouter(RouterDeps{
+		Auth:    fakeAuthenticator{},
+		Uploads: &fakeService{},
+		Devices: &fakeDevices{owned: map[string]bool{}},
+		Account: accounts,
+		Idem:    &fakeIdem{rows: map[string]repository.IdempotencyRecord{}},
+		Metrics: metrics.NewRegistry(),
+	})
+
+	req := httptest.NewRequest("DELETE", "/v1/me", nil)
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("delete account must be 202, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if accounts.requested != 1 {
+		t.Fatalf("deletion requested %d times, want 1", accounts.requested)
+	}
+}
+
+func TestDeleteMeRequiresRecentAuth(t *testing.T) {
+	r := NewRouter(RouterDeps{
+		Auth:    fakeAuthenticator{authenticatedAt: time.Now().Add(-10 * time.Minute)},
+		Uploads: &fakeService{},
+		Devices: &fakeDevices{owned: map[string]bool{}},
+		Account: &fakeAccounts{},
+		Idem:    &fakeIdem{rows: map[string]repository.IdempotencyRecord{}},
+		Metrics: metrics.NewRegistry(),
+	})
+
+	req := httptest.NewRequest("DELETE", "/v1/me", nil)
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("stale session delete must be 403, got %d (%s)", rec.Code, rec.Body.String())
 	}
 }

@@ -20,6 +20,7 @@ type Pinger interface {
 type Router struct {
 	handler *Handler
 	devices *DeviceHandler
+	account *AccountHandler
 	db      Pinger
 	storage Pinger
 	reg     *metrics.Registry
@@ -31,6 +32,7 @@ type RouterDeps struct {
 	Accounts AccountGuard
 	Uploads  uploadService
 	Devices  deviceService
+	Account  accountService
 	Idem     repository.IdempotencyRepository
 	DB       Pinger
 	Storage  Pinger
@@ -43,6 +45,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 	r := &Router{
 		handler: NewHandler(deps.Uploads, deps.Devices, deps.Idem, deps.Metrics),
 		devices: NewDeviceHandler(deps.Devices, deps.Metrics),
+		account: NewAccountHandler(deps.Account, deps.Metrics),
 		db:      deps.DB,
 		storage: deps.Storage,
 		reg:     deps.Metrics,
@@ -62,6 +65,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 	mux.Handle("GET /v1/device", protected(r.devices.Get))
 	mux.Handle("POST /v1/device/claim", protected(r.devices.Claim))
 	mux.Handle("POST /v1/device/release", protected(r.devices.Release))
+	mux.Handle("DELETE /v1/me", protected(r.account.Delete))
 	return mux
 }
 

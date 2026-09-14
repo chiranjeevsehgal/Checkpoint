@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"transcription-service/internal/model"
@@ -32,6 +33,23 @@ func NewPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
 
 func (p *PostgresStore) Close() {
 	p.pool.Close()
+}
+
+// IsUserDeleting reports whether a deletion tombstone exists for the user.
+// A missing table means downstream runs against a separate database, so
+// there is nothing to gate on.
+func (p *PostgresStore) IsUserDeleting(ctx context.Context, userID string) (bool, error) {
+	var deleting bool
+	err := p.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM account_deletions WHERE user_id = $1::uuid)`, userID).Scan(&deleting)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+			return false, nil
+		}
+		return false, err
+	}
+	return deleting, nil
 }
 
 func (p *PostgresStore) SaveTranscript(ctx context.Context, t *model.TranscriptResult) error {

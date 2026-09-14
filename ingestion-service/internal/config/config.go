@@ -35,7 +35,9 @@ type Config struct {
 
 	// KratosPublicURL validates opaque session tokens via /sessions/whoami.
 	KratosPublicURL string
-	KratosTimeout   time.Duration
+	// KratosAdminURL is the private admin API used by the deletion worker.
+	KratosAdminURL string
+	KratosTimeout  time.Duration
 
 	// MinIO settings, consumed from task 5 onwards.
 	MinIOEndpoint  string
@@ -105,6 +107,7 @@ func Load() (Config, error) {
 		DatabaseRequestURL:  envOr("DATABASE_REQUEST_URL", os.Getenv("DATABASE_URL")),
 		DatabaseWorkerURL:   envOr("DATABASE_WORKER_URL", os.Getenv("DATABASE_URL")),
 		KratosPublicURL:     strings.TrimRight(os.Getenv("KRATOS_PUBLIC_URL"), "/"),
+		KratosAdminURL:      strings.TrimRight(os.Getenv("KRATOS_ADMIN_URL"), "/"),
 		KratosTimeout:       time.Duration(kratosSeconds) * time.Second,
 		MinIOEndpoint:       envOr("MINIO_ENDPOINT", "localhost:9000"),
 		MinIOAccessKey:      os.Getenv("MINIO_ACCESS_KEY"),

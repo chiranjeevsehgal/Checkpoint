@@ -16,6 +16,7 @@ import (
 	"checkpoint/ingestion/internal/auth"
 	"checkpoint/ingestion/internal/cleanup"
 	"checkpoint/ingestion/internal/config"
+	"checkpoint/ingestion/internal/deletion"
 	apihttp "checkpoint/ingestion/internal/http"
 	"checkpoint/ingestion/internal/metrics"
 	"checkpoint/ingestion/internal/outbox"
@@ -61,15 +62,18 @@ func main() {
 	authenticator := auth.NewKratosAuthenticator(cfg.KratosPublicURL, cfg.KratosTimeout)
 	uploads := service.NewUploadService(requestPool, requestPool, objectStorage, cfg.MinIOBucket, nil)
 	devices := service.NewDeviceService(requestPool)
+	accounts := service.NewAccountService(requestPool)
 	reg := metrics.NewRegistry()
 	mux := apihttp.NewRouter(apihttp.RouterDeps{
-		Auth:    authenticator,
-		Uploads: uploads,
-		Devices: devices,
-		Idem:    requestPool,
-		DB:      requestPool,
-		Storage: objectStorage,
-		Metrics: reg,
+		Auth:     authenticator,
+		Accounts: requestPool,
+		Uploads:  uploads,
+		Devices:  devices,
+		Account:  accounts,
+		Idem:     requestPool,
+		DB:       requestPool,
+		Storage:  objectStorage,
+		Metrics:  reg,
 	})
 
 	// The outbox dispatcher runs in-process. Every replica runs one, and
@@ -94,12 +98,19 @@ func main() {
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	var identityDeleter auth.IdentityDeleter
+	if cfg.KratosAdminURL != "" {
+		identityDeleter = auth.NewKratosAdmin(cfg.KratosAdminURL, cfg.KratosTimeout)
+	}
+
 	runCtx, cancelRun := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() { defer wg.Done(); dispatcher.Run(runCtx) }()
 	cleaner := cleanup.NewCleaner(workerPool, objectStorage, cfg.UploadExpiry, cfg.CleanupInterval, logger)
 	go func() { defer wg.Done(); cleaner.Run(runCtx) }()
+	deletionWorker := deletion.NewWorker(workerPool, objectStorage, identityDeleter, logger)
+	go func() { defer wg.Done(); deletionWorker.Run(runCtx) }()
 
 	go func() {
 		logger.Info("ingestion api listening", "port", cfg.Port, "env", cfg.Env)
