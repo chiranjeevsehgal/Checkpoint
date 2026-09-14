@@ -153,6 +153,7 @@ services:
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC_TRANSCRIPTION: ${KAFKA_TOPIC_TRANSCRIPTION:-transcription.jobs.v1}
       KAFKA_CLIENT_ID: ingestion-api
+    restart: unless-stopped
 
   kafka-init:
     image: apache/kafka:4.3.1
