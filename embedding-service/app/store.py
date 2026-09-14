@@ -41,18 +41,23 @@ class Store:
 
     def is_user_deleting(self, user_id: str) -> bool:
         """True when a deletion tombstone exists. A missing table means
-        downstream runs against a separate database; nothing to gate on."""
+        downstream runs against a separate database; nothing to gate on.
+
+        The read runs in its own committed transaction: psycopg3 opens an
+        implicit transaction on the first statement, and leaving one open would
+        turn save()'s transaction into a savepoint that never commits."""
         if self._conn is None:
             self.connect()
         assert self._conn is not None
         try:
-            with self._conn.cursor() as cur:
-                cur.execute(
-                    "SELECT EXISTS (SELECT 1 FROM account_deletions WHERE user_id = %s::uuid)",
-                    (user_id,),
-                )
-                row = cur.fetchone()
-                return bool(row and row[0])
+            with self._conn.transaction():
+                with self._conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT EXISTS (SELECT 1 FROM account_deletions WHERE user_id = %s::uuid)",
+                        (user_id,),
+                    )
+                    row = cur.fetchone()
+            return bool(row and row[0])
         except psycopg.errors.UndefinedTable:
             self._conn.rollback()
             return False
