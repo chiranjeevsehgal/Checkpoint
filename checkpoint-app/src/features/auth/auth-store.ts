@@ -24,18 +24,23 @@ import {
 } from './kratos-client';
 import { initialAuthState, type AuthState } from './types';
 
-import { env } from '@/lib/env';
+import { loadServerConfig, resolveKratosUrl } from '@/lib/server-config';
 import { clearSession, getSessionToken, loadSession, saveSession } from '@/lib/session';
 
 let state: AuthState = initialAuthState;
 const listeners = new Set<() => void>();
 
-let transport: KratosTransport = createFetchTransport(env.kratosUrl);
+let transport: KratosTransport = createFetchTransport(resolveKratosUrl());
 let pendingVerification: KratosFlow | null = null;
 let pendingRecovery: KratosFlow | null = null;
 
 export function setAuthTransport(next: KratosTransport): void {
   transport = next;
+}
+
+/** Rebuilds the transport from the current (possibly dev-overridden) Kratos URL. */
+export function applyServerConfig(): void {
+  transport = createFetchTransport(resolveKratosUrl());
 }
 
 export function subscribeAuth(listener: () => void): () => void {
@@ -74,6 +79,8 @@ async function persistFromAuthResult(
 
 export async function initializeAuth(): Promise<void> {
   setState({ status: 'loading' });
+  await loadServerConfig();
+  applyServerConfig();
   const session = await loadSession();
   if (!session) {
     resetToAnonymous();
@@ -110,9 +117,10 @@ export async function signIn(email: string, password: string): Promise<void> {
   const flow = await createLoginFlow(transport);
   const result = await submitLogin(transport, flow, email, password);
   const identity = result.session?.identity ?? result.identity;
-  if (result.session_token) {
-    await saveSession({ token: result.session_token, identityId: identity?.id ?? '' });
+  if (!result.session_token) {
+    throw new Error('Sign in did not return a session.');
   }
+  await saveSession({ token: result.session_token, identityId: identity?.id ?? '' });
   const verified = hasVerifiedEmail(identity);
   setState({
     status: verified ? 'authenticated' : 'unverified',

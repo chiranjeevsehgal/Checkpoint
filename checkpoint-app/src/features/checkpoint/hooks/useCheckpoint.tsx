@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
@@ -27,6 +28,7 @@ import type { TransferRecord } from '../transferStore.ts';
 import type { DeviceFileList, DeviceStatus, LogEntry, StorageInfo } from '../types.ts';
 
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
+import { resolveApiUrl, subscribeServerConfig } from '@/lib/server-config';
 import { useToast } from '@/providers/toast-provider';
 
 type DialogState =
@@ -91,6 +93,30 @@ export function useCheckpoint(): CheckpointContextValue {
   const value = useContext(CheckpointContext);
   if (!value) throw new Error('useCheckpoint must be used inside CheckpointProvider');
   return value;
+}
+
+/** Points sync/upload at the host chosen on the sign-in screen, so the auth
+ * feature never has to reach into checkpoint settings. */
+function useServerConfigSync(
+  settings: CheckpointSettings,
+  applySettings: (next: CheckpointSettings, options?: { silent?: boolean }) => Promise<void>,
+): void {
+  const applySettingsRef = useRef(applySettings);
+  const settingsRef = useRef(settings);
+
+  useEffect(() => {
+    applySettingsRef.current = applySettings;
+    settingsRef.current = settings;
+  });
+
+  useEffect(() => {
+    return subscribeServerConfig(() => {
+      void applySettingsRef.current(
+        { ...settingsRef.current, serverUrl: resolveApiUrl() },
+        { silent: true },
+      );
+    });
+  }, []);
 }
 
 export function CheckpointProvider({ children }: PropsWithChildren) {
@@ -199,6 +225,8 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     },
     [settings.autoSyncEnabled, showToast],
   );
+
+  useServerConfigSync(settings, updateSettings);
 
   const testConnection = useCallback(async () => {
     const probe = await syncEngine.testConnection();

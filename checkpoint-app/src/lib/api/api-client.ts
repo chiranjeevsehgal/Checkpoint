@@ -1,4 +1,4 @@
-import { env } from '@/lib/env';
+import { resolveApiUrl } from '@/lib/server-config';
 
 export class ApiError extends Error {
   status: number;
@@ -21,7 +21,7 @@ function errorCode(body: string): string | undefined {
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
-  const url = path.startsWith('http') ? path : `${env.apiUrl}${path}`;
+  const url = path.startsWith('http') ? path : `${resolveApiUrl()}${path}`;
   const { headers: initHeaders, ...restInit } = init ?? {};
   const res = await fetch(url, {
     ...restInit,

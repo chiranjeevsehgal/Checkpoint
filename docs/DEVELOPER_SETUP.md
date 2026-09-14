@@ -56,6 +56,12 @@ EXPO_PUBLIC_ENV=development
 These `EXPO_PUBLIC_*` values are inlined into the JS bundle at build time, so
 rebuild after changing them. Use `.env.local` if you prefer it gitignored.
 
+Dev builds (`npm run build:android:dev`) also show a **Server host** field on the
+sign-in screen. Enter the machine's LAN IP there (e.g. `192.168.1.5`) to point
+the app at `:8080` (API) and `:4433` (Kratos) at runtime, so a DHCP address
+change no longer needs a rebuild. Leave it blank to use the build-time
+`EXPO_PUBLIC_*` values; the choice is remembered until cleared.
+
 ## 2. Start the backend
 
 ```bash
