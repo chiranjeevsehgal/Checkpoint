@@ -391,6 +391,15 @@ bool auth_drop_first_slot() {
   return true;
 }
 
+bool auth_forget_self() {
+  if (!auth_is_authenticated()) return false;
+  int slot = find_slot(s_pending_client);
+  if (slot < 0) return false;
+  if (!auth_forget_client(slot)) return false;
+  auth_clear_session();
+  return true;
+}
+
 void auth_clear_slots() {
   for (int i = 0; i < AUTH_MAX_CLIENTS; i++) auth_forget_client(i);
   auth_clear_session();

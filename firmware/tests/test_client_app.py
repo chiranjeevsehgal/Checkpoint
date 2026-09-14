@@ -1812,6 +1812,7 @@ def test_cloud_opcodes_present():
     assert cfg.CTRL_CMD_TIME_SET == 0x14
     assert cfg.CTRL_CMD_GET_CLOUD_SECRET == 0x23
     assert cfg.CTRL_CMD_CLEAR_TRUSTED_SLOTS == 0x24
+    assert cfg.CTRL_CMD_FORGET_SELF == 0x25
 
 
 @needs_deps

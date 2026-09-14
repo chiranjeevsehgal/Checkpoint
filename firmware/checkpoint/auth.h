@@ -36,6 +36,8 @@ void auth_clear_session();
 
 bool auth_get_slot(int slot, uint8_t id_out[AUTH_CLIENT_ID_BYTES]);
 bool auth_forget_client(int slot);
+// Drops the calling client's own trusted slot and clears its session.
+bool auth_forget_self();
 bool auth_drop_first_slot();
 // Clears trusted clients + active session, keeping device id, claim and cloud secret.
 void auth_clear_slots();

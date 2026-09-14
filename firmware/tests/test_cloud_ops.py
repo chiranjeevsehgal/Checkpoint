@@ -25,6 +25,19 @@ def test_cloud_control_opcodes():
     assert "auth_clear_slots();" in source
 
 
+def test_forget_self_control_opcode():
+    header = read("control.h")
+    source = read("control.cpp")
+    assert "CTRL_CMD_FORGET_SELF = 0x25" in header
+    assert "CTRL_CMD_FORGET_SELF" in source
+    assert "auth_forget_self" in source
+    # ACK before invalidating the session: forget is deferred to the next tick.
+    assert "s_forget_self_pending" in source
+    assert "auth_forget_self();" in source
+    gate = source.split("if (forget_self_req)")[1].split("if (!status_req)")[0]
+    assert gate.index("control_send_cmd_resp") < gate.index("s_forget_self_pending = true")
+
+
 def test_cloud_secret_response_is_aead_framed():
     source = read("control.cpp")
     block = source.split("void control_send_cloud_secret")[1].split("void control_poll")[0]

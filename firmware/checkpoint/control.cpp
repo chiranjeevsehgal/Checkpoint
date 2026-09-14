@@ -56,11 +56,15 @@ volatile bool s_cloud_req = false;
 volatile uint16_t s_cloud_seq = 0;
 volatile bool s_clear_slots_req = false;
 volatile uint16_t s_clear_slots_seq = 0;
+volatile bool s_forget_self_req = false;
+volatile uint16_t s_forget_self_seq = 0;
 // Erase arm timestamp, loop-task only (set/consumed in poll).
 static uint32_t s_erase_armed_ms = 0;
 // Set after the clear-slots ACK is sent; acted on the next poll tick so the
 // indicate can flush before the session is invalidated.
 static bool s_clear_slots_pending = false;
+// Same ACK-then-act ordering for dropping the caller's own trusted slot.
+static bool s_forget_self_pending = false;
 // BLE auto-upload gate. Written only in control_poll (loop task), read in
 // transfer_task; single-byte volatile matches the s_busy cross-task style.
 static volatile bool s_sync_enabled = true;
@@ -590,6 +594,9 @@ bool control_on_packet(const Packet *pkt) {
   } else if (cmd == CTRL_CMD_CLEAR_TRUSTED_SLOTS) {
     s_clear_slots_seq = pkt->seq;
     s_clear_slots_req = true;
+  } else if (cmd == CTRL_CMD_FORGET_SELF) {
+    s_forget_self_seq = pkt->seq;
+    s_forget_self_req = true;
   } else {
     // Unknown cmd IDs are acked as BAD_ARG in poll.
     s_rec_seq = pkt->seq;
@@ -628,6 +635,10 @@ void control_send_cloud_secret(uint16_t seq) {
 }
 
 void control_poll() {
+  if (s_forget_self_pending) {
+    s_forget_self_pending = false;
+    auth_forget_self();
+  }
   if (s_clear_slots_pending) {
     s_clear_slots_pending = false;
     auth_clear_slots();
@@ -671,6 +682,8 @@ void control_poll() {
   uint16_t cloud_seq = 0;
   bool clear_slots_req = false;
   uint16_t clear_slots_seq = 0;
+  bool forget_self_req = false;
+  uint16_t forget_self_seq = 0;
 
   portENTER_CRITICAL(&s_ctrl_mux);
   denied = s_denied_pending;
@@ -731,6 +744,9 @@ void control_poll() {
   clear_slots_req = s_clear_slots_req;
   clear_slots_seq = s_clear_slots_seq;
   s_clear_slots_req = false;
+  forget_self_req = s_forget_self_req;
+  forget_self_seq = s_forget_self_seq;
+  s_forget_self_req = false;
   portEXIT_CRITICAL(&s_ctrl_mux);
 
   if (denied) {
@@ -857,6 +873,13 @@ void control_poll() {
     if (control_gate_ok()) {
       control_send_cmd_resp(clear_slots_seq, CTRL_CMD_CLEAR_TRUSTED_SLOTS, CTRL_OK, nullptr, 0);
       s_clear_slots_pending = true;
+    }
+  }
+
+  if (forget_self_req) {
+    if (control_gate_ok()) {
+      control_send_cmd_resp(forget_self_seq, CTRL_CMD_FORGET_SELF, CTRL_OK, nullptr, 0);
+      s_forget_self_pending = true;
     }
   }
 
