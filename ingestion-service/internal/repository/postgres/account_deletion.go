@@ -149,7 +149,7 @@ func (p *Pool) QuarantineDevice(ctx context.Context, userID string) error {
 	defer cancel()
 
 	_, err := p.inner.Exec(ctx, `
-		UPDATE devices SET state = 'reset_required', user_id = NULL, updated_at = NOW()
+		UPDATE devices SET state = 'reset_required', user_id = NULL, claimed_at = NULL, updated_at = NOW()
 		WHERE user_id = $1`, userID)
 	return err
 }

@@ -17,6 +17,7 @@ CREATE POLICY devices_tenant ON devices
 
 -- Claim a provisioned pendant for the transaction's app.user_id. All failure
 -- causes raise the same message so callers cannot enumerate device state.
+-- +goose StatementBegin
 CREATE FUNCTION claim_device(p_device_id CHAR(32), p_claim_hash BYTEA)
 RETURNS void
 LANGUAGE plpgsql
@@ -67,8 +68,10 @@ BEGIN
     WHERE device_id = p_device_id;
 END;
 $$;
+-- +goose StatementEnd
 
 -- Release only the caller's own pendant.
+-- +goose StatementBegin
 CREATE FUNCTION release_device()
 RETURNS void
 LANGUAGE plpgsql
@@ -83,20 +86,23 @@ BEGIN
     END IF;
 
     UPDATE devices
-    SET user_id = NULL, state = 'unowned', updated_at = NOW()
+    SET user_id = NULL, state = 'unowned', claimed_at = NULL, updated_at = NOW()
     WHERE user_id = v_user_id;
 END;
 $$;
+-- +goose StatementEnd
 
 REVOKE EXECUTE ON FUNCTION claim_device(CHAR(32), BYTEA) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION release_device() FROM PUBLIC;
 
+-- +goose StatementBegin
 DO $$
 BEGIN
     IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'checkpoint_request') THEN
         GRANT USAGE ON SCHEMA public TO checkpoint_request;
         GRANT SELECT, INSERT, UPDATE ON uploads TO checkpoint_request;
         GRANT SELECT, INSERT, UPDATE, DELETE ON idempotency_keys TO checkpoint_request;
+        GRANT SELECT, INSERT ON outbox_events TO checkpoint_request;
         GRANT SELECT ON devices TO checkpoint_request;
         GRANT EXECUTE ON FUNCTION claim_device(CHAR(32), BYTEA) TO checkpoint_request;
         GRANT EXECUTE ON FUNCTION release_device() TO checkpoint_request;
@@ -108,9 +114,11 @@ BEGIN
         GRANT SELECT, INSERT, UPDATE, DELETE ON idempotency_keys TO checkpoint_worker;
         GRANT SELECT, INSERT, UPDATE, DELETE ON devices TO checkpoint_worker;
         GRANT SELECT, INSERT, UPDATE, DELETE ON device_claim_credentials TO checkpoint_worker;
+        GRANT SELECT, INSERT, UPDATE, DELETE ON outbox_events TO checkpoint_worker;
     END IF;
 END
 $$;
+-- +goose StatementEnd
 
 -- +goose Down
 DROP FUNCTION IF EXISTS claim_device(CHAR(32), BYTEA);

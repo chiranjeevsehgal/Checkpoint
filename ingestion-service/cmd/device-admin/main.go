@@ -148,7 +148,7 @@ func unquarantine(ctx context.Context, conn *pgx.Conn, args []string) {
 	}
 
 	tag, err := conn.Exec(ctx, `
-		UPDATE devices SET state = 'unowned', user_id = NULL, updated_at = NOW()
+		UPDATE devices SET state = 'unowned', user_id = NULL, claimed_at = NULL, updated_at = NOW()
 		WHERE device_id = $1 AND state = 'reset_required'`, deviceID)
 	if err != nil {
 		fail("unquarantine: %v", err)
