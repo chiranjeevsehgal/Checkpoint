@@ -62,6 +62,28 @@ def build_nonce(session_id: int, file_uid: int, seq: int) -> bytes:
     return hashlib.sha256(msg).digest()[:cfg.CRYPTO_NONCE_BYTES]
 
 
+def build_cloud_nonce(session_id: int, seq: int) -> bytes:
+    msg = b"checkpoint-cloud-v1" + struct.pack("<IH", session_id, seq)
+    return hashlib.sha256(msg).digest()[:cfg.CRYPTO_NONCE_BYTES]
+
+
+def open_cloud_secret(session_key: bytes, session_id: int, seq: int,
+                      envelope: bytes) -> bytes | None:
+    """Decrypt the GET_CLOUD_SECRET response: nonce(12) || cipher(32) || tag(8)."""
+    if len(envelope) != cfg.CRYPTO_NONCE_BYTES + cfg.AUTH_CLOUD_SECRET_BYTES + cfg.CRYPTO_TAG_BYTES:
+        return None
+    nonce = envelope[:cfg.CRYPTO_NONCE_BYTES]
+    if nonce != build_cloud_nonce(session_id, seq):
+        return None
+    aad = struct.pack("<BBH", cfg.PROTO_VER, cfg.CTRL_CMD_GET_CLOUD_SECRET, seq & 0xFFFF)
+    try:
+        return AESCCM(session_key, tag_length=cfg.CRYPTO_TAG_BYTES).decrypt(
+            nonce, envelope[cfg.CRYPTO_NONCE_BYTES:], aad)
+    except Exception as e:
+        print(f"  [!] Cloud secret decrypt failed: {e}")
+        return None
+
+
 def decrypt_fragment(key: bytes, session_id: int, file_id: int, seq: int,
                      frag_len: int, ciphertext_and_tag: bytes) -> bytes | None:
     nonce = build_nonce(session_id, file_id, seq)

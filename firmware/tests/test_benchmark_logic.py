@@ -19,23 +19,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECKPOINT = ROOT / "checkpoint"
-# support both old firmware/client and new firmware/host/checkpoint_client
-def _resolve_client_file(name: str) -> Path:
-    for cand in [ROOT / "client" / name, ROOT / "host" / "checkpoint_client" / name]:
-        if cand.exists():
-            return cand
-    return ROOT / "host" / "checkpoint_client" / name
-
-CLIENT = _resolve_client_file("client.py")
+APP = ROOT / "host" / "checkpoint_client" / "client_app"
+CLIENT = APP / "ble_client.py"
+BENCH_MOD = APP / "bench.py"
+CONFIG_MOD = APP / "config.py"
 BENCH_H = CHECKPOINT / "bench.h"
 TRANSFER_CPP = CHECKPOINT / "transfer.cpp"
 TRANSFER_H = CHECKPOINT / "transfer.h"
 BLE_CPP = CHECKPOINT / "ble_service.cpp"
 BLE_H = CHECKPOINT / "ble_service.h"
 INO = CHECKPOINT / "checkpoint.ino"
-BENCH_CAP = _resolve_client_file("benchmark_capture.py")
+BENCH_CAP = ROOT / "host" / "checkpoint_client" / "benchmark_capture.py"
 
 SRC_CLIENT = CLIENT.read_text(encoding="utf-8") if CLIENT.exists() else ""
+SRC_BENCH = BENCH_MOD.read_text(encoding="utf-8") if BENCH_MOD.exists() else ""
+SRC_CONFIG = CONFIG_MOD.read_text(encoding="utf-8") if CONFIG_MOD.exists() else ""
 SRC_TRANSFER = TRANSFER_CPP.read_text(encoding="utf-8") if TRANSFER_CPP.exists() else ""
 SRC_BLE = BLE_CPP.read_text(encoding="utf-8")
 SRC_BLE_H = BLE_H.read_text(encoding="utf-8")
@@ -86,10 +84,10 @@ def test_ble_helpers():
 
 
 def test_client_mtu_overhead():
-    assert "MTU_OVERHEAD" in SRC_CLIENT, "MTU_OVERHEAD missing — T5"
+    assert "MTU_OVERHEAD" in SRC_CONFIG, "MTU_OVERHEAD missing — T5"
     # Protocol v1: frag pinned at 220, MTU below MIN_MTU_REQUIRED refuses transfer
-    assert "MIN_MTU_REQUIRED" in SRC_CLIENT, "MTU floor missing"
-    assert "MTU_OVERHEAD = PROTO_HEADER" in SRC_CLIENT, "MTU_OVERHEAD must derive from PROTO_HEADER"
+    assert "MIN_MTU_REQUIRED" in SRC_CONFIG, "MTU floor missing"
+    assert "MTU_OVERHEAD = PROTO_HEADER" in SRC_CONFIG, "MTU_OVERHEAD must derive from PROTO_HEADER"
     print("PASS client_mtu_overhead")
 
 
@@ -103,27 +101,27 @@ def test_client_resume_prefill():
 
 def test_client_bench_csv():
     assert "bench_csv" in SRC_CLIENT, "bench_csv param missing"
-    assert "csv.DictWriter" in SRC_CLIENT, "csv writer missing"
+    assert "csv.DictWriter" in SRC_BENCH, "csv writer missing"
     assert "benchmark_" in SRC_CLIENT, "benchmark file naming missing"
-    assert "goodput_kBps" in SRC_CLIENT, "goodput col missing"
-    assert "median_rtt_ms" in SRC_CLIENT or "median" in SRC_CLIENT, "median RTT missing"
-    assert "p95" in SRC_CLIENT, "p95 RTT missing"
-    assert "_bench_finalize" in SRC_CLIENT, "finalize helper missing"
-    assert "BENCH,client" in SRC_CLIENT, "client BENCH line missing"
+    assert "goodput_kBps" in SRC_BENCH, "goodput col missing"
+    assert "median_rtt_ms" in SRC_BENCH, "median RTT missing"
+    assert "p95" in SRC_BENCH, "p95 RTT missing"
+    assert "def finalize" in SRC_BENCH, "finalize helper missing"
+    assert "BENCH,client" in SRC_BENCH, "client BENCH line missing"
     print("PASS client_bench_csv")
 
 
 def test_client_duplicate_and_decrypt_fail():
-    assert "_bench_duplicates" in SRC_CLIENT, "duplicates counter missing"
-    assert "_bench_decrypt_fail" in SRC_CLIENT, "decrypt_fail counter missing"
+    assert "_duplicates" in SRC_BENCH, "duplicates counter missing"
+    assert "_decrypt_fail" in SRC_BENCH, "decrypt_fail counter missing"
     assert "if seq in f.received_frags" in SRC_CLIENT, "duplicate check missing"
-    assert "self._bench_decrypt_fail += 1" in SRC_CLIENT, "decrypt fail inc missing"
+    assert "self.bench.decrypt_fail += 1" in SRC_CLIENT, "decrypt fail inc missing"
     print("PASS duplicate_decrypt")
 
 
 def test_client_resume_resp_and_write_ack_timing():
     assert "PKT_RESUME_RESP" in SRC_CLIENT, "RESUME_RESP handling missing"
-    assert "_bench_t_send" in SRC_CLIENT, "t_send map missing"
+    assert "t_send" in SRC_BENCH, "t_send map missing"
     print("PASS resume_resp")
 
 

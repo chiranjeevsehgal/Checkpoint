@@ -89,8 +89,15 @@ def test_control_storage():
     print("PASS control storage")
 
 
+APP = HOST / "client_app"
+
+
+def read_app(*names):
+    return "\n".join((APP / n).read_text(encoding="utf-8") for n in names)
+
+
 def test_host_ingestion_storage():
-    cli = (HOST / "client - ingestion.py").read_text()
+    cli = read_app("config.py", "ble_client.py")
     for token in ("PKT_STORAGE_REQ = 0x24", "PKT_LIST_REQ = 0x26",
                   "CTRL_CMD_FILE_DELETE", "CTRL_CMD_STORAGE_ERASE",
                   "CTRL_ERR_BUSY", "CTRL_ERR_NOT_FOUND",
@@ -103,7 +110,7 @@ def test_host_ingestion_storage():
 
 
 def test_host_gui_storage():
-    gui = (HOST / "gui.py").read_text()
+    gui = read_app("ui_cards.py", "ui_main.py", "ui_events.py", "ble_client.py")
     for token in ("Storage (BLE remote)", "on_storage_refresh",
                   "on_file_delete", "on_storage_erase",
                   "on_list_prev", "on_list_next",
@@ -114,10 +121,10 @@ def test_host_gui_storage():
 
 
 def test_simple_client_storage_parity():
-    cli = (HOST / "client.py").read_text()
-    assert "PKT_STORAGE_REQ = 0x24" in cli
-    assert "PKT_LIST_RESP" in cli
-    assert "CTRL_CMD_FILE_DELETE" in cli
+    cfg_src = read_app("config.py")
+    assert "PKT_STORAGE_REQ = 0x24" in cfg_src
+    assert "PKT_LIST_RESP" in cfg_src
+    assert "CTRL_CMD_FILE_DELETE" in cfg_src
     print("PASS simple client storage parity")
 
 

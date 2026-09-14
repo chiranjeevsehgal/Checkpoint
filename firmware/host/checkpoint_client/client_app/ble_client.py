@@ -25,6 +25,7 @@ from .crypto import (
     derive_file_key,
     derive_session_key_v3,
     finish_proof,
+    open_cloud_secret,
 )
 from .ingestion import IngestionUploader
 from .protocol import PKT_NAMES, Packet, crc32, proto_build, proto_parse
@@ -65,7 +66,8 @@ class CheckpointClient:
     def __init__(self, address: str, bench_csv: Path | None = None,
                  ingest_enabled: bool = cfg.INGEST_ENABLED_DEFAULT,
                  ingest_base_url: str = cfg.INGEST_BASE_URL,
-                 ingest_user_id: str = cfg.INGEST_USER_ID,
+                 ingest_session_token: str = cfg.INGEST_SESSION_TOKEN,
+                 ingest_device_id: str = cfg.INGEST_DEVICE_ID,
                  ingest_delete_after: bool = cfg.INGEST_DELETE_AFTER_DEFAULT,
                  ingest_poll_enabled: bool = cfg.INGEST_POLL_ENABLED_DEFAULT,
                  ingest_poll_timeout: float = cfg.INGEST_POLL_TIMEOUT_S,
@@ -123,14 +125,15 @@ class CheckpointClient:
         self.ingest_enabled = ingest_enabled
         self.ingest_delete_after = ingest_delete_after
         self.uploader = IngestionUploader(
-            base_url=ingest_base_url, user_id=ingest_user_id,
+            base_url=ingest_base_url, session_token=ingest_session_token,
+            device_id=ingest_device_id,
             poll_enabled=ingest_poll_enabled,
             poll_timeout=ingest_poll_timeout,
             poll_interval=ingest_poll_interval)
         if self.ingest_enabled:
             qw = f"queue-wait={self.uploader.poll_enabled} timeout={self.uploader.poll_timeout}s"
             print(f"[ingest] enabled -> {self.uploader.base_url} "
-                  f"user={self.uploader.user_id[:8]}... "
+                  f"device={self.uploader.device_id[:8]}... "
                   f"delete_after={self.ingest_delete_after} {qw} topic={cfg.KAFKA_TOPIC_HINT}")
         else:
             print("[ingest] disabled — files stay in ./received/")
@@ -573,6 +576,18 @@ class CheckpointClient:
             cfg.PKT_CMD, bytes([cfg.CTRL_CMD_FILE_FETCH]) + path.encode("utf-8"), timeout)
         return int(res.get("status", cfg.CTRL_ERR_NOT_READY))
 
+    async def cmd_get_cloud_secret(self, timeout: float = 5.0) -> bytes | None:
+        res = await self._ctrl_roundtrip(
+            cfg.PKT_CMD, bytes([cfg.CTRL_CMD_GET_CLOUD_SECRET]), timeout)
+        if int(res.get("status", 0xFF)) != cfg.CTRL_OK:
+            return None
+        return res.get("secret")
+
+    async def cmd_clear_trusted_slots(self, timeout: float = 5.0) -> int:
+        res = await self._ctrl_roundtrip(
+            cfg.PKT_CMD, bytes([cfg.CTRL_CMD_CLEAR_TRUSTED_SLOTS]), timeout)
+        return int(res.get("status", cfg.CTRL_ERR_NOT_READY))
+
     @staticmethod
     def parse_status(payload: bytes) -> dict:
         if len(payload) < 16:
@@ -907,6 +922,10 @@ class CheckpointClient:
                     result.update({"sync": bool(p[2])})
                 if cmd == cfg.CTRL_CMD_STORAGE_ERASE and len(p) >= 4:
                     result.update({"removed": struct.unpack("<H", p[2:4])[0]})
+                if cmd == cfg.CTRL_CMD_GET_CLOUD_SECRET and len(p) > 2:
+                    secret = open_cloud_secret(self.session_key, self.session_id, pkt.seq, bytes(p[2:]))
+                    if secret is not None:
+                        result.update({"secret": secret})
                 print(f"  CMD_RESP cmd=0x{cmd:02x} status={status}")
                 self._ctrl_complete(pkt.seq, result)
                 self._emit({"type": "cmd_resp", "cmd": cmd, "status": status,
@@ -1491,7 +1510,10 @@ def build_cli_parser():
     parser.add_argument("--ingest", dest="ingest", action="store_true", default=None)
     parser.add_argument("--no-ingest", dest="ingest", action="store_false")
     parser.add_argument("--ingest-url", default=cfg.INGEST_BASE_URL)
-    parser.add_argument("--user-id", default=cfg.INGEST_USER_ID)
+    parser.add_argument("--session-token", default=cfg.INGEST_SESSION_TOKEN,
+                        help="Kratos session token (opaque)")
+    parser.add_argument("--device-id", default=cfg.INGEST_DEVICE_ID,
+                        help="cloud-owned pendant id (32 lowercase hex)")
     parser.add_argument("--no-queue-wait", action="store_true")
     parser.add_argument("--queue-wait-timeout", type=float, default=cfg.INGEST_POLL_TIMEOUT_S)
     parser.add_argument("--vad", dest="vad", action="store_true", default=None)
@@ -1519,7 +1541,8 @@ def parse_cli_args(argv=None):
         "bench": bool(opts.bench or opts.csv),
         "ingest_enabled": ingest_enabled,
         "ingest_url": opts.ingest_url.rstrip("/"),
-        "ingest_user": opts.user_id,
+        "ingest_session_token": opts.session_token,
+        "ingest_device_id": opts.device_id,
         "ingest_poll_enabled": cfg.INGEST_POLL_ENABLED_DEFAULT and not opts.no_queue_wait,
         "ingest_poll_timeout": opts.queue_wait_timeout,
         "ingest_poll_interval": cfg.INGEST_POLL_INTERVAL_S,
@@ -1538,7 +1561,8 @@ async def cli_async_main() -> None:
     bench_flag = cli["bench"]
     ingest_enabled = cli["ingest_enabled"]
     ingest_url = cli["ingest_url"]
-    ingest_user = cli["ingest_user"]
+    ingest_session_token = cli["ingest_session_token"]
+    ingest_device_id = cli["ingest_device_id"]
     ingest_poll_enabled = cli["ingest_poll_enabled"]
     ingest_poll_timeout = cli["ingest_poll_timeout"]
     ingest_poll_interval = cli["ingest_poll_interval"]
@@ -1582,7 +1606,8 @@ async def cli_async_main() -> None:
         claim_key = parse_claim_hex(entered)
     client = CheckpointClient(
         address, bench_csv=bench_csv, ingest_enabled=ingest_enabled,
-        ingest_base_url=ingest_url, ingest_user_id=ingest_user,
+        ingest_base_url=ingest_url, ingest_session_token=ingest_session_token,
+        ingest_device_id=ingest_device_id,
         ingest_delete_after=ingest_delete, ingest_poll_enabled=ingest_poll_enabled,
         ingest_poll_timeout=ingest_poll_timeout, ingest_poll_interval=ingest_poll_interval,
         vad_enabled=vad_enabled, vad_model=vad_model,
