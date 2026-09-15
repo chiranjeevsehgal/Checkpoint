@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 
 import type { EventHub } from './events';
+import { spawnError } from './process';
 
 export class TaskBusyError extends Error {
   constructor(readonly current: string) {
@@ -73,7 +74,7 @@ export class TaskRunner {
       };
       child.stdout.on('data', forward);
       child.stderr.on('data', forward);
-      child.on('error', reject);
+      child.on('error', (error) => reject(spawnError(command, error)));
       child.on('close', (code) => resolve(code ?? -1));
     });
   }
