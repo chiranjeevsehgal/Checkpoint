@@ -1,5 +1,6 @@
 import { View } from 'react-native';
 
+import { levelPercent } from '../connectionView.ts';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import type { DeviceStatus } from '../types.ts';
 
@@ -26,7 +27,7 @@ function recordingStatus(status: DeviceStatus | null): {
   vadState: string;
 } {
   const recording = status?.recording ?? false;
-  const levelPct = status ? Math.max(0, Math.min(100, ((status.levelDbfs + 60) / 60) * 100)) : 0;
+  const levelPct = status ? levelPercent(status.levelDbfs) : 0;
   const vadState = status?.vadSpeech ? 'speech' : status?.vadActive ? 'active' : 'idle';
   return { recording, levelPct, vadState };
 }

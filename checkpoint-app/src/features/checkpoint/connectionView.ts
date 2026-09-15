@@ -28,6 +28,15 @@ export function signalLabel(level: SignalLevel): string {
   return SIGNAL_LABELS[level];
 }
 
+/** Pendant mic silence floor; mirrors firmware VAD_ABS_FLOOR_DBFS (config.h:78). */
+export const VAD_SILENCE_FLOOR_DBFS = -54;
+
+/** Maps a pendant dBFS level to 0..100 with the silence floor at 0. */
+export function levelPercent(dbfs: number): number {
+  const clamped = Math.max(VAD_SILENCE_FLOOR_DBFS, Math.min(0, dbfs));
+  return ((clamped - VAD_SILENCE_FLOOR_DBFS) / -VAD_SILENCE_FLOOR_DBFS) * 100;
+}
+
 export function formatFingerprint(deviceIdHex: string | null): string {
   if (!deviceIdHex || deviceIdHex.length < 8) return '';
   const hex = deviceIdHex.toUpperCase();
