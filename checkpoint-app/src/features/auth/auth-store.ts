@@ -154,6 +154,19 @@ export async function signIn(email: string, password: string): Promise<void> {
   });
 }
 
+/** Verifies the account password and refreshes the privileged session. */
+export async function reauthenticate(password: string): Promise<void> {
+  if (!state.email) throw new Error('Missing account email.');
+  try {
+    await signIn(state.email, password);
+  } catch (error) {
+    if (error instanceof KratosError && (error.status === 400 || error.status === 401)) {
+      throw new Error('Incorrect password.');
+    }
+    throw error;
+  }
+}
+
 export async function requestEmailVerification(email: string): Promise<void> {
   const flow = await createVerificationFlow(transport);
   pendingVerification = flow;

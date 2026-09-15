@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { connectionActivity, formatFingerprint } from '../connectionView.ts';
+import {
+  connectionActivity,
+  formatFingerprint,
+  signalLabel,
+  signalLevel,
+} from '../connectionView.ts';
 
 describe('formatFingerprint', () => {
   it('returns empty for missing or short id', () => {
@@ -48,5 +53,27 @@ describe('connectionActivity', () => {
       connectionActivity({ connected: true, recording: false, vadActive: false, syncing: 0 }),
       { label: 'Idle', tone: 'connected' },
     );
+  });
+});
+
+describe('signalLevel', () => {
+  it('buckets RSSI into five levels at the boundaries', () => {
+    assert.equal(signalLevel(-40), 4);
+    assert.equal(signalLevel(-50), 4);
+    assert.equal(signalLevel(-51), 3);
+    assert.equal(signalLevel(-70), 3);
+    assert.equal(signalLevel(-71), 2);
+    assert.equal(signalLevel(-85), 2);
+    assert.equal(signalLevel(-86), 1);
+    assert.equal(signalLevel(-95), 1);
+    assert.equal(signalLevel(-96), 0);
+  });
+
+  it('labels every level', () => {
+    assert.equal(signalLabel(4), 'Excellent');
+    assert.equal(signalLabel(3), 'Good');
+    assert.equal(signalLabel(2), 'Fair');
+    assert.equal(signalLabel(1), 'Weak');
+    assert.equal(signalLabel(0), 'Very weak');
   });
 });

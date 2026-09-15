@@ -592,6 +592,7 @@ func TestNormalizeRoute(t *testing.T) {
 		"/v1/uploads/abc-123":          "/v1/uploads/{id}",
 		"/v1/uploads/abc-123/complete": "/v1/uploads/{id}/complete",
 		"/v1/me":                       "/v1/me",
+		"/v1/me/settings":              "/v1/me/settings",
 		"/v1/me/sessions":              "/v1/me/sessions",
 		"/health/live":                 "/health/live",
 		"/metrics":                     "/metrics",

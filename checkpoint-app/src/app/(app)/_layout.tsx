@@ -17,6 +17,7 @@ export default function AppLayout() {
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="debug-log" options={{ title: 'Debug Log' }} />
       <Stack.Screen name="account" options={{ title: 'Account' }} />
+      <Stack.Screen name="languages" options={{ title: 'Languages' }} />
     </Stack>
   );
 }

@@ -22,6 +22,7 @@ type Router struct {
 	devices  *DeviceHandler
 	account  *AccountHandler
 	sessions *SessionHandler
+	settings *SettingsHandler
 	db       Pinger
 	storage  Pinger
 	reg      *metrics.Registry
@@ -35,6 +36,7 @@ type RouterDeps struct {
 	Devices  deviceService
 	Account  accountService
 	Sessions sessionRevoker
+	Settings settingsService
 	Idem     repository.IdempotencyRepository
 	DB       Pinger
 	Storage  Pinger
@@ -49,6 +51,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 		devices:  NewDeviceHandler(deps.Devices, deps.Metrics),
 		account:  NewAccountHandler(deps.Account, deps.Metrics),
 		sessions: NewSessionHandler(deps.Sessions),
+		settings: NewSettingsHandler(deps.Settings),
 		db:       deps.DB,
 		storage:  deps.Storage,
 		reg:      deps.Metrics,
@@ -69,6 +72,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 	mux.Handle("POST /v1/device/claim", protected(r.devices.Claim))
 	mux.Handle("POST /v1/device/release", protected(r.devices.Release))
 	mux.Handle("DELETE /v1/me", protected(r.account.Delete))
+	mux.Handle("GET /v1/me/settings", protected(r.settings.Get))
+	mux.Handle("PUT /v1/me/settings", protected(r.settings.Put))
 	mux.Handle("DELETE /v1/me/sessions", protected(r.sessions.Delete))
 	return mux
 }

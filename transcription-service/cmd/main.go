@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -13,6 +14,7 @@ import (
 
 	"transcription-service/internal/config"
 	"transcription-service/internal/kafka"
+	"transcription-service/internal/language"
 	"transcription-service/internal/model"
 	"transcription-service/internal/provider"
 	"transcription-service/internal/storage"
@@ -21,6 +23,10 @@ import (
 // errStaleDeletedUser means the event belongs to an account that is being
 // deleted. The message is committed and dropped rather than retried.
 var errStaleDeletedUser = errors.New("stale event for deleted user")
+
+// errOmitTranscript means the transcript is blank or in a language the user
+// did not select. The message is committed and dropped rather than retried.
+var errOmitTranscript = errors.New("transcript omitted")
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -93,12 +99,19 @@ func main() {
 		if err := handleMessage(ctx, event, transcriber, minioClient, pgStore, producer, cfg.Kafka); err != nil {
 			if errors.Is(err, errStaleDeletedUser) {
 				log.Printf("stale_deleted_user_event audio_id=%s", event.Data.AudioID)
-				if cerr := consumer.Commit(ctx, msg); cerr != nil {
-					log.Printf("commit error for stale event: %v", cerr)
-				}
-				continue
+			if cerr := consumer.Commit(ctx, msg); cerr != nil {
+				log.Printf("commit error for stale event: %v", cerr)
 			}
-			// Not committing here means this message will be
+			continue
+		}
+		if errors.Is(err, errOmitTranscript) {
+			log.Printf("omitted transcript audio_id=%s reason=%v", event.Data.AudioID, err)
+			if cerr := consumer.Commit(ctx, msg); cerr != nil {
+				log.Printf("commit error for omitted transcript: %v", cerr)
+			}
+			continue
+		}
+		// Not committing here means this message will be
 			// redelivered on restart — intentional, so a failed
 			// transcription isn't silently lost.
 			log.Printf("failed to process audio_id=%s: %v", event.Data.AudioID, err)
@@ -131,6 +144,11 @@ func handleMessage(
 		return errStaleDeletedUser
 	}
 
+	languages, err := pgStore.AllowedLanguages(ctx, data.UserID)
+	if err != nil {
+		return err
+	}
+
 	audio, fetchedContentType, err := minioClient.FetchObject(ctx, data.Bucket, data.ObjectKey)
 	if err != nil {
 		return err
@@ -140,9 +158,12 @@ func handleMessage(
 		contentType = fetchedContentType
 	}
 
-	result, err := transcriber.Transcribe(ctx, audio, contentType)
+	result, err := transcriber.Transcribe(ctx, audio, contentType, languages)
 	if err != nil {
 		return err
+	}
+	if reason := language.OmitReason(result.Text, result.Language, languages); reason != "" {
+		return fmt.Errorf("%w: %s", errOmitTranscript, reason)
 	}
 	result.AudioID = data.AudioID
 	result.UserID = data.UserID

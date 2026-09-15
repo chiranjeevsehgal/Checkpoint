@@ -81,10 +81,12 @@ function SpeechSection({
   settings,
   apply,
   applySilent,
+  onOpenLanguages,
 }: {
   settings: CheckpointSettings;
   apply: Apply;
   applySilent: Apply;
+  onOpenLanguages: () => void;
 }) {
   return (
     <Section title="Speech">
@@ -115,6 +117,12 @@ function SpeechSection({
           hint={`Clips shorter than ${settings.minSpeechS.toFixed(1)}s are dropped as noise.`}
           onChange={(value) => applySilent({ minSpeechS: Number(value.toFixed(1)) })}
         />
+        <Button variant="outline" onPress={onOpenLanguages}>
+          <Text>Transcription languages</Text>
+        </Button>
+        <Text variant="muted" className="text-[11px]">
+          Only transcribe the languages you select. Leave empty to transcribe all.
+        </Text>
       </Card>
     </Section>
   );
@@ -133,8 +141,8 @@ function TransferSection({
     <Section title="Sync">
       <Card>
         <Toggle
-          label="Auto-sync"
-          description="Find your pendant and sync automatically when the app opens."
+          label="Auto-connect & sync"
+          description="Discover, connect and sync your pendant automatically."
           value={settings.autoSyncEnabled}
           onChange={(next) => apply({ autoSyncEnabled: next })}
         />
@@ -174,6 +182,7 @@ function BackendSection({
   probe: { ok: boolean; latencyMs: number; at: number } | null;
 }) {
   const [serverUrl, setServerUrl] = useState(settings.serverUrl);
+  const dirty = serverUrl.trim() !== settings.serverUrl && serverUrl.trim() !== '';
 
   const save = () => {
     onSave({ serverUrl: serverUrl.trim() });
@@ -195,7 +204,7 @@ function BackendSection({
           />
         </View>
         <View className="flex-row gap-2">
-          <Button variant="outline" className="flex-1" onPress={save}>
+          <Button variant="outline" className="flex-1" disabled={!dirty} onPress={save}>
             <Text>Save server</Text>
           </Button>
           <Button variant="outline" className="flex-1" disabled={testing} onPress={onTest}>
@@ -341,7 +350,12 @@ export function CheckpointSettingsScreen() {
         contentContainerStyle={{ gap: 24, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
       >
-        <SpeechSection settings={settings} apply={apply} applySilent={applySilent} />
+        <SpeechSection
+          settings={settings}
+          apply={apply}
+          applySilent={applySilent}
+          onOpenLanguages={() => router.push('/languages')}
+        />
         <TransferSection settings={settings} apply={apply} applySilent={applySilent} />
         <BackendSection
           settings={settings}

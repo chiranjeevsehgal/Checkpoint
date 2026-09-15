@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"transcription-service/internal/config"
+	"transcription-service/internal/language"
 	"transcription-service/internal/model"
 )
 
@@ -38,15 +39,81 @@ func NewDeepgramProvider(cfg config.DeepgramConfig) *DeepgramProvider {
 
 func (d *DeepgramProvider) Name() string { return "deepgram" }
 
-func (d *DeepgramProvider) Transcribe(ctx context.Context, audio []byte, contentType string) (*model.TranscriptResult, error) {
+// deepgramForcedLanguages are the ISO-639-1 codes nova-3 accepts via the
+// `language` parameter.
+var deepgramForcedLanguages = languageSet(
+	"af", "ar", "hy", "as", "be", "bn", "bs", "bg", "ca", "zh", "hr", "cs",
+	"da", "nl", "en", "et", "fi", "fr", "ka", "de", "el", "gu", "he", "hi",
+	"hu", "id", "it", "ja", "kn", "kk", "ko", "lv", "lt", "mk", "ms", "mr",
+	"mn", "ne", "no", "ps", "fa", "pl", "pt", "pa", "ro", "ru", "sr", "sk",
+	"sl", "es", "sv", "tl", "ta", "te", "th", "tr", "uk", "ur", "vi",
+)
+
+// deepgramDetectLanguages are the codes Deepgram's detect_language supports.
+var deepgramDetectLanguages = languageSet(
+	"bg", "ca", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hi",
+	"hu", "id", "it", "ja", "ko", "lt", "lv", "ms", "nl", "no", "pl", "pt",
+	"ro", "ru", "sk", "sv", "th", "tr", "uk", "vi", "zh",
+)
+
+func languageSet(codes ...string) map[string]struct{} {
+	set := make(map[string]struct{}, len(codes))
+	for _, code := range codes {
+		set[code] = struct{}{}
+	}
+	return set
+}
+
+// deepgramParams builds one request's query. A single supported language is
+// forced; several all-supported languages restrict detection; anything else
+// falls back to the configured language and is filtered downstream.
+func deepgramParams(model, fallbackLanguage string, options map[string]string, selected []string) url.Values {
 	params := url.Values{}
-	params.Set("model", d.model)
-	if d.language != "" {
-		params.Set("language", d.language)
+	params.Set("model", model)
+
+	hints := make([]string, 0, len(selected))
+	for _, code := range selected {
+		hints = append(hints, language.ISO1(code))
 	}
-	for k, v := range d.options {
-		params.Set(k, v)
+
+	switch {
+	case len(hints) == 1 && deepgramSupports(hints[0], deepgramForcedLanguages):
+		params.Set("language", hints[0])
+	case len(hints) > 1 && deepgramSupportsAll(hints, deepgramDetectLanguages):
+		for _, hint := range hints {
+			params.Add("detect_language", hint)
+		}
+	default:
+		if fallbackLanguage != "" {
+			params.Set("language", fallbackLanguage)
+		}
 	}
+
+	for key, value := range options {
+		params.Set(key, value)
+	}
+	return params
+}
+
+func deepgramSupports(code string, set map[string]struct{}) bool {
+	if code == "" {
+		return false
+	}
+	_, ok := set[code]
+	return ok
+}
+
+func deepgramSupportsAll(codes []string, set map[string]struct{}) bool {
+	for _, code := range codes {
+		if !deepgramSupports(code, set) {
+			return false
+		}
+	}
+	return true
+}
+
+func (d *DeepgramProvider) Transcribe(ctx context.Context, audio []byte, contentType string, languages []string) (*model.TranscriptResult, error) {
+	params := deepgramParams(d.model, d.language, d.options, languages)
 
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {

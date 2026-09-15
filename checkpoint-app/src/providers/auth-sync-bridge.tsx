@@ -10,8 +10,12 @@ import { getSessionToken } from '@/lib/session';
 /** Ties the auth state to the checkpoint sync engine: start when signed in
  * with an owned pendant, stop on sign-out, deletion or outage. */
 export function AuthSyncBridge({ children }: PropsWithChildren) {
-  const { status } = useAuth();
+  const { status, reauthenticate } = useAuth();
   const { settings } = useCheckpoint();
+
+  useEffect(() => {
+    syncEngine.setReauthenticator(status === 'authenticated' ? reauthenticate : null);
+  }, [status, reauthenticate]);
 
   useEffect(() => {
     if (status === 'loading') return;

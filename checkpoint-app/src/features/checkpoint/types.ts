@@ -5,6 +5,8 @@ export interface Packet {
   payload: Uint8Array;
 }
 
+export type BluetoothStatus = 'on' | 'off' | 'unauthorized' | 'unsupported' | 'unknown' | null;
+
 export interface LogEntry {
   at: number;
   text: string;
