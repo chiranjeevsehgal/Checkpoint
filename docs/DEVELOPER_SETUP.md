@@ -127,20 +127,20 @@ go run ./cmd/device-admin status    -device <32hex>   # state=unowned, owner=non
 
 An unprovisioned pendant cannot be claimed by the app.
 
-### Bootstrap GUI (optional)
+### Admin console (optional)
 
-Steps 4–5 have a desktop shortcut. From `firmware/host/checkpoint_bootstrap`:
+Steps 4–5 have a web shortcut. From `admin-console`:
 
 ```powershell
-pip install -r requirements.txt
-python -m bootstrap_app
+npm install
+npm run dev     # Angular dev server :4200 + local agent :4300
 ```
 
-The window selects the `arduino-cli` path and COM port, compiles/uploads the
+The console selects the `arduino-cli` path and COM port, compiles/uploads the
 firmware, drives the serial console (`auth list`, `auth export`,
-`auth provision`, `auth reset`, `auth forget 0|1`, `power sleep`), and registers
-the device (it parses `auth provision` and runs `device-admin provision` for
-you). `DATABASE_URL` is prefilled from the repo `.env` when present.
+`auth provision`, `auth reset`, `auth forget 0|1`, `power sleep`), registers
+and lists devices, and manages identities. It reads the repo `.env` for
+`DATABASE_URL` values and binds to `127.0.0.1` only. See `admin-console/README.md`.
 
 ## 6. Build the mobile app
 

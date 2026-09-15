@@ -1,0 +1,54 @@
+name: admin-console-build
+
+on:
+  push:
+    paths:
+      - "admin-console/**"
+      - ".github/workflows/admin-console-build.yml"
+  pull_request:
+    paths:
+      - "admin-console/**"
+      - ".github/workflows/admin-console-build.yml"
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin-console/server
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: admin-console/server/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck, test and build
+        run: npm run typecheck && npm test && npm run build
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin-console/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: admin-console/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck, test and build
+        run: npm run typecheck && npm test && npm run build

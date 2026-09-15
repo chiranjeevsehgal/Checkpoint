@@ -9,8 +9,9 @@ Monorepo with two separate Go modules plus firmware. No root module, no lint con
 - `firmware/tests/` — host-side pytest (grep/logic, no hardware). `firmware/host/checkpoint_client/` — Python BLE client.
 - `vad-service/` — empty placeholder (`.gitkeep` only). Ignore.
 - `loadtest/ingestion-service/` — k6 scripts (`smoke.js`, `spike.js`, `sustained.js`, `arrival-rate.js`).
+- `admin-console/` — local-only admin UI. Angular 21 in `web/`, Fastify+TS agent in `server/`. Binds `127.0.0.1:4300`, not in Compose. Details: `admin-console/README.md`.
 - Infra: root `docker-compose.yaml` (postgres, kafka KRaft, minio, Kratos + mailpit, `*-migrate`, `kafka-init`, services). Kratos config: `infra/kratos/`; Postgres roles/DB bootstrap: `infra/postgres/bootstrap.sh`. Docs: `docs/SETUP.md`.
-- CI: `.github/workflows/firmware-build.yml` and `.github/workflows/checkpoint-app-build.yml` (two workflows).
+- CI: `.github/workflows/firmware-build.yml`, `.github/workflows/checkpoint-app-build.yml`, and `.github/workflows/admin-console-build.yml` (three workflows).
 
 ## Setup / run
 
@@ -85,8 +86,9 @@ TEST_MINIO_ENDPOINT=... TEST_MINIO_ACCESS_KEY=... TEST_MINIO_SECRET_KEY=... TEST
 - k6: `k6 run loadtest/ingestion-service/smoke.js` (`BASE_URL` env, default `http://localhost:8080`).
 - Firmware host tests: `pytest firmware/tests -v`. BLE client: `pip install bleak cryptography && python -m client_app --cli --session-token <kratos> --device-id <32hex>` (from `firmware/host/checkpoint_client`).
 - Embedding: `cd embedding-service && python -m unittest discover -s tests -v`.
-- Device provisioning CLI: `DATABASE_URL=... go run ./cmd/device-admin provision -device <32hex> -claim-hash <64hex>` (also `status`, `unquarantine`). The pendant emits the hash over USB with `auth provision`.
+- Device provisioning CLI: `DATABASE_URL=... go run ./cmd/device-admin provision -device <32hex> -claim-hash <64hex>` (also `status`, `unquarantine`, `list`, `deletions`, `delete-account`). The pendant emits the hash over USB with `auth provision`.
 - App: `cd checkpoint-app && npm run check && npm test`.
+- Admin console: `cd admin-console && npm --prefix server test && npm --prefix web test`; dev `npm run dev` (Angular :4200 + agent :4300), build `npm run build`, run `npm start`.
 
 ## Firmware build
 

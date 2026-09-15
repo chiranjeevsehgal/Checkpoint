@@ -1,4 +1,0 @@
-# Checkpoint bootstrap tool (firmware/host/checkpoint_bootstrap)
-# Python >= 3.10 required.
-pyserial>=3.5
-ttkbootstrap>=1.10
