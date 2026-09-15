@@ -68,6 +68,7 @@ func main() {
 	uploads := service.NewUploadService(requestPool, requestPool, objectStorage, cfg.MinIOBucket, nil)
 	devices := service.NewDeviceService(requestPool)
 	accounts := service.NewAccountService(requestPool)
+	settings := service.NewSettingsService(requestPool)
 	reg := metrics.NewRegistry()
 	deps := apihttp.RouterDeps{
 		Auth:     authenticator,
@@ -75,6 +76,7 @@ func main() {
 		Uploads:  uploads,
 		Devices:  devices,
 		Account:  accounts,
+		Settings: settings,
 		Idem:     requestPool,
 		DB:       requestPool,
 		Storage:  objectStorage,

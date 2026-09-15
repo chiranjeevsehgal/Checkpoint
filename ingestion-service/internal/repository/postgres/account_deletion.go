@@ -133,6 +133,7 @@ func (p *Pool) PurgeIngestion(ctx context.Context, userID string) error {
 	statements := []string{
 		`DELETE FROM outbox_events WHERE aggregate_id IN (SELECT id FROM uploads WHERE user_id = $1)`,
 		`DELETE FROM idempotency_keys WHERE user_id = $1`,
+		`DELETE FROM user_settings WHERE user_id = $1`,
 		`DELETE FROM uploads WHERE user_id = $1`,
 	}
 	for _, statement := range statements {
