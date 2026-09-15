@@ -71,6 +71,7 @@ func (f *fakeSessions) RevokeOtherSessions(_ context.Context, _, currentSessionI
 
 type fakeAuthenticator struct {
 	authenticatedAt time.Time
+	emailVerifiedAt time.Time
 	sessionID       string
 }
 
@@ -82,7 +83,12 @@ func (a fakeAuthenticator) Authenticate(_ context.Context, token string) (Princi
 	if at.IsZero() {
 		at = time.Now()
 	}
-	return Principal{UserID: testUser, SessionID: a.sessionID, AuthenticatedAt: at}, nil
+	return Principal{
+		UserID:          testUser,
+		SessionID:       a.sessionID,
+		AuthenticatedAt: at,
+		EmailVerifiedAt: a.emailVerifiedAt,
+	}, nil
 }
 
 type fakeService struct {
@@ -748,6 +754,55 @@ func TestDeleteMeRequiresRecentAuth(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("stale session delete must be 403, got %d (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteMeAcceptsRecentEmailVerification(t *testing.T) {
+	accounts := &fakeAccounts{}
+	r := NewRouter(RouterDeps{
+		Auth: fakeAuthenticator{
+			authenticatedAt: time.Now().Add(-10 * time.Minute),
+			emailVerifiedAt: time.Now(),
+		},
+		Uploads: &fakeService{},
+		Devices: &fakeDevices{owned: map[string]bool{}},
+		Account: accounts,
+		Idem:    &fakeIdem{rows: map[string]repository.IdempotencyRecord{}},
+		Metrics: metrics.NewRegistry(),
+	})
+
+	req := httptest.NewRequest("DELETE", "/v1/me", nil)
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("recent verification delete must be 202, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if accounts.requested != 1 {
+		t.Fatalf("deletion requested %d times, want 1", accounts.requested)
+	}
+}
+
+func TestDeviceReleaseIgnoresEmailVerification(t *testing.T) {
+	r := NewRouter(RouterDeps{
+		Auth: fakeAuthenticator{
+			authenticatedAt: time.Now().Add(-10 * time.Minute),
+			emailVerifiedAt: time.Now(),
+		},
+		Uploads: &fakeService{},
+		Devices: &fakeDevices{owned: map[string]bool{}},
+		Idem:    &fakeIdem{rows: map[string]repository.IdempotencyRecord{}},
+		Metrics: metrics.NewRegistry(),
+	})
+
+	req := httptest.NewRequest("POST", "/v1/device/release", nil)
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("recent verification must not release a device, got %d (%s)", rec.Code, rec.Body.String())
 	}
 }
 

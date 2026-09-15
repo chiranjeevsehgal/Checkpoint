@@ -35,7 +35,8 @@ func (h *AccountHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnauthorized, CodeUnauthorized, "Missing or invalid authorization.")
 		return
 	}
-	if !HasRecentAuth(principal, time.Now().UTC()) {
+	now := time.Now().UTC()
+	if !HasRecentAuth(principal, now) && !HasRecentEmailVerification(principal, now) {
 		writeError(w, r, http.StatusForbidden, CodeReauthRequired, "Re-authentication is required for this action.")
 		return
 	}

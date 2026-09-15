@@ -72,6 +72,40 @@ func TestKratosAuthenticate(t *testing.T) {
 	}
 }
 
+func TestKratosAuthenticateEmailVerification(t *testing.T) {
+	const identityID = "11111111-1111-1111-1111-111111111111"
+	body := `{
+		"active": true,
+		"authenticated_at": "2026-09-06T00:00:00Z",
+		"identity": {
+			"id": "` + identityID + `",
+			"verifiable_addresses": [
+				{"via":"email","verified":true,"status":"completed","verified_at":"2026-09-06T00:00:00Z"},
+				{"via":"email","verified":true,"status":"completed","verified_at":"2026-09-07T12:30:00Z"},
+				{"via":"sms","verified":true,"status":"completed","verified_at":"2026-09-08T00:00:00Z"},
+				{"via":"email","verified":false,"status":"sent","verified_at":"2026-09-09T00:00:00Z"},
+				{"via":"email","verified":true,"status":"completed","verified_at":"not-a-time"}
+			]
+		}
+	}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	authn := NewKratosAuthenticator(server.URL, time.Second)
+	principal, err := authn.Authenticate(context.Background(), "token")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := time.Date(2026, 9, 7, 12, 30, 0, 0, time.UTC)
+	if !principal.EmailVerifiedAt.Equal(want) {
+		t.Fatalf("email verified at: got %v, want %v", principal.EmailVerifiedAt, want)
+	}
+}
+
 func TestKratosAuthenticateNetworkError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	url := server.URL

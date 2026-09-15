@@ -23,6 +23,7 @@ type Principal struct {
 	UserID          string
 	SessionID       string
 	AuthenticatedAt time.Time
+	EmailVerifiedAt time.Time
 }
 ```
 
@@ -44,7 +45,10 @@ Wrap protected routes with the `Auth` middleware
 
 Handlers read it via `PrincipalFrom(ctx).UserID` and never take a user id from the
 body or query string. Gate destructive actions with `HasRecentAuth()`
-(`middleware.go:198`).
+(`middleware.go:198`). Account deletion also accepts a recently verified email
+(`HasRecentEmailVerification()`), so an app that re-verifies the address by code
+can confirm the action without re-entering the password. Device release stays on
+`HasRecentAuth()` only.
 
 ## 3. Isolate data with Postgres RLS
 

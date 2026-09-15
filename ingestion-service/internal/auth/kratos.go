@@ -33,6 +33,9 @@ type Principal struct {
 	UserID          string
 	SessionID       string
 	AuthenticatedAt time.Time
+	// EmailVerifiedAt is the most recent email verification time, used as a
+	// step-up for destructive account actions.
+	EmailVerifiedAt time.Time
 }
 
 // Authenticator turns a bearer session token into a Principal.
@@ -61,9 +64,10 @@ type whoamiSession struct {
 	Identity        struct {
 		ID                  string `json:"id"`
 		VerifiableAddresses []struct {
-			Via      string `json:"via"`
-			Verified bool   `json:"verified"`
-			Status   string `json:"status"`
+			Via        string  `json:"via"`
+			Verified   bool    `json:"verified"`
+			Status     string  `json:"status"`
+			VerifiedAt *string `json:"verified_at"`
 		} `json:"verifiable_addresses"`
 	} `json:"identity"`
 }
@@ -111,7 +115,32 @@ func (a *KratosAuthenticator) Authenticate(ctx context.Context, sessionToken str
 	if err != nil {
 		return Principal{}, fmt.Errorf("%w: invalid authenticated_at", ErrProviderUnavailable)
 	}
-	return Principal{UserID: userID.String(), SessionID: session.ID, AuthenticatedAt: authenticatedAt.UTC()}, nil
+	return Principal{
+		UserID:          userID.String(),
+		SessionID:       session.ID,
+		AuthenticatedAt: authenticatedAt.UTC(),
+		EmailVerifiedAt: latestEmailVerification(session).UTC(),
+	}, nil
+}
+
+// latestEmailVerification returns the most recent verified_at across completed
+// email addresses, or the zero time when none is present.
+func latestEmailVerification(session whoamiSession) time.Time {
+	var latest time.Time
+	for _, address := range session.Identity.VerifiableAddresses {
+		if address.Via != "email" || !address.Verified ||
+			address.Status != "completed" || address.VerifiedAt == nil {
+			continue
+		}
+		verifiedAt, err := time.Parse(time.RFC3339Nano, *address.VerifiedAt)
+		if err != nil {
+			continue
+		}
+		if verifiedAt.After(latest) {
+			latest = verifiedAt
+		}
+	}
+	return latest
 }
 
 // IdentityDeleter removes identities through the private Kratos Admin API.

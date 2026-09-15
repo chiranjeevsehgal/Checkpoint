@@ -201,3 +201,9 @@ func writeAuthError(w http.ResponseWriter, r *http.Request, err error) {
 func HasRecentAuth(principal Principal, now time.Time) bool {
 	return !principal.AuthenticatedAt.IsZero() && now.Sub(principal.AuthenticatedAt) <= RecentAuthWindow
 }
+
+// HasRecentEmailVerification reports whether the caller verified their email
+// recently, which acts as a step-up for destructive account actions.
+func HasRecentEmailVerification(principal Principal, now time.Time) bool {
+	return !principal.EmailVerifiedAt.IsZero() && now.Sub(principal.EmailVerifiedAt) <= RecentAuthWindow
+}
