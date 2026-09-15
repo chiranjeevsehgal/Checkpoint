@@ -10,8 +10,7 @@ import { ConfirmDestructive } from '../../shared/confirm-destructive';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [ConfirmDestructive],
   template: `
-    <div class="page-header">
-      <h1 class="page-title">Users</h1>
+    <div class="page-actions">
       <button class="btn btn-ghost" type="button" (click)="load()">Refresh</button>
     </div>
 
@@ -23,50 +22,54 @@ import { ConfirmDestructive } from '../../shared/confirm-destructive';
     }
 
     <div class="card">
-      @if (users().length) {
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Identity</th>
-              <th>Created</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (user of users(); track user.id) {
-              @let email = emailOf(user);
+      @if (loading()) {
+        <p class="state">Loading identities…</p>
+      } @else if (users().length) {
+        <div class="table-scroll">
+          <table>
+            <thead>
               <tr>
-                <td>{{ user.traits.name || '—' }}</td>
-                <td>
-                  {{ email.email }}
-                  <span
-                    class="badge"
-                    [class.badge-success]="email.verified"
-                    [class.badge-warning]="!email.verified"
-                  >
-                    {{ email.verified ? 'verified' : 'unverified' }}
-                  </span>
-                </td>
-                <td class="mono">{{ short(user.id) }}</td>
-                <td>{{ format(user.created_at) }}</td>
-                <td>
-                  <div class="toolbar">
-                    <button class="btn btn-ghost" type="button" (click)="revoke(user.id)">
-                      Revoke sessions
-                    </button>
-                    <button class="btn btn-danger" type="button" (click)="pendingDelete.set(user)">
-                      Delete account
-                    </button>
-                  </div>
-                </td>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Identity</th>
+                <th>Created</th>
+                <th><span class="sr-only">Actions</span></th>
               </tr>
-            }
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              @for (user of users(); track user.id) {
+                @let email = emailOf(user);
+                <tr>
+                  <td>{{ user.traits.name || '—' }}</td>
+                  <td>
+                    {{ email.email }}
+                    <span
+                      class="badge"
+                      [class.badge-success]="email.verified"
+                      [class.badge-warning]="!email.verified"
+                    >
+                      {{ email.verified ? 'verified' : 'unverified' }}
+                    </span>
+                  </td>
+                  <td class="mono">{{ short(user.id) }}</td>
+                  <td>{{ format(user.created_at) }}</td>
+                  <td class="actions">
+                    <div class="toolbar">
+                      <button class="btn btn-ghost" type="button" (click)="revoke(user.id)">
+                        Revoke sessions
+                      </button>
+                      <button class="btn btn-danger" type="button" (click)="pendingDelete.set(user)">
+                        Delete account
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
       } @else {
-        <p class="subtle">No identities.</p>
+        <p class="state">No identities.</p>
       }
     </div>
 
@@ -93,6 +96,7 @@ export class Users {
   protected readonly pendingDelete = signal<Identity | null>(null);
   protected readonly message = signal('');
   protected readonly error = signal('');
+  protected readonly loading = signal(true);
 
   protected readonly format = formatTimestamp;
   protected readonly short = shortId;
@@ -103,11 +107,14 @@ export class Users {
   }
 
   protected async load(): Promise<void> {
+    this.loading.set(true);
     try {
       this.users.set(await this.api.users());
       this.error.set('');
     } catch (error) {
       this.error.set(asMessage(error));
+    } finally {
+      this.loading.set(false);
     }
   }
 

@@ -9,8 +9,7 @@ import type { ComposeService, ConsoleConfig, InfraView } from '../../core/models
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RouterLink],
   template: `
-    <div class="page-header">
-      <h1 class="page-title">Dashboard</h1>
+    <div class="page-actions">
       <button class="btn btn-ghost" type="button" (click)="load()">Refresh</button>
     </div>
 
@@ -19,58 +18,58 @@ import type { ComposeService, ConsoleConfig, InfraView } from '../../core/models
     }
 
     <div class="grid">
-      <div class="card">
+      <div class="card metric">
         <div class="row between">
-          <span class="subtle">Ingestion API</span>
+          <span class="cluster-label">Ingestion API</span>
           <span class="badge" [class.badge-success]="health().ingestion" [class.badge-danger]="!health().ingestion">
             {{ health().ingestion ? 'up' : 'down' }}
           </span>
         </div>
-        <p class="mono">{{ config()?.ingestionUrl }}</p>
+        <p class="metric-value">{{ config()?.ingestionUrl }}</p>
       </div>
-      <div class="card">
+      <div class="card metric">
         <div class="row between">
-          <span class="subtle">Kratos</span>
+          <span class="cluster-label">Kratos</span>
           <span class="badge" [class.badge-success]="health().kratos" [class.badge-danger]="!health().kratos">
             {{ health().kratos ? 'up' : 'down' }}
           </span>
         </div>
-        <p class="mono">{{ config()?.kratosPublicUrl }}</p>
+        <p class="metric-value">{{ config()?.kratosPublicUrl }}</p>
       </div>
     </div>
 
     <div class="card">
-      <div class="row between">
-        <h2>Compose services</h2>
-        @if (servicesError()) {
-          <span class="subtle">{{ servicesError() }}</span>
-        }
-      </div>
+      <h2>Compose services</h2>
+      @if (servicesError()) {
+        <p class="subtle">{{ servicesError() }}</p>
+      }
       @if (services().length) {
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Service</th>
-              <th>State</th>
-              <th>Health</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (service of services(); track service.Name) {
+        <div class="table-scroll">
+          <table>
+            <thead>
               <tr>
-                <td class="mono">{{ service.Name || '—' }}</td>
-                <td>{{ service.Service || '—' }}</td>
-                <td>{{ service.State || '—' }}</td>
-                <td>{{ service.Health || '—' }}</td>
-                <td class="subtle">{{ service.Status || '—' }}</td>
+                <th>Name</th>
+                <th>Service</th>
+                <th>State</th>
+                <th>Health</th>
+                <th>Status</th>
               </tr>
-            }
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              @for (service of services(); track service.Name) {
+                <tr>
+                  <td class="mono">{{ service.Name || '—' }}</td>
+                  <td>{{ service.Service || '—' }}</td>
+                  <td>{{ service.State || '—' }}</td>
+                  <td>{{ service.Health || '—' }}</td>
+                  <td class="subtle">{{ service.Status || '—' }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
       } @else if (!servicesError()) {
-        <p class="subtle">No services reported.</p>
+        <p class="state">No services reported.</p>
       }
     </div>
 
@@ -80,17 +79,22 @@ import type { ComposeService, ConsoleConfig, InfraView } from '../../core/models
         <a class="btn btn-ghost" routerLink="/settings">Settings</a>
       </div>
       @if (config(); as view) {
-        <table>
-          <tbody>
-            <tr><td class="subtle">Repository</td><td class="mono">{{ view.repoRoot }}</td></tr>
-            <tr><td class="subtle">Database</td><td class="mono">{{ view.databaseUrl }}</td></tr>
-            <tr><td class="subtle">Kratos admin</td><td class="mono">{{ view.kratosAdminUrl }}</td></tr>
-            <tr><td class="subtle">arduino-cli</td><td class="mono">{{ view.arduinoCli }}</td></tr>
-            <tr><td class="subtle">Sketch</td><td class="mono">{{ view.sketchDir }}</td></tr>
-            <tr><td class="subtle">Build</td><td class="mono">{{ view.buildDir }}</td></tr>
-            <tr><td class="subtle">FQBN</td><td class="mono">{{ view.fqbn }}</td></tr>
-          </tbody>
-        </table>
+        <dl class="defs">
+          <dt>Repository</dt>
+          <dd>{{ view.repoRoot }}</dd>
+          <dt>Database</dt>
+          <dd>{{ view.databaseUrl }}</dd>
+          <dt>Kratos admin</dt>
+          <dd>{{ view.kratosAdminUrl }}</dd>
+          <dt>arduino-cli</dt>
+          <dd>{{ view.arduinoCli }}</dd>
+          <dt>Sketch</dt>
+          <dd>{{ view.sketchDir }}</dd>
+          <dt>Build</dt>
+          <dd>{{ view.buildDir }}</dd>
+          <dt>FQBN</dt>
+          <dd>{{ view.fqbn }}</dd>
+        </dl>
       }
     </div>
   `,

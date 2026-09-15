@@ -9,8 +9,7 @@ import { pickDefaultPort } from '../../core/serial';
   selector: 'ck-serial',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="page-header">
-      <h1 class="page-title">Serial console</h1>
+    <div class="page-actions">
       <button class="btn btn-ghost" type="button" (click)="events.clearSerial()">Clear</button>
     </div>
 
@@ -19,52 +18,70 @@ import { pickDefaultPort } from '../../core/serial';
     }
 
     <div class="card">
-      <div class="row">
-        <div class="field">
-          <label>Port</label>
-          <select [value]="port()" (change)="port.set(selectValue($event))">
+      <h2>Connection</h2>
+      <div class="field">
+        <label for="serial-port">Port</label>
+        <div class="control-row">
+          <select id="serial-port" [value]="port()" (change)="port.set(selectValue($event))">
             <option value="">—</option>
             @for (item of ports(); track item) {
               <option [value]="item">{{ item }}</option>
             }
           </select>
+          <button class="btn btn-ghost" type="button" (click)="refresh()">Refresh</button>
+          <button class="btn" type="button" [class.btn-primary]="!open()" (click)="toggle()">
+            {{ open() ? 'Close' : 'Open' }}
+          </button>
+          <span class="pill" [class.badge-success]="open()">
+            {{ open() ? 'open @115200' : 'closed' }}
+          </span>
         </div>
-        <button class="btn btn-ghost" type="button" (click)="refresh()">Refresh</button>
-        <button class="btn" type="button" [class.btn-primary]="!open()" (click)="toggle()">
-          {{ open() ? 'Close' : 'Open' }}
-        </button>
-        <span class="pill">{{ open() ? 'open @115200' : 'closed' }}</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Commands</h2>
+      <div class="toolbar">
+        <div class="cluster">
+          <span class="cluster-label">auth</span>
+          @for (quick of quickCommands; track quick.command) {
+            <button class="btn btn-ghost" type="button" [disabled]="!open()" (click)="send(quick.command)">
+              {{ quick.label }}
+            </button>
+          }
+        </div>
+        <div class="cluster">
+          <label class="cluster-label" for="serial-slot">Slot</label>
+          <select id="serial-slot" [value]="slot()" (change)="slot.set(selectValue($event))">
+            <option value="0">0</option>
+            <option value="1">1</option>
+          </select>
+          <button class="btn btn-ghost" type="button" [disabled]="!open()" (click)="send('auth forget ' + slot())">
+            Forget
+          </button>
+        </div>
+        <div class="cluster">
+          <span class="cluster-label">Power</span>
+          <button class="btn" type="button" [disabled]="!open()" (click)="send('power sleep')">
+            Sleep
+          </button>
+        </div>
       </div>
 
       <hr />
 
-      <div class="toolbar">
-        @for (quick of quickCommands; track quick.command) {
-          <button class="btn btn-ghost" type="button" [disabled]="!open()" (click)="send(quick.command)">
-            {{ quick.label }}
-          </button>
-        }
-        <span class="subtle">slot</span>
-        <select [value]="slot()" (change)="slot.set(selectValue($event))">
-          <option value="0">0</option>
-          <option value="1">1</option>
-        </select>
-        <button class="btn btn-ghost" type="button" [disabled]="!open()" (click)="send('auth forget ' + slot())">
-          Forget
-        </button>
-        <button class="btn btn-danger" type="button" [disabled]="!open()" (click)="send('power sleep')">
-          Sleep
-        </button>
-      </div>
-
-      <div class="row">
-        <input
-          [value]="command()"
-          (input)="command.set(inputValue($event))"
-          (keyup.enter)="sendFree()"
-          placeholder="auth reset"
-        />
-        <button class="btn" type="button" [disabled]="!open()" (click)="sendFree()">Send</button>
+      <div class="field">
+        <label for="serial-command">Command</label>
+        <div class="control-row">
+          <input
+            id="serial-command"
+            [value]="command()"
+            (input)="command.set(inputValue($event))"
+            (keyup.enter)="sendFree()"
+            placeholder="auth reset"
+          />
+          <button class="btn" type="button" [disabled]="!open()" (click)="sendFree()">Send</button>
+        </div>
       </div>
     </div>
 
@@ -79,6 +96,9 @@ import { pickDefaultPort } from '../../core/serial';
           >
             {{ describe(entry) }}
           </div>
+        }
+        @if (!log().length) {
+          <span class="subtle">Nothing yet. Open the port to start reading output.</span>
         }
       </div>
     </div>

@@ -33,9 +33,18 @@ const EDITABLE_KEYS = [
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgTemplateOutlet],
   template: `
-    <div class="page-header">
-      <h1 class="page-title">Settings</h1>
-      <button class="btn btn-primary" type="button" [disabled]="saving()" (click)="save()">Save</button>
+    <div class="page-actions">
+      <button class="btn btn-ghost" type="button" [disabled]="saving()" (click)="load()">
+        Reload
+      </button>
+      <button
+        class="btn btn-primary"
+        type="button"
+        [disabled]="saving() || !dirty()"
+        (click)="save()"
+      >
+        {{ saving() ? 'Saving…' : 'Save' }}
+      </button>
     </div>
 
     @if (message()) {
@@ -45,97 +54,133 @@ const EDITABLE_KEYS = [
       <p class="error">{{ error() }}</p>
     }
 
-    <div class="card">
-      <h2>Connection</h2>
-      <div class="field">
-        <label>Database URL <span class="subtle">{{ sources()['ADMIN_DATABASE_URL'] }}</span></label>
-        <div class="row">
-          <input
-            [value]="databaseUrlDraft()"
-            (input)="databaseUrlDraft.set(inputValue($event))"
-            [placeholder]="databaseUrlPlaceholder()"
-          />
-          <button class="btn btn-ghost" type="button" (click)="test('database')">Test</button>
-        </div>
-        @let databaseTest = tests()['database'];
-        @if (databaseTest) {
-          <span [class]="databaseTest.ok ? 'subtle success' : 'subtle error'">
-            {{ databaseTest.ok ? 'ok' : 'failed' }} — {{ databaseTest.detail }}
-          </span>
-        }
-      </div>
-
-      @for (field of connectionFields; track field.key) {
-        <ng-container [ngTemplateOutlet]="fieldRow" [ngTemplateOutletContext]="{ field }" />
-      }
-    </div>
-
-    <div class="card">
-      <h2>Firmware</h2>
-      @for (field of firmwareFields; track field.key) {
-        <ng-container [ngTemplateOutlet]="fieldRow" [ngTemplateOutletContext]="{ field }" />
-      }
-      @if (candidates().length) {
-        <hr />
-        <p class="subtle">Detected arduino-cli installations</p>
-        <table>
-          <tbody>
-            @for (candidate of candidates(); track candidate.path) {
-              <tr>
-                <td class="mono">{{ candidate.path }}</td>
-                <td class="subtle">{{ candidate.version || 'unknown version' }}</td>
-                <td>
-                  <button class="btn btn-ghost" type="button" (click)="setValue('ADMIN_ARDUINO_CLI', candidate.path)">
-                    Use
-                  </button>
-                </td>
-              </tr>
+    @if (loading()) {
+      <p class="state">Loading settings…</p>
+    } @else {
+      <div class="card">
+        <h2>Connection</h2>
+        <div class="field">
+          <label for="ADMIN_DATABASE_URL">
+            Database URL
+            @if (sources()['ADMIN_DATABASE_URL']; as source) {
+              <span class="chip">{{ source }}</span>
             }
-          </tbody>
-        </table>
-      }
-    </div>
+          </label>
+          <div class="control-row">
+            <input
+              id="ADMIN_DATABASE_URL"
+              [value]="databaseUrlDraft()"
+              (input)="databaseUrlDraft.set(inputValue($event))"
+              [placeholder]="databaseUrlPlaceholder()"
+            />
+            <button class="btn btn-ghost" type="button" (click)="test('database')">Test</button>
+          </div>
+          @let databaseTest = tests()['database'];
+          @if (databaseTest) {
+            <p class="subtle" [class.success]="databaseTest.ok" [class.error]="!databaseTest.ok">
+              {{ databaseTest.ok ? 'ok' : 'failed' }} — {{ databaseTest.detail }}
+            </p>
+          }
+        </div>
 
-    <div class="card">
-      <h2>Device admin CLI</h2>
-      <div class="field">
-        <label>Execution mode <span class="subtle">{{ sources()['ADMIN_DEVICE_ADMIN_MODE'] }}</span></label>
-        <select [value]="mode()" (change)="setValue('ADMIN_DEVICE_ADMIN_MODE', $event)">
-          <option value="go">go run (local repo + Go)</option>
-          <option value="binary">Prebuilt binary</option>
-          <option value="ssh">SSH to remote host</option>
-        </select>
+        <div class="field-grid">
+          @for (field of connectionFields; track field.key) {
+            <ng-container [ngTemplateOutlet]="fieldRow" [ngTemplateOutletContext]="{ field }" />
+          }
+        </div>
       </div>
-      @if (mode() === 'binary') {
-        <ng-container
-          [ngTemplateOutlet]="fieldRow"
-          [ngTemplateOutletContext]="{ field: binaryField }"
-        />
-      }
-      @if (mode() === 'ssh') {
-        @for (field of sshFields; track field.key) {
-          <ng-container [ngTemplateOutlet]="fieldRow" [ngTemplateOutletContext]="{ field }" />
+
+      <div class="card">
+        <h2>Firmware</h2>
+        <div class="field-grid">
+          @for (field of firmwareFields; track field.key) {
+            <ng-container [ngTemplateOutlet]="fieldRow" [ngTemplateOutletContext]="{ field }" />
+          }
+        </div>
+        @if (candidates().length) {
+          <hr />
+          <p class="subtle">Detected arduino-cli installations</p>
+          <div class="table-scroll">
+            <table>
+              <tbody>
+                @for (candidate of candidates(); track candidate.path) {
+                  <tr>
+                    <td class="mono">{{ candidate.path }}</td>
+                    <td class="subtle">{{ candidate.version || 'unknown version' }}</td>
+                    <td class="actions">
+                      <button class="btn btn-ghost" type="button" (click)="setValue('ADMIN_ARDUINO_CLI', candidate.path)">
+                        Use
+                      </button>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
         }
-        <p class="subtle">The remote host runs ./device-admin with its own DATABASE_URL.</p>
-      }
-    </div>
+      </div>
 
-    <div class="card">
-      <h2>Serial</h2>
-      <ng-container [ngTemplateOutlet]="fieldRow" [ngTemplateOutletContext]="{ field: serialField }" />
-    </div>
+      <div class="card">
+        <h2>Device admin CLI</h2>
+        <div class="field-grid">
+          <div class="field">
+            <label for="ADMIN_DEVICE_ADMIN_MODE">
+              Execution mode
+              @if (sources()['ADMIN_DEVICE_ADMIN_MODE']; as source) {
+                <span class="chip">{{ source }}</span>
+              }
+            </label>
+            <select id="ADMIN_DEVICE_ADMIN_MODE" [value]="mode()" (change)="setValue('ADMIN_DEVICE_ADMIN_MODE', $event)">
+              <option value="go">go run (local repo + Go)</option>
+              <option value="binary">Prebuilt binary</option>
+              <option value="ssh">SSH to remote host</option>
+            </select>
+          </div>
 
-    <div class="card">
-      <h2>Agent</h2>
-      <p class="subtle">Bind address and port come from the environment and need an agent restart.</p>
-      <p class="mono">{{ host() }}:{{ port() }}</p>
-    </div>
+          @if (mode() === 'binary') {
+            <ng-container
+              [ngTemplateOutlet]="fieldRow"
+              [ngTemplateOutletContext]="{ field: binaryField }"
+            />
+          }
+          @if (mode() === 'ssh') {
+            @for (field of sshFields; track field.key) {
+              <ng-container [ngTemplateOutlet]="fieldRow" [ngTemplateOutletContext]="{ field }" />
+            }
+          }
+        </div>
+        @if (mode() === 'ssh') {
+          <p class="subtle">The remote host runs ./device-admin with its own DATABASE_URL.</p>
+        }
+      </div>
+
+      <div class="card">
+        <h2>Serial</h2>
+        <div class="field-grid">
+          <ng-container [ngTemplateOutlet]="fieldRow" [ngTemplateOutletContext]="{ field: serialField }" />
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Agent</h2>
+        <p class="subtle">Bind address and port come from the environment and need an agent restart.</p>
+        <dl class="defs">
+          <dt>Address</dt>
+          <dd>{{ host() }}:{{ port() }}</dd>
+        </dl>
+      </div>
+    }
 
     <ng-template #fieldRow let-field="field">
       <div class="field">
-        <label>{{ field.label }} <span class="subtle">{{ sources()[field.key] }}</span></label>
-        <div class="row">
-          <input [value]="value(field.key)" (input)="setValue(field.key, $event)" />
+        <label [attr.for]="field.key">
+          {{ field.label }}
+          @if (sources()[field.key]; as source) {
+            <span class="chip">{{ source }}</span>
+          }
+        </label>
+        <div class="control-row">
+          <input [id]="field.key" [value]="value(field.key)" (input)="setValue(field.key, $event)" />
           @if (field.browse) {
             <button class="btn btn-ghost" type="button" (click)="openBrowser(field.key)">Browse…</button>
           }
@@ -149,9 +194,9 @@ const EDITABLE_KEYS = [
         @if (field.test) {
           @let result = tests()[field.test];
           @if (result) {
-            <span [class]="result.ok ? 'subtle success' : 'subtle error'">
+            <p class="subtle" [class.success]="result.ok" [class.error]="!result.ok">
               {{ result.ok ? 'ok' : 'failed' }} — {{ result.detail }}
-            </span>
+            </p>
           }
         }
       </div>
@@ -167,13 +212,9 @@ const EDITABLE_KEYS = [
               <button class="btn btn-ghost" type="button" (click)="browseTo(state.result.parent)">Up</button>
             }
           </div>
-          <div class="log log-sm">
+          <div class="list-box">
             @for (entry of state.result.entries; track entry.path) {
-              <div>
-                <button class="btn btn-ghost" type="button" (click)="browseTo(entry.path)">
-                  {{ entry.name }}
-                </button>
-              </div>
+              <button class="btn" type="button" (click)="browseTo(entry.path)">{{ entry.name }}</button>
             }
           </div>
           <div class="row between">
@@ -200,10 +241,24 @@ export class Settings {
   protected readonly host = signal('');
   protected readonly port = signal(0);
   protected readonly saving = signal(false);
+  protected readonly loading = signal(true);
   protected readonly message = signal('');
   protected readonly error = signal('');
 
+  private readonly baseline = signal('');
+
   protected readonly mode = computed(() => this.values()['ADMIN_DEVICE_ADMIN_MODE'] || 'go');
+
+  protected readonly dirty = computed(() => JSON.stringify(this.payload()) !== this.baseline());
+
+  private readonly payload = computed<Record<string, string>>(() => {
+    const values = this.values();
+    const payload: Record<string, string> = {};
+    for (const key of EDITABLE_KEYS) payload[key] = values[key] ?? '';
+    const draft = this.databaseUrlDraft().trim();
+    if (draft) payload['ADMIN_DATABASE_URL'] = draft;
+    return payload;
+  });
 
   protected readonly connectionFields: FieldDef[] = [
     { key: 'ADMIN_KRATOS_ADMIN_URL', label: 'Kratos admin URL', test: 'kratos' },
@@ -244,6 +299,7 @@ export class Settings {
   protected setValue(key: string, source: Event | string): void {
     const value = typeof source === 'string' ? source : (source.target as HTMLInputElement).value;
     this.values.update((current) => ({ ...current, [key]: value }));
+    this.message.set('');
   }
 
   protected async save(): Promise<void> {
@@ -251,12 +307,8 @@ export class Settings {
     this.message.set('');
     this.error.set('');
     try {
-      const payload: Record<string, string> = {};
-      for (const key of EDITABLE_KEYS) payload[key] = this.value(key);
-      const draft = this.databaseUrlDraft().trim();
-      if (draft) payload['ADMIN_DATABASE_URL'] = draft;
-      this.apply(await this.api.saveSettings(payload));
       this.databaseUrlDraft.set('');
+      this.apply(await this.api.saveSettings(this.payload()));
       this.message.set('Settings saved');
     } catch (error) {
       this.error.set(asMessage(error));
@@ -310,11 +362,16 @@ export class Settings {
     this.browser.set(null);
   }
 
-  private async load(): Promise<void> {
+  protected async load(): Promise<void> {
+    this.loading.set(true);
     try {
       this.apply(await this.api.settings());
+      this.message.set('');
+      this.error.set('');
     } catch (error) {
       this.error.set(asMessage(error));
+    } finally {
+      this.loading.set(false);
     }
   }
 
@@ -328,6 +385,8 @@ export class Settings {
     this.sources.set(view.sources);
     this.host.set(view.host);
     this.port.set(view.port);
+    this.databaseUrlDraft.set('');
+    this.baseline.set(JSON.stringify(this.payload()));
   }
 }
 

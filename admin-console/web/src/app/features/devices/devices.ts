@@ -14,8 +14,7 @@ const CLAIM_KEY = /^[0-9a-f]{64}$/;
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [ClaimQr, ConfirmDestructive],
   template: `
-    <div class="page-header">
-      <h1 class="page-title">Devices</h1>
+    <div class="page-actions">
       <button class="btn btn-ghost" type="button" (click)="load()">Refresh</button>
     </div>
 
@@ -31,12 +30,20 @@ const CLAIM_KEY = /^[0-9a-f]{64}$/;
         <h2>Provision pendant</h2>
         <p class="subtle">Read IDs from the USB console, then provision the cloud claim hash.</p>
         <div class="field">
-          <label>Device id</label>
-          <input [value]="deviceId()" (input)="deviceId.set(inputValue($event))" />
+          <label for="provision-device-id">Device id</label>
+          <input
+            id="provision-device-id"
+            [value]="deviceId()"
+            (input)="deviceId.set(inputValue($event))"
+          />
         </div>
         <div class="field">
-          <label>Claim hash (cloud-sha256)</label>
-          <input [value]="claimHash()" (input)="claimHash.set(inputValue($event))" />
+          <label for="provision-claim-hash">Claim hash (cloud-sha256)</label>
+          <input
+            id="provision-claim-hash"
+            [value]="claimHash()"
+            (input)="claimHash.set(inputValue($event))"
+          />
         </div>
         <div class="toolbar">
           <button class="btn btn-ghost" type="button" (click)="readIds()">Read IDs</button>
@@ -44,79 +51,90 @@ const CLAIM_KEY = /^[0-9a-f]{64}$/;
           <button class="btn" type="button" (click)="runStatus(deviceId())">Status</button>
         </div>
         @if (output()) {
-          <pre class="log">{{ output() }}</pre>
+          <pre class="log log-inline">{{ output() }}</pre>
         }
       </div>
 
       <div class="card">
         <h2>Enrollment QR</h2>
-        <p class="subtle">Paste the BLE claim key printed by <span class="mono">auth export</span>.</p>
+        <p class="subtle">
+          Paste the BLE claim key printed by <span class="mono">auth export</span>; the device id
+          comes from the pendant card.
+        </p>
         <div class="field">
-          <label>Device id</label>
-          <input [value]="qrDeviceId()" (input)="qrDeviceId.set(inputValue($event))" />
-        </div>
-        <div class="field">
-          <label>BLE claim key</label>
-          <input [value]="claimKey()" (input)="claimKey.set(inputValue($event))" />
+          <label for="qr-claim-key">BLE claim key</label>
+          <input
+            id="qr-claim-key"
+            [value]="claimKey()"
+            (input)="claimKey.set(inputValue($event))"
+          />
         </div>
         @if (claimUri()) {
           <ck-claim-qr [value]="claimUri()" />
-          <pre class="log">{{ claimUri() }}</pre>
+          <p class="mono">{{ claimUri() }}</p>
         } @else {
-          <p class="subtle">Enter a 32-hex device id and 64-hex claim key.</p>
+          <p class="state">Enter a 32-hex device id and 64-hex claim key.</p>
         }
       </div>
     </div>
 
     <div class="card">
       <h2>All devices</h2>
-      @if (devices().length) {
-        <table>
-          <thead>
-            <tr>
-              <th>Device</th>
-              <th>State</th>
-              <th>Owner</th>
-              <th>Claimed</th>
-              <th>Updated</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (device of devices(); track device.device_id) {
+      @if (loading()) {
+        <p class="state">Loading devices…</p>
+      } @else if (devices().length) {
+        <div class="table-scroll">
+          <table>
+            <thead>
               <tr>
-                <td class="mono">{{ device.device_id }}</td>
-                <td>
-                  <span
-                    class="badge"
-                    [class.badge-success]="device.state === 'owned'"
-                    [class.badge-warning]="device.state === 'reset_required'"
-                    [class.badge-muted]="device.state === 'unowned'"
-                  >
-                    {{ device.state }}
-                  </span>
-                </td>
-                <td class="mono">{{ device.user_id ? short(device.user_id) : '—' }}</td>
-                <td>{{ format(device.claimed_at) }}</td>
-                <td>{{ format(device.updated_at) }}</td>
-                <td>
-                  <div class="toolbar">
-                    <button class="btn btn-ghost" type="button" (click)="runStatus(device.device_id)">
-                      Status
-                    </button>
-                    @if (device.state === 'reset_required') {
-                      <button class="btn btn-danger" type="button" (click)="pendingUnquarantine.set(device.device_id)">
-                        Unquarantine
-                      </button>
-                    }
-                  </div>
-                </td>
+                <th>Device</th>
+                <th>State</th>
+                <th>Owner</th>
+                <th>Claimed</th>
+                <th>Updated</th>
+                <th><span class="sr-only">Actions</span></th>
               </tr>
-            }
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              @for (device of devices(); track device.device_id) {
+                <tr>
+                  <td class="mono">{{ device.device_id }}</td>
+                  <td>
+                    <span
+                      class="badge"
+                      [class.badge-success]="device.state === 'owned'"
+                      [class.badge-warning]="device.state === 'reset_required'"
+                      [class.badge-muted]="device.state === 'unowned'"
+                    >
+                      {{ device.state }}
+                    </span>
+                  </td>
+                  <td class="mono">{{ device.user_id ? short(device.user_id) : '—' }}</td>
+                  <td>{{ format(device.claimed_at) }}</td>
+                  <td>{{ format(device.updated_at) }}</td>
+                  <td class="actions">
+                    <div class="toolbar">
+                      <button class="btn btn-ghost" type="button" (click)="runStatus(device.device_id)">
+                        Status
+                      </button>
+                      @if (device.state === 'reset_required') {
+                        <button
+                          class="btn"
+                          type="button"
+                          (click)="pendingUnquarantine.set(device.device_id)"
+                        >
+                          Unquarantine
+                        </button>
+                      }
+                    </div>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
       } @else {
-        <p class="subtle">No devices.</p>
+        <p class="state">No devices.</p>
       }
     </div>
 
@@ -142,18 +160,18 @@ export class Devices {
   protected readonly devices = signal<DeviceRecord[]>([]);
   protected readonly deviceId = signal('');
   protected readonly claimHash = signal('');
-  protected readonly qrDeviceId = signal('');
   protected readonly claimKey = signal('');
   protected readonly output = signal('');
   protected readonly error = signal('');
   protected readonly message = signal('');
+  protected readonly loading = signal(true);
   protected readonly pendingUnquarantine = signal<string | null>(null);
 
   protected readonly format = formatTimestamp;
   protected readonly short = shortId;
 
   protected readonly claimUri = computed(() => {
-    const device = this.qrDeviceId().trim().toLowerCase();
+    const device = this.deviceId().trim().toLowerCase();
     const key = this.claimKey().trim().toLowerCase();
     if (!DEVICE_ID.test(device) || !CLAIM_KEY.test(key)) return '';
     return `checkpoint://claim?device=${device}&key=${key}`;
@@ -168,11 +186,14 @@ export class Devices {
   }
 
   protected async load(): Promise<void> {
+    this.loading.set(true);
     try {
       this.devices.set(await this.api.devices());
       this.error.set('');
     } catch (error) {
       this.error.set(message(error));
+    } finally {
+      this.loading.set(false);
     }
   }
 
@@ -181,7 +202,6 @@ export class Devices {
       const identity = await this.api.readIds();
       this.deviceId.set(identity.deviceId);
       this.claimHash.set(identity.claimHash);
-      this.qrDeviceId.set(identity.deviceId);
       this.message.set(`Read device ${identity.deviceId}`);
     });
   }

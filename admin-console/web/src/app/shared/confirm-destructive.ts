@@ -5,12 +5,17 @@ import { ChangeDetectionStrategy, Component, computed, input, output, signal } f
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="modal-backdrop">
-      <div class="card modal">
+      <div class="card modal" role="dialog" aria-modal="true" [attr.aria-label]="title()">
         <h2>{{ title() }}</h2>
         <p class="muted">{{ message() }}</p>
         <div class="field">
-          <label>Type "{{ expected() }}" to confirm</label>
-          <input [value]="typed()" (input)="onInput($event)" />
+          <label for="confirm-expected">Type "{{ expected() }}" to confirm</label>
+          <input
+            id="confirm-expected"
+            autocomplete="off"
+            [value]="typed()"
+            (input)="onInput($event)"
+          />
         </div>
         <div class="row between">
           <button class="btn btn-ghost" type="button" (click)="cancelled.emit()">Cancel</button>

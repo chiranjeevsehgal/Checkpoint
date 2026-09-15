@@ -9,8 +9,7 @@ import { pickDefaultPort } from '../../core/serial';
   selector: 'ck-firmware',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="page-header">
-      <h1 class="page-title">Firmware</h1>
+    <div class="page-actions">
       <button class="btn btn-ghost" type="button" (click)="events.clearTasks()">Clear log</button>
     </div>
 
@@ -19,15 +18,12 @@ import { pickDefaultPort } from '../../core/serial';
     }
 
     <div class="card">
-      <div class="row between">
-        <h2>Build &amp; flash</h2>
-        <span class="pill" [class.badge-primary]="busy()">{{ busy() ? 'working' : 'idle' }}</span>
-      </div>
+      <h2>Build &amp; flash</h2>
 
       <div class="field">
-        <label>Serial port (required for upload)</label>
-        <div class="row">
-          <select [value]="port()" (change)="port.set(selectValue($event))">
+        <label for="firmware-port">Serial port (required for upload)</label>
+        <div class="control-row">
+          <select id="firmware-port" [value]="port()" (change)="port.set(selectValue($event))">
             <option value="">—</option>
             @for (item of ports(); track item) {
               <option [value]="item">{{ item }}</option>
@@ -40,17 +36,23 @@ import { pickDefaultPort } from '../../core/serial';
       <div class="toolbar">
         <button class="btn" type="button" [disabled]="busy()" (click)="compile()">Compile</button>
         <button class="btn" type="button" [disabled]="busy() || !port()" (click)="upload()">
-          Upload build dir
+          Upload build
         </button>
         <button class="btn btn-primary" type="button" [disabled]="busy() || !port()" (click)="compileUpload()">
-          Compile + upload
+          Compile &amp; upload
         </button>
       </div>
 
       @if (config(); as view) {
-        <p class="subtle mono">{{ view.arduinoCli }}</p>
-        <p class="subtle mono">sketch {{ view.sketchDir }}</p>
-        <p class="subtle mono">build {{ view.buildDir }}</p>
+        <hr />
+        <dl class="defs">
+          <dt>arduino-cli</dt>
+          <dd>{{ view.arduinoCli }}</dd>
+          <dt>Sketch</dt>
+          <dd>{{ view.sketchDir }}</dd>
+          <dt>Build</dt>
+          <dd>{{ view.buildDir }}</dd>
+        </dl>
       }
     </div>
 
@@ -65,6 +67,9 @@ import { pickDefaultPort } from '../../core/serial';
           >
             {{ describe(entry) }}
           </div>
+        }
+        @if (!log().length) {
+          <span class="subtle">Nothing yet. Compile or upload to stream progress here.</span>
         }
       </div>
     </div>
