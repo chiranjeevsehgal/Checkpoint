@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Text } from '@/components/ui/text';
+import { describeAuthError } from '@/features/auth/auth-errors';
 import { applyServerConfig } from '@/features/auth/auth-store';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { env } from '@/lib/env';
@@ -31,7 +32,7 @@ export function SignInScreen() {
       }
       await signIn(email.trim(), password);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sign in failed.');
+      setError(describeAuthError(err, 'Sign in failed. Please try again.'));
     } finally {
       setBusy(false);
     }

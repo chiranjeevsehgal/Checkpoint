@@ -8,7 +8,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Text } from '@/components/ui/text';
+import { describeAuthError } from '@/features/auth/auth-errors';
 import { useAuth } from '@/features/auth/hooks/useAuth';
+import { passwordMeetsLength } from '@/features/auth/password-policy';
+import { PasswordRules } from '@/features/auth/password-rules';
 
 export function SignUpScreen() {
   const router = useRouter();
@@ -25,8 +28,13 @@ export function SignUpScreen() {
     try {
       await signUp(name.trim(), email.trim(), password);
       router.replace('/(public)/verify-email');
-    } catch {
-      setError('Could not create the account. Check your details and try again.');
+    } catch (err) {
+      setError(
+        describeAuthError(
+          err,
+          'We could not create your account. Check your details and try again.',
+        ),
+      );
     } finally {
       setBusy(false);
     }
@@ -71,10 +79,11 @@ export function SignUpScreen() {
               onChangeText={setPassword}
               editable={!busy}
             />
+            <PasswordRules password={password} />
             {error ? <Text className="text-destructive">{error}</Text> : null}
             <Button
               onPress={() => void submit()}
-              disabled={busy || !name.trim() || !email || !password}
+              disabled={busy || !name.trim() || !email || !passwordMeetsLength(password)}
             >
               <Text>{busy ? 'Creating…' : 'Sign up'}</Text>
             </Button>

@@ -46,17 +46,26 @@ export interface KratosTransport {
   request<T>(method: string, path: string, body?: unknown, token?: string): Promise<T>;
 }
 
-function messagesFrom(body: unknown): string[] {
+export function messagesFrom(body: unknown): string[] {
   const data = body as {
-    error?: { message?: unknown };
-    ui?: { messages?: { text?: unknown }[] };
+    error?: { message?: unknown; reason?: unknown };
+    ui?: {
+      messages?: { text?: unknown }[];
+      nodes?: { messages?: { text?: unknown }[] }[];
+    };
   };
   const texts: string[] = [];
   if (typeof data?.error?.message === 'string') texts.push(data.error.message);
+  if (typeof data?.error?.reason === 'string') texts.push(data.error.reason);
   for (const message of data?.ui?.messages ?? []) {
     if (typeof message.text === 'string') texts.push(message.text);
   }
-  return texts;
+  for (const node of data?.ui?.nodes ?? []) {
+    for (const message of node.messages ?? []) {
+      if (typeof message.text === 'string') texts.push(message.text);
+    }
+  }
+  return [...new Set(texts)];
 }
 
 /**

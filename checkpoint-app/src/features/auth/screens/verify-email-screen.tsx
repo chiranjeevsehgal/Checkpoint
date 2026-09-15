@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
+import { describeAuthError } from '@/features/auth/auth-errors';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 
 export function VerifyEmailScreen() {
@@ -22,8 +23,8 @@ export function VerifyEmailScreen() {
     try {
       await requestEmailVerification(address.trim());
       setSent(true);
-    } catch {
-      setError('Could not send a verification code.');
+    } catch (err) {
+      setError(describeAuthError(err, 'We could not send a verification code. Please try again.'));
     } finally {
       setBusy(false);
     }
@@ -34,8 +35,8 @@ export function VerifyEmailScreen() {
     setError(null);
     try {
       await confirmEmailVerification(code.trim());
-    } catch {
-      setError('That code was not accepted.');
+    } catch (err) {
+      setError(describeAuthError(err, 'That code was not accepted. Try again.'));
     } finally {
       setBusy(false);
     }

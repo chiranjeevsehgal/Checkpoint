@@ -8,7 +8,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Text } from '@/components/ui/text';
+import { describeAuthError } from '@/features/auth/auth-errors';
 import { useAuth } from '@/features/auth/hooks/useAuth';
+import { passwordMeetsLength } from '@/features/auth/password-policy';
+import { PasswordRules } from '@/features/auth/password-rules';
 
 export function RecoveryScreen() {
   const router = useRouter();
@@ -41,7 +44,7 @@ export function RecoveryScreen() {
       await confirmPasswordRecovery(code.trim(), password);
       router.replace('/(public)/sign-in');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not reset the password.');
+      setError(describeAuthError(err, 'We could not reset your password. Please try again.'));
     } finally {
       setBusy(false);
     }
@@ -95,8 +98,12 @@ export function RecoveryScreen() {
                   onChangeText={setPassword}
                   editable={!busy}
                 />
+                <PasswordRules password={password} />
                 {error ? <Text className="text-destructive">{error}</Text> : null}
-                <Button onPress={() => void confirm()} disabled={busy || !code || !password}>
+                <Button
+                  onPress={() => void confirm()}
+                  disabled={busy || !code || !passwordMeetsLength(password)}
+                >
                   <Text>{busy ? 'Saving…' : 'Set new password'}</Text>
                 </Button>
               </>

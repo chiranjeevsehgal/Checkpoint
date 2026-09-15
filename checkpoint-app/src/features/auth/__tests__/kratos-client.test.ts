@@ -6,6 +6,7 @@ import {
   identityEmail,
   identityName,
   logout,
+  messagesFrom,
   recoverySessionToken,
   resolveRequestUrl,
   submitLogin,
@@ -31,6 +32,40 @@ describe('resolveRequestUrl', () => {
       ),
       'http://192.168.1.5:4433/self-service/registration?flow=abc',
     );
+  });
+});
+
+describe('messagesFrom', () => {
+  it('reads node-scoped Kratos messages', () => {
+    const body = {
+      ui: {
+        nodes: [
+          { messages: [{ text: 'The new password must be different from the old password.' }] },
+        ],
+      },
+    };
+    assert.deepEqual(messagesFrom(body), [
+      'The new password must be different from the old password.',
+    ]);
+  });
+
+  it('reads the generic error reason', () => {
+    assert.deepEqual(messagesFrom({ error: { reason: 'boom' } }), ['boom']);
+  });
+
+  it('deduplicates repeated messages', () => {
+    const body = {
+      ui: {
+        messages: [{ text: 'same' }],
+        nodes: [{ messages: [{ text: 'same' }] }],
+      },
+    };
+    assert.deepEqual(messagesFrom(body), ['same']);
+  });
+
+  it('returns an empty list for an unknown body', () => {
+    assert.deepEqual(messagesFrom(undefined), []);
+    assert.deepEqual(messagesFrom({}), []);
   });
 });
 
