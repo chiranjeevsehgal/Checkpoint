@@ -1,0 +1,35 @@
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">Checkpoint<span>.</span>Admin</div>
+    <nav class="nav">
+      @for (item of navItems; track item.path) {
+        <a
+          class="nav-link"
+          [routerLink]="item.path"
+          routerLinkActive="active"
+          [routerLinkActiveOptions]="{ exact: item.path === '/' }"
+        >
+          {{ item.label }}
+        </a>
+      }
+    </nav>
+  </aside>
+
+  <div class="body">
+    <header class="topbar">
+      <h1 class="page-title">{{ title() }}</h1>
+      <div class="topbar-actions">
+        <span class="pill" [class.badge-primary]="busy()">{{ busy() ? 'Working…' : 'Idle' }}</span>
+        <button class="btn btn-ghost" type="button" (click)="toggleTheme()">
+          {{ dark() ? 'Light' : 'Dark' }}
+        </button>
+      </div>
+    </header>
+
+    <main class="main">
+      <div class="container">
+        <router-outlet />
+      </div>
+    </main>
+  </div>
+</div>

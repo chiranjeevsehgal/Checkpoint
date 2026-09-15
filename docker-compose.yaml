@@ -294,6 +294,9 @@ services:
         condition: service_completed_successfully
     ports:
       - "4433:4433"
+      # Loopback-only so the local admin-console agent can reach the admin API
+      # without exposing it to the network (Kratos admin has no auth of its own).
+      - "127.0.0.1:4434:4434"
     environment:
       DSN: postgres://kratos:${KRATOS_DB_PASSWORD:-kratos_db_password}@postgres:5432/kratos?sslmode=disable
       # Public URL advertised in flow ui.action; must be reachable by the
