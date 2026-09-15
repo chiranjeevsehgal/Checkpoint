@@ -5,12 +5,14 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"checkpoint/ingestion/internal/domain"
@@ -45,6 +47,12 @@ func main() {
 		status(ctx, conn, os.Args[2:])
 	case "unquarantine":
 		unquarantine(ctx, conn, os.Args[2:])
+	case "list":
+		list(ctx, conn, os.Args[2:])
+	case "deletions":
+		deletions(ctx, conn, os.Args[2:])
+	case "delete-account":
+		deleteAccount(ctx, conn, os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -52,7 +60,8 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: device-admin <provision|status|unquarantine> [flags]")
+	fmt.Fprintln(os.Stderr,
+		"usage: device-admin <provision|status|unquarantine|list|deletions|delete-account> [flags]")
 }
 
 func provision(ctx context.Context, conn *pgx.Conn, args []string) {
@@ -132,8 +141,180 @@ func status(ctx context.Context, conn *pgx.Conn, args []string) {
 		ownerText = *owner
 	}
 	fmt.Printf("device_id=%s\nstate=%s\nowner=%s\n", deviceID, state, ownerText)
-	if claimedAt != nil {
-		fmt.Printf("claimed_at=%s\n", claimedAt.UTC().Format(time.RFC3339))
+	if formatted := formatTimePtr(claimedAt); formatted != nil {
+		fmt.Printf("claimed_at=%s\n", *formatted)
+	}
+}
+
+type deviceRow struct {
+	DeviceID  string  `json:"device_id"`
+	UserID    *string `json:"user_id"`
+	State     string  `json:"state"`
+	ClaimedAt *string `json:"claimed_at"`
+	UpdatedAt string  `json:"updated_at"`
+}
+
+// list prints every device, optionally filtered by state. -json emits a
+// machine-readable array for the admin-console agent.
+func list(ctx context.Context, conn *pgx.Conn, args []string) {
+	fs := flag.NewFlagSet("list", flag.ExitOnError)
+	stateFlag := fs.String("state", "", "filter by state (unowned|owned|reset_required)")
+	jsonFlag := fs.Bool("json", false, "emit JSON")
+	_ = fs.Parse(args)
+
+	if *stateFlag != "" && !validDeviceState(*stateFlag) {
+		fail("invalid -state: must be unowned, owned or reset_required")
+	}
+
+	query := `SELECT device_id, user_id::text, state, claimed_at, updated_at FROM devices`
+	var queryArgs []any
+	if *stateFlag != "" {
+		query += ` WHERE state = $1`
+		queryArgs = append(queryArgs, *stateFlag)
+	}
+	query += ` ORDER BY updated_at DESC`
+
+	rows, err := conn.Query(ctx, query, queryArgs...)
+	if err != nil {
+		fail("list devices: %v", err)
+	}
+	defer rows.Close()
+
+	devices := make([]deviceRow, 0)
+	for rows.Next() {
+		var (
+			row       deviceRow
+			claimedAt *time.Time
+			updatedAt time.Time
+		)
+		if err := rows.Scan(&row.DeviceID, &row.UserID, &row.State, &claimedAt, &updatedAt); err != nil {
+			fail("scan device: %v", err)
+		}
+		row.ClaimedAt = formatTimePtr(claimedAt)
+		row.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+		devices = append(devices, row)
+	}
+	if err := rows.Err(); err != nil {
+		fail("list devices: %v", err)
+	}
+
+	if *jsonFlag {
+		writeJSON(devices)
+		return
+	}
+	for _, device := range devices {
+		owner := "none"
+		if device.UserID != nil {
+			owner = *device.UserID
+		}
+		fmt.Printf("%s state=%s owner=%s updated_at=%s\n", device.DeviceID, device.State, owner, device.UpdatedAt)
+	}
+}
+
+type deletionRow struct {
+	UserID        string  `json:"user_id"`
+	Status        string  `json:"status"`
+	AttemptCount  int     `json:"attempt_count"`
+	LastError     *string `json:"last_error"`
+	NextAttemptAt string  `json:"next_attempt_at"`
+	CreatedAt     string  `json:"created_at"`
+	UpdatedAt     string  `json:"updated_at"`
+	CompletedAt   *string `json:"completed_at"`
+}
+
+// deletions lists the account-deletion tombstones and their worker status.
+func deletions(ctx context.Context, conn *pgx.Conn, args []string) {
+	fs := flag.NewFlagSet("deletions", flag.ExitOnError)
+	jsonFlag := fs.Bool("json", false, "emit JSON")
+	_ = fs.Parse(args)
+
+	rows, err := conn.Query(ctx, `
+		SELECT user_id::text, status, attempt_count, last_error, next_attempt_at, created_at, updated_at, completed_at
+		FROM account_deletions ORDER BY created_at DESC`)
+	if err != nil {
+		fail("list deletions: %v", err)
+	}
+	defer rows.Close()
+
+	items := make([]deletionRow, 0)
+	for rows.Next() {
+		var (
+			row         deletionRow
+			nextAttempt time.Time
+			createdAt   time.Time
+			updatedAt   time.Time
+			completedAt *time.Time
+		)
+		if err := rows.Scan(&row.UserID, &row.Status, &row.AttemptCount, &row.LastError,
+			&nextAttempt, &createdAt, &updatedAt, &completedAt); err != nil {
+			fail("scan deletion: %v", err)
+		}
+		row.NextAttemptAt = nextAttempt.UTC().Format(time.RFC3339)
+		row.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+		row.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+		row.CompletedAt = formatTimePtr(completedAt)
+		items = append(items, row)
+	}
+	if err := rows.Err(); err != nil {
+		fail("list deletions: %v", err)
+	}
+
+	if *jsonFlag {
+		writeJSON(items)
+		return
+	}
+	for _, item := range items {
+		fmt.Printf("%s status=%s attempts=%d updated_at=%s\n", item.UserID, item.Status, item.AttemptCount, item.UpdatedAt)
+	}
+}
+
+// deleteAccount queues an account-deletion tombstone; the ingestion worker
+// performs the actual purge, including device quarantine and identity removal.
+func deleteAccount(ctx context.Context, conn *pgx.Conn, args []string) {
+	fs := flag.NewFlagSet("delete-account", flag.ExitOnError)
+	userFlag := fs.String("user", "", "identity UUID")
+	_ = fs.Parse(args)
+
+	userID, err := uuid.Parse(strings.TrimSpace(*userFlag))
+	if err != nil {
+		fail("invalid -user: %v", err)
+	}
+
+	tag, err := conn.Exec(ctx, `
+		INSERT INTO account_deletions (user_id) VALUES ($1)
+		ON CONFLICT (user_id) DO NOTHING`, userID.String())
+	if err != nil {
+		fail("queue account deletion: %v", err)
+	}
+	if tag.RowsAffected() == 0 {
+		fmt.Printf("already queued %s\n", userID)
+		return
+	}
+	fmt.Printf("queued %s\n", userID)
+}
+
+func validDeviceState(state string) bool {
+	switch state {
+	case domain.DeviceStateUnowned, domain.DeviceStateOwned, domain.DeviceStateResetRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+func formatTimePtr(value *time.Time) *string {
+	if value == nil {
+		return nil
+	}
+	formatted := value.UTC().Format(time.RFC3339)
+	return &formatted
+}
+
+func writeJSON(value any) {
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
+		fail("encode json: %v", err)
 	}
 }
 
