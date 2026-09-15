@@ -166,6 +166,19 @@ func (p *PostgresStore) ClaimBatch(ctx context.Context, userID, extractionType s
 // one transaction. Todos are replaced per audio (DELETE then INSERT) so a
 // redelivery or re-run can neither duplicate nor leave stale rows.
 func (p *PostgresStore) CompleteBatch(ctx context.Context, results []model.Result, llmModel string) error {
+	if len(results) == 0 {
+		return nil
+	}
+	// The account may have been deleted while the LLM call ran; never
+	// re-create todos for a tombstoned user.
+	deleting, err := p.IsUserDeleting(ctx, results[0].UserID)
+	if err != nil {
+		return fmt.Errorf("checking tombstone before persisting: %w", err)
+	}
+	if deleting {
+		return nil
+	}
+
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning complete-batch tx: %w", err)

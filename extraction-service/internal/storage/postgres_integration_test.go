@@ -75,6 +75,33 @@ func TestIsUserDeletingFalseWithoutTombstone(t *testing.T) {
 	}
 }
 
+func TestCompleteBatchSkipsTombstonedUser(t *testing.T) {
+	store, pool := newTestStore(t)
+	ctx := context.Background()
+	userID := "7c4a1f6e-0000-4000-8000-00000000ba7e"
+	audioID := "7c4a1f6e-0000-4000-8000-00000000ba7f"
+	seedTombstone(t, pool, userID)
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM todos WHERE user_id = $1`, userID)
+	})
+
+	if err := store.CompleteBatch(ctx, []model.Result{{
+		UserID: userID, AudioID: audioID, Todos: []string{"resurrected"},
+	}}, "test-model"); err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM todos WHERE user_id = $1`, userID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("tombstoned user must not get todos, found %d", count)
+	}
+}
+
 func TestReadyUsersExcludesTombstonedUsers(t *testing.T) {
 	store, pool := newTestStore(t)
 	ctx := context.Background()

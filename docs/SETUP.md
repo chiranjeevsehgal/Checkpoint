@@ -153,7 +153,7 @@ curl -X POST localhost:8080/v1/uploads/<id>/complete \
 
 `DELETE /v1/me` records a deletion tombstone (202) and returns immediately; the
 in-process deletion worker purges MinIO objects, uploads, transcripts,
-embeddings and finally the Kratos identity. It requires a fresh session or an
+embeddings, extraction jobs/todos and finally the Kratos identity. It requires a fresh session or an
 email verified within the last 5 minutes. Release a pendant with
 `POST /v1/device/release` only within 5 minutes of a fresh login.
 
