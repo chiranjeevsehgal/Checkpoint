@@ -40,10 +40,10 @@ func NewElevenLabsProvider(cfg config.ElevenLabsConfig) *ElevenLabsProvider {
 
 func (e *ElevenLabsProvider) Name() string { return "elevenlabs" }
 
-func (e *ElevenLabsProvider) Transcribe(ctx context.Context, audio []byte, contentType string) (*model.TranscriptResult, error) {
+func (e *ElevenLabsProvider) Transcribe(ctx context.Context, audio []byte, contentType string, languages []string) (*model.TranscriptResult, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		result, retryable, err := e.attempt(ctx, audio, contentType)
+		result, retryable, err := e.attempt(ctx, audio, contentType, languages)
 		if err == nil {
 			return result, nil
 		}
@@ -64,8 +64,8 @@ func (e *ElevenLabsProvider) Transcribe(ctx context.Context, audio []byte, conte
 	return nil, fmt.Errorf("elevenlabs failed after %d attempts: %w", maxAttempts, lastErr)
 }
 
-func (e *ElevenLabsProvider) attempt(ctx context.Context, audio []byte, contentType string) (*model.TranscriptResult, bool, error) {
-	body, boundary, err := buildMultipartBody(audio, contentType, e.modelID, e.diarize, e.tagAudioEvents)
+func (e *ElevenLabsProvider) attempt(ctx context.Context, audio []byte, contentType string, languages []string) (*model.TranscriptResult, bool, error) {
+	body, boundary, err := buildMultipartBody(audio, contentType, e.modelID, e.diarize, e.tagAudioEvents, singleLanguage(languages))
 	if err != nil {
 		return nil, false, err
 	}
@@ -103,12 +103,26 @@ func (e *ElevenLabsProvider) attempt(ctx context.Context, audio []byte, contentT
 	return nil, true, fmt.Errorf("elevenlabs server error: %d %s", resp.StatusCode, string(respBody))
 }
 
-func buildMultipartBody(audio []byte, contentType, modelID string, diarize, tagAudioEvents bool) (*bytes.Buffer, string, error) {
+// singleLanguage forces language_code only when the user selected exactly one
+// language; a multi-language selection must be auto-detected.
+func singleLanguage(languages []string) string {
+	if len(languages) == 1 {
+		return languages[0]
+	}
+	return ""
+}
+
+func buildMultipartBody(audio []byte, contentType, modelID string, diarize, tagAudioEvents bool, languageCode string) (*bytes.Buffer, string, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
 	if err := writer.WriteField("model_id", modelID); err != nil {
 		return nil, "", fmt.Errorf("writing model_id field: %w", err)
+	}
+	if languageCode != "" {
+		if err := writer.WriteField("language_code", languageCode); err != nil {
+			return nil, "", fmt.Errorf("writing language_code field: %w", err)
+		}
 	}
 	if err := writer.WriteField("diarize", strconv.FormatBool(diarize)); err != nil {
 		return nil, "", fmt.Errorf("writing diarize field: %w", err)

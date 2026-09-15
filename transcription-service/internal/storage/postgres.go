@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -50,6 +51,25 @@ func (p *PostgresStore) IsUserDeleting(ctx context.Context, userID string) (bool
 		return false, err
 	}
 	return deleting, nil
+}
+
+// AllowedLanguages returns the user's selected STT languages. A missing row
+// or missing table (split deployment) means no filtering.
+func (p *PostgresStore) AllowedLanguages(ctx context.Context, userID string) ([]string, error) {
+	var languages []string
+	err := p.pool.QueryRow(ctx,
+		`SELECT languages FROM user_settings WHERE user_id = $1::uuid`, userID).Scan(&languages)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return languages, nil
 }
 
 func (p *PostgresStore) SaveTranscript(ctx context.Context, t *model.TranscriptResult) error {
