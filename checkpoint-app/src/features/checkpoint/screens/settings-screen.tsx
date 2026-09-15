@@ -81,10 +81,12 @@ function SpeechSection({
   settings,
   apply,
   applySilent,
+  onOpenLanguages,
 }: {
   settings: CheckpointSettings;
   apply: Apply;
   applySilent: Apply;
+  onOpenLanguages: () => void;
 }) {
   return (
     <Section title="Speech">
@@ -115,6 +117,12 @@ function SpeechSection({
           hint={`Clips shorter than ${settings.minSpeechS.toFixed(1)}s are dropped as noise.`}
           onChange={(value) => applySilent({ minSpeechS: Number(value.toFixed(1)) })}
         />
+        <Button variant="outline" onPress={onOpenLanguages}>
+          <Text>Transcription languages</Text>
+        </Button>
+        <Text variant="muted" className="text-[11px]">
+          Only transcribe the languages you select. Leave empty to transcribe all.
+        </Text>
       </Card>
     </Section>
   );
@@ -341,7 +349,12 @@ export function CheckpointSettingsScreen() {
         contentContainerStyle={{ gap: 24, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
       >
-        <SpeechSection settings={settings} apply={apply} applySilent={applySilent} />
+        <SpeechSection
+          settings={settings}
+          apply={apply}
+          applySilent={applySilent}
+          onOpenLanguages={() => router.push('/languages')}
+        />
         <TransferSection settings={settings} apply={apply} applySilent={applySilent} />
         <BackendSection
           settings={settings}
