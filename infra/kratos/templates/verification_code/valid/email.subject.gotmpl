@@ -1,0 +1,7 @@
+{{- $context := "" -}}
+{{- with .TransientPayload }}{{ $context = printf "%v" (index . "context") }}{{ end -}}
+{{- if eq $context "account_deletion" -}}
+Confirm your Checkpoint account deletion
+{{- else -}}
+Verify your email address
+{{- end -}}

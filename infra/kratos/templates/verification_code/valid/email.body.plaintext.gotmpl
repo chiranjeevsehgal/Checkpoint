@@ -1,0 +1,19 @@
+{{- $context := "" -}}
+{{- with .TransientPayload }}{{ $context = printf "%v" (index . "context") }}{{ end -}}
+{{- if eq $context "account_deletion" -}}
+You asked to delete your Checkpoint account.
+
+Enter this code to confirm the deletion:
+
+{{ .VerificationCode }}
+
+This code expires in {{ .ExpiresInMinutes }} minutes. If you didn't request this, ignore this email and your account stays as it is.
+{{- else -}}
+Welcome to Checkpoint.
+
+Enter this code to verify your email address:
+
+{{ .VerificationCode }}
+
+This code expires in {{ .ExpiresInMinutes }} minutes. If you didn't create a Checkpoint account, you can ignore this email.
+{{- end -}}

@@ -111,3 +111,5 @@ session:
 courier:
   smtp:
     connection_uri: smtp://mailpit:1025/?disable_starttls=true
+  # Overrides live under infra/kratos/templates, mounted with the config dir.
+  template_override_path: /etc/config/kratos/templates

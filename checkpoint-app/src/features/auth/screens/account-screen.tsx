@@ -53,7 +53,7 @@ export function AccountScreen() {
     setBusy(true);
     setError(null);
     try {
-      await requestEmailVerification(email ?? '');
+      await requestEmailVerification(email ?? '', { context: 'account_deletion' });
       setDeleteCodeSent(true);
     } catch (err) {
       setError(describeAuthError(err, 'We could not send a confirmation code. Please try again.'));

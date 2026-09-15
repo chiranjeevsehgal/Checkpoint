@@ -12,6 +12,7 @@ import {
   submitLogin,
   submitPasswordChange,
   submitRegistration,
+  submitVerificationEmail,
   verificationFlowFromContinueWith,
   whoami,
   type KratosTransport,
@@ -200,6 +201,43 @@ describe('kratos flow submissions', () => {
       token: 'sess',
       body: { method: 'password', password: 'new' },
     });
+  });
+
+  it('submits verification email with a transient payload', async () => {
+    const calls: { body: unknown }[] = [];
+    const transport: KratosTransport = {
+      request(_method, _path, body) {
+        calls.push({ body });
+        return Promise.resolve({} as never);
+      },
+    };
+    await submitVerificationEmail(
+      transport,
+      { id: 'f', ui: { action: '/self-service/verification?flow=f', method: 'POST' } },
+      'a@b.c',
+      { context: 'account_deletion' },
+    );
+    assert.deepEqual(calls[0]?.body, {
+      method: 'code',
+      email: 'a@b.c',
+      transient_payload: { context: 'account_deletion' },
+    });
+  });
+
+  it('omits the verification transient payload when not provided', async () => {
+    const calls: { body: unknown }[] = [];
+    const transport: KratosTransport = {
+      request(_method, _path, body) {
+        calls.push({ body });
+        return Promise.resolve({} as never);
+      },
+    };
+    await submitVerificationEmail(
+      transport,
+      { id: 'f', ui: { action: '/self-service/verification?flow=f', method: 'POST' } },
+      'a@b.c',
+    );
+    assert.deepEqual(calls[0]?.body, { method: 'code', email: 'a@b.c' });
   });
 
   it('logs out with DELETE', async () => {

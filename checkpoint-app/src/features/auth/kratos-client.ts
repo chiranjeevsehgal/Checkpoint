@@ -206,8 +206,13 @@ export function submitVerificationEmail(
   t: KratosTransport,
   flow: KratosFlow,
   email: string,
+  transientPayload?: Record<string, unknown>,
 ): Promise<unknown> {
-  return t.request<unknown>('POST', flow.ui.action, { method: 'code', email });
+  return t.request<unknown>('POST', flow.ui.action, {
+    method: 'code',
+    email,
+    ...(transientPayload ? { transient_payload: transientPayload } : {}),
+  });
 }
 
 export function submitVerificationCode(

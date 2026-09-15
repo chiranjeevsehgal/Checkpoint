@@ -174,10 +174,13 @@ export async function reauthenticate(password: string): Promise<void> {
   }
 }
 
-export async function requestEmailVerification(email: string): Promise<void> {
+export async function requestEmailVerification(
+  email: string,
+  transientPayload?: Record<string, unknown>,
+): Promise<void> {
   const flow = await createVerificationFlow(transport);
   pendingVerification = flow;
-  await submitVerificationEmail(transport, flow, email);
+  await submitVerificationEmail(transport, flow, email, transientPayload);
 }
 
 export async function confirmEmailVerification(code: string): Promise<void> {
