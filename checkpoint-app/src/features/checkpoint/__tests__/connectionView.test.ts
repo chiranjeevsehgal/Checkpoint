@@ -4,7 +4,6 @@ import { describe, it } from 'node:test';
 import {
   connectionActivity,
   formatFingerprint,
-  levelPercent,
   signalLabel,
   signalLevel,
 } from '../connectionView.ts';
@@ -54,22 +53,6 @@ describe('connectionActivity', () => {
       connectionActivity({ connected: true, recording: false, vadActive: false, syncing: 0 }),
       { label: 'Idle', tone: 'connected' },
     );
-  });
-});
-
-describe('levelPercent', () => {
-  it('reads empty at and below the silence floor', () => {
-    assert.equal(levelPercent(-54), 0);
-    assert.equal(levelPercent(-90), 0);
-  });
-
-  it('reads full at and above full scale', () => {
-    assert.equal(levelPercent(0), 100);
-    assert.equal(levelPercent(3), 100);
-  });
-
-  it('scales linearly between the floor and full scale', () => {
-    assert.equal(levelPercent(-27), 50);
   });
 });
 
