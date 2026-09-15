@@ -166,7 +166,9 @@ For a Metro/dev-client loop instead, use `npm run android`.
 
 1. **Create account**: Sign up with a name, email + password (min 12 chars).
 2. **Verify email**: tap "Send code", then read the 6-digit code in Mailpit
-   (`http://localhost:8025`) and enter it.
+   (`http://localhost:8025`) and enter it. Unverified identities are deleted
+   after `IDENTITY_TTL_HOURS` (default 1h); use "Use a different email" on that
+   screen to abandon a mistyped signup and start over.
 3. **Pair pendant**: hold the button 5 s (60 s window), open
    **Pendant → Set up pendant**, paste the `auth export` claim key (or scan the
    URI), tap **Find & link**. The app fetches the cloud secret over the

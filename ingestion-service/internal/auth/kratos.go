@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,14 +64,27 @@ type whoamiSession struct {
 	Active          bool   `json:"active"`
 	AuthenticatedAt string `json:"authenticated_at"`
 	Identity        struct {
-		ID                  string `json:"id"`
-		VerifiableAddresses []struct {
-			Via        string  `json:"via"`
-			Verified   bool    `json:"verified"`
-			Status     string  `json:"status"`
-			VerifiedAt *string `json:"verified_at"`
-		} `json:"verifiable_addresses"`
+		ID                  string              `json:"id"`
+		VerifiableAddresses []VerifiableAddress `json:"verifiable_addresses"`
 	} `json:"identity"`
+}
+
+// VerifiableAddress is a Kratos address that can complete verification.
+type VerifiableAddress struct {
+	Via        string  `json:"via"`
+	Verified   bool    `json:"verified"`
+	Status     string  `json:"status"`
+	VerifiedAt *string `json:"verified_at"`
+}
+
+// HasVerifiedEmail reports whether any email address completed verification.
+func HasVerifiedEmail(addresses []VerifiableAddress) bool {
+	for _, address := range addresses {
+		if address.Via == "email" && address.Verified && address.Status == "completed" {
+			return true
+		}
+	}
+	return false
 }
 
 // Authenticate calls GET /sessions/whoami and maps the result to a Principal
@@ -148,6 +163,14 @@ type IdentityDeleter interface {
 	DeleteIdentity(ctx context.Context, identityID string) error
 }
 
+// Identity is the subset of a Kratos identity needed for lifecycle cleanup.
+type Identity struct {
+	ID                  string              `json:"id"`
+	State               string              `json:"state"`
+	CreatedAt           time.Time           `json:"created_at"`
+	VerifiableAddresses []VerifiableAddress `json:"verifiable_addresses"`
+}
+
 // KratosAdmin is the private-infrastructure client for identity deletion.
 type KratosAdmin struct {
 	adminURL string
@@ -160,6 +183,61 @@ func NewKratosAdmin(adminURL string, timeout time.Duration) *KratosAdmin {
 		adminURL: strings.TrimRight(adminURL, "/"),
 		client:   &http.Client{Timeout: timeout},
 	}
+}
+
+// ListIdentities returns one page of identities and the token for the next
+// page (empty when there are no more pages).
+func (a *KratosAdmin) ListIdentities(ctx context.Context, pageSize int, pageToken string) ([]Identity, string, error) {
+	u, err := url.Parse(a.adminURL + "/admin/identities")
+	if err != nil {
+		return nil, "", fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
+	}
+	query := u.Query()
+	query.Set("page_size", strconv.Itoa(pageSize))
+	if pageToken != "" {
+		query.Set("page_token", pageToken)
+	}
+	u.RawQuery = query.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("%w: %v", ErrProviderUnavailable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", fmt.Errorf("%w: kratos admin status %d", ErrProviderUnavailable, resp.StatusCode)
+	}
+	var identities []Identity
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&identities); err != nil {
+		return nil, "", fmt.Errorf("%w: decode identities: %v", ErrProviderUnavailable, err)
+	}
+	return identities, nextPageToken(resp.Header.Get("Link")), nil
+}
+
+// nextPageToken extracts page_token from a Link header entry with rel="next".
+func nextPageToken(header string) string {
+	for _, part := range strings.Split(header, ",") {
+		if !strings.Contains(part, `rel="next"`) {
+			continue
+		}
+		start, end := strings.Index(part, "<"), strings.Index(part, ">")
+		if start < 0 || end <= start {
+			continue
+		}
+		u, err := url.Parse(part[start+1 : end])
+		if err != nil {
+			continue
+		}
+		return u.Query().Get("page_token")
+	}
+	return ""
 }
 
 // DeleteIdentity deletes an identity and its sessions. A missing identity
@@ -252,10 +330,5 @@ func (a *KratosAdmin) disableSession(ctx context.Context, sessionID string) erro
 }
 
 func hasVerifiedEmail(session whoamiSession) bool {
-	for _, address := range session.Identity.VerifiableAddresses {
-		if address.Via == "email" && address.Verified && address.Status == "completed" {
-			return true
-		}
-	}
-	return false
+	return HasVerifiedEmail(session.Identity.VerifiableAddresses)
 }

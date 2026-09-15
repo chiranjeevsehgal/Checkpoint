@@ -153,6 +153,8 @@ services:
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC_TRANSCRIPTION: ${KAFKA_TOPIC_TRANSCRIPTION:-transcription.jobs.v1}
       KAFKA_CLIENT_ID: ingestion-api
+      IDENTITY_TTL_HOURS: ${IDENTITY_TTL_HOURS:-1}
+      IDENTITY_CLEANUP_INTERVAL_MINUTES: ${IDENTITY_CLEANUP_INTERVAL_MINUTES:-15}
     restart: unless-stopped
 
   kafka-init:

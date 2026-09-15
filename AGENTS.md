@@ -51,6 +51,7 @@ docker compose ps        # postgres + kafka should be healthy
 - `MINIO_ENDPOINT` (API→MinIO, e.g. `minio:9000` in compose) vs `MINIO_PUBLIC_ENDPOINT` (host placed in presigned URLs, e.g. `localhost:9000`). `/health/ready` checks Postgres + MinIO only, not Kafka.
 - Outbox dispatcher runs in-process in every API replica (`SKIP LOCKED` claiming) and retries broker errors indefinitely by design.
 - `config.Load()` is strict: bad `MINIO_USE_SSL`/`PORT`/negative durations fail fast; production requires `DATABASE_URL`, `DATABASE_REQUEST_URL`, `DATABASE_WORKER_URL`, `KRATOS_PUBLIC_URL`, `MINIO_ACCESS_KEY/SECRET_KEY`, `MINIO_BUCKET`, `KAFKA_BROKERS`. In development the request/worker URLs fall back to `DATABASE_URL`. `CONFIG_FILE` overrides the yaml path.
+- Unverified identities are reaped: the `identitycleanup` worker deletes identities with no completed email verification older than `IDENTITY_TTL_HOURS` (default 1h) every `IDENTITY_CLEANUP_INTERVAL_MINUTES` (default 15m), sweeping once at startup. Kratos writes the row at registration, so this bounds abandoned/mistyped signups.
 
 ## Native app quirks (`checkpoint-app/`)
 
@@ -61,6 +62,7 @@ docker compose ps        # postgres + kafka should be healthy
 - Forget is local-only; Release = fresh re-auth + BLE erase + clear trusted slots + cloud release. Test glob is `src/**/__tests__/*.test.ts` (`npm test`).
 - Sign-out, account deletion and 401 session loss wipe local recordings: `AuthSyncBridge` calls `syncEngine.clearLocalData()`, deleting `document/checkpoint/` (received audio, part files, `transfers.json`). A transient `unavailable` status never clears.
 - Signup collects a mandatory `name` (Kratos trait `name` is `required` in `infra/kratos/identity.schema.json`). Changing a password re-authenticates with the current password first, then refreshes the privileged session Kratos needs (`privileged_session_max_age: 5m`); recovery (forgot password) never asks for it.
+- The verify-email screen is pinned to the account email; `Use a different email` signs out so a mistyped signup can be redone. Unverified identities are reaped server-side (see ingestion quirks).
 
 ## Transcription worker quirks
 

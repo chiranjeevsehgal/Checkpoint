@@ -18,6 +18,7 @@ import (
 	"checkpoint/ingestion/internal/config"
 	"checkpoint/ingestion/internal/deletion"
 	apihttp "checkpoint/ingestion/internal/http"
+	"checkpoint/ingestion/internal/identitycleanup"
 	"checkpoint/ingestion/internal/metrics"
 	"checkpoint/ingestion/internal/outbox"
 	"checkpoint/ingestion/internal/queue"
@@ -116,12 +117,20 @@ func main() {
 
 	runCtx, cancelRun := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	wg.Add(3)
+	workers := 3
+	if kratosAdmin != nil {
+		workers++
+	}
+	wg.Add(workers)
 	go func() { defer wg.Done(); dispatcher.Run(runCtx) }()
 	cleaner := cleanup.NewCleaner(workerPool, objectStorage, cfg.UploadExpiry, cfg.CleanupInterval, logger)
 	go func() { defer wg.Done(); cleaner.Run(runCtx) }()
 	deletionWorker := deletion.NewWorker(workerPool, objectStorage, identityDeleter, logger)
 	go func() { defer wg.Done(); deletionWorker.Run(runCtx) }()
+	if kratosAdmin != nil {
+		reaper := identitycleanup.NewWorker(kratosAdmin, kratosAdmin, cfg.IdentityTTL, cfg.IdentityCleanupInterval, logger)
+		go func() { defer wg.Done(); reaper.Run(runCtx) }()
+	}
 
 	go func() {
 		logger.Info("ingestion api listening", "port", cfg.Port, "env", cfg.Env)

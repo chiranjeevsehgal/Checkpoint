@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func setEnv(t *testing.T, k, v string) {
@@ -166,6 +167,28 @@ func TestLoadInvalidBoolAndPort(t *testing.T) {
 	setEnv(t, "UPLOAD_EXPIRY_HOURS", "-1")
 	if _, err := Load(); err == nil {
 		t.Fatal("negative duration must fail")
+	}
+	setEnv(t, "UPLOAD_EXPIRY_HOURS", "1")
+	setEnv(t, "IDENTITY_TTL_HOURS", "abc")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid identity TTL must fail")
+	}
+}
+
+func TestLoadIdentityCleanupDefaults(t *testing.T) {
+	canonicalForTest(t)
+	setEnv(t, "ENV", "development")
+	setEnv(t, "IDENTITY_TTL_HOURS", "")
+	setEnv(t, "IDENTITY_CLEANUP_INTERVAL_MINUTES", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("dev defaults must load: %v", err)
+	}
+	if cfg.IdentityTTL != time.Hour {
+		t.Fatalf("identity TTL = %v, want 1h", cfg.IdentityTTL)
+	}
+	if cfg.IdentityCleanupInterval != 15*time.Minute {
+		t.Fatalf("cleanup interval = %v, want 15m", cfg.IdentityCleanupInterval)
 	}
 }
 
