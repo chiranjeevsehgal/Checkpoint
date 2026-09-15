@@ -18,6 +18,7 @@ import {
   submitRegistration,
   submitVerificationCode,
   submitVerificationEmail,
+  verificationFlowFromContinueWith,
   whoami,
   type KratosFlow,
   type KratosIdentity,
@@ -133,8 +134,14 @@ export async function initializeAuth(): Promise<void> {
 export async function signUp(name: string, email: string, password: string): Promise<void> {
   const flow = await createRegistrationFlow(transport);
   const result = await submitRegistration(transport, flow, { email, name }, password);
+  pendingVerification = verificationFlowFromContinueWith(result);
   await persistFromAuthResult(result.identity ?? result.session?.identity, result.session_token);
   setState({ status: 'unverified', identityId: result.identity?.id ?? null, email, name });
+}
+
+/** True when registration already emailed a code the app can submit. */
+export function hasPendingVerification(): boolean {
+  return pendingVerification !== null;
 }
 
 export async function signIn(email: string, password: string): Promise<void> {

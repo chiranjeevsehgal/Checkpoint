@@ -152,6 +152,22 @@ export function createRegistrationFlow(t: KratosTransport): Promise<KratosFlow> 
   return t.request<KratosFlow>('GET', '/self-service/registration/api');
 }
 
+/**
+ * Kratos emails a verification code during registration and exposes its flow
+ * through `continue_with` (show_verification_ui). Native flows omit the URL,
+ * so the submit action is rebuilt from the flow id.
+ */
+export function verificationFlowFromContinueWith(
+  result: Pick<KratosAuthResult, 'continue_with'>,
+): KratosFlow | null {
+  const flow = result.continue_with?.find((entry) => entry.action === 'show_verification_ui')?.flow;
+  if (!flow?.id) return null;
+  return {
+    id: flow.id,
+    ui: { action: `/self-service/verification?flow=${flow.id}`, method: 'POST' },
+  };
+}
+
 export function submitRegistration(
   t: KratosTransport,
   flow: KratosFlow,

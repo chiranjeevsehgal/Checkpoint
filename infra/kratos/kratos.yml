@@ -70,9 +70,11 @@ selfservice:
       after:
         password:
           hooks:
-            # No show_verification_ui/verify hook: registration must not send a
-            # code, because the app's verify-email screen sends exactly one.
+            # Kratos sends the registration verification code automatically.
+            # show_verification_ui exposes that flow so the app submits the
+            # code it already emailed instead of requesting a second one.
             - hook: session
+            - hook: show_verification_ui
     verification:
       enabled: true
       use: code

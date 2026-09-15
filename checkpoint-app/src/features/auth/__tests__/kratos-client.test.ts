@@ -12,6 +12,7 @@ import {
   submitLogin,
   submitPasswordChange,
   submitRegistration,
+  verificationFlowFromContinueWith,
   whoami,
   type KratosTransport,
 } from '../kratos-client.ts';
@@ -117,6 +118,26 @@ describe('recoverySessionToken', () => {
 
   it('returns undefined when no token is present', () => {
     assert.equal(recoverySessionToken({ continue_with: [] }), undefined);
+  });
+});
+
+describe('verificationFlowFromContinueWith', () => {
+  it('rebuilds the verification flow exposed by registration', () => {
+    const flow = verificationFlowFromContinueWith({
+      continue_with: [
+        { action: 'show_verification_ui', flow: { id: 'vf-1' } },
+        { action: 'set_ory_session_token', ory_session_token: 't' },
+      ],
+    });
+    assert.deepEqual(flow, {
+      id: 'vf-1',
+      ui: { action: '/self-service/verification?flow=vf-1', method: 'POST' },
+    });
+  });
+
+  it('returns null when no verification flow follows', () => {
+    assert.equal(verificationFlowFromContinueWith({ continue_with: [] }), null);
+    assert.equal(verificationFlowFromContinueWith({}), null);
   });
 });
 

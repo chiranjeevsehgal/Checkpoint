@@ -12,10 +12,17 @@ import { useAuth } from '@/features/auth/hooks/useAuth';
 
 export function VerifyEmailScreen() {
   const router = useRouter();
-  const { email, status, requestEmailVerification, confirmEmailVerification, signOut } = useAuth();
+  const {
+    email,
+    status,
+    requestEmailVerification,
+    confirmEmailVerification,
+    hasPendingVerification,
+    signOut,
+  } = useAuth();
   const [manualEmail, setManualEmail] = useState('');
   const [code, setCode] = useState('');
-  const [sent, setSent] = useState(false);
+  const [sent, setSent] = useState(hasPendingVerification);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const address = email ?? manualEmail;
@@ -99,6 +106,9 @@ export function VerifyEmailScreen() {
                 />
                 <Button onPress={() => void confirm()} disabled={busy || !code}>
                   <Text>{busy ? 'Verifying…' : 'Verify'}</Text>
+                </Button>
+                <Button variant="outline" onPress={() => void send()} disabled={busy}>
+                  <Text>Resend code</Text>
                 </Button>
               </>
             )}
