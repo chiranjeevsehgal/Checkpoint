@@ -54,6 +54,7 @@ export interface ConsoleConfig {
   buildDir: string;
   fqbn: string;
   dockerHost: string;
+  defaultSerialPort: string;
 }
 
 export interface ComposeService {
@@ -84,4 +85,32 @@ export interface SerialEvent {
   open?: boolean;
   path?: string;
   message?: string;
+}
+
+export interface SettingsView {
+  values: Record<string, string>;
+  sources: Record<string, string>;
+  host: string;
+  port: number;
+}
+
+export interface BrowseEntry {
+  name: string;
+  path: string;
+}
+
+export interface BrowseResult {
+  path: string;
+  parent: string | null;
+  entries: BrowseEntry[];
+}
+
+export interface ArduinoCandidate {
+  path: string;
+  version: string;
+}
+
+export interface TestResult {
+  ok: boolean;
+  detail: string;
 }

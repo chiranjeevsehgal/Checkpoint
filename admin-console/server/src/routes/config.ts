@@ -21,5 +21,6 @@ export function registerConfigRoutes(app: FastifyInstance, context: AppContext):
     buildDir: config.buildDir,
     fqbn: config.fqbn,
     dockerHost: config.dockerHost,
+    defaultSerialPort: config.defaultSerialPort,
   }));
 }

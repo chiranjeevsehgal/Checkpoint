@@ -3,6 +3,7 @@ import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, computed, inject
 import { ApiService } from '../../core/api';
 import { EventsService } from '../../core/events';
 import type { SerialEvent } from '../../core/models';
+import { pickDefaultPort } from '../../core/serial';
 
 @Component({
   selector: 'ck-serial',
@@ -135,10 +136,14 @@ export class Serial implements OnInit, OnDestroy {
 
   protected async refresh(): Promise<void> {
     try {
-      const [ports, open] = await Promise.all([this.api.serialPorts(), this.api.serialState()]);
+      const [ports, open, config] = await Promise.all([
+        this.api.serialPorts(),
+        this.api.serialState(),
+        this.api.config(),
+      ]);
       this.ports.set(ports);
       this.open.set(open);
-      if (!this.port() && ports.length) this.port.set(ports[0]);
+      if (!this.port()) this.port.set(pickDefaultPort(config.defaultSerialPort, ports));
       this.error.set('');
     } catch (error) {
       this.error.set(asMessage(error));

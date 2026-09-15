@@ -7,6 +7,7 @@ import { registerEventRoutes } from './events';
 import { registerFirmwareRoutes } from './firmware';
 import { registerInfraRoutes } from './infra';
 import { registerSerialRoutes } from './serial';
+import { registerSettingsRoutes } from './settings';
 import { registerUserRoutes } from './users';
 
 export function registerRoutes(app: FastifyInstance, context: AppContext): void {
@@ -16,5 +17,6 @@ export function registerRoutes(app: FastifyInstance, context: AppContext): void 
   registerDeviceRoutes(app, context);
   registerUserRoutes(app, context);
   registerInfraRoutes(app, context);
+  registerSettingsRoutes(app, context);
   registerEventRoutes(app, context);
 }

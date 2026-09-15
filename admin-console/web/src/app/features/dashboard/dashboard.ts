@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
 import { ApiService } from '../../core/api';
 import type { ComposeService, ConsoleConfig, InfraView } from '../../core/models';
@@ -6,6 +7,7 @@ import type { ComposeService, ConsoleConfig, InfraView } from '../../core/models
 @Component({
   selector: 'ck-dashboard',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [RouterLink],
   template: `
     <div class="page-header">
       <h1 class="page-title">Dashboard</h1>
@@ -73,7 +75,10 @@ import type { ComposeService, ConsoleConfig, InfraView } from '../../core/models
     </div>
 
     <div class="card">
-      <h2>Agent configuration</h2>
+      <div class="row between">
+        <h2>Agent configuration</h2>
+        <a class="btn btn-ghost" routerLink="/settings">Settings</a>
+      </div>
       @if (config(); as view) {
         <table>
           <tbody>

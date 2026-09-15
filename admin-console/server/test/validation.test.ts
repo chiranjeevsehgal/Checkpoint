@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { isClaimHash, isDeviceId, isUuid } from '../src/validation';
+import { isDatabaseUrl, isHttpUrl, isSafeRemotePath } from '../src/validation';
 
 const DEVICE = '474f8bcaff162d3f18fbda36a168f201';
 const HASH = 'ab'.repeat(32);
@@ -35,5 +36,40 @@ describe('isUuid', () => {
 
   it('rejects junk', () => {
     expect(isUuid('not-a-uuid')).toBe(false);
+  });
+});
+
+describe('isHttpUrl', () => {
+  it('accepts http and https urls', () => {
+    expect(isHttpUrl('http://127.0.0.1:4434')).toBe(true);
+    expect(isHttpUrl('https://kratos.example.com')).toBe(true);
+  });
+
+  it('rejects other protocols and junk', () => {
+    expect(isHttpUrl('postgres://db')).toBe(false);
+    expect(isHttpUrl('not a url')).toBe(false);
+  });
+});
+
+describe('isDatabaseUrl', () => {
+  it('accepts postgres urls', () => {
+    expect(isDatabaseUrl('postgres://user:pw@localhost:5432/db?sslmode=disable')).toBe(true);
+    expect(isDatabaseUrl('postgresql://user@host/db')).toBe(true);
+  });
+
+  it('rejects other urls', () => {
+    expect(isDatabaseUrl('http://localhost')).toBe(false);
+  });
+});
+
+describe('isSafeRemotePath', () => {
+  it('accepts simple remote paths', () => {
+    expect(isSafeRemotePath('/srv/checkpoint/ingestion-service')).toBe(true);
+    expect(isSafeRemotePath('~/checkpoint')).toBe(true);
+  });
+
+  it('rejects shell metacharacters and spaces', () => {
+    expect(isSafeRemotePath('/srv/my dir')).toBe(false);
+    expect(isSafeRemotePath('/srv;rm -rf')).toBe(false);
   });
 });

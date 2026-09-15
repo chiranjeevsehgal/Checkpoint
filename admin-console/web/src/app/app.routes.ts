@@ -25,5 +25,9 @@ export const routes: Routes = [
     path: 'deletions',
     loadComponent: () => import('./features/deletions/deletions').then((module) => module.Deletions),
   },
+  {
+    path: 'settings',
+    loadComponent: () => import('./features/settings/settings').then((module) => module.Settings),
+  },
   { path: '**', redirectTo: '' },
 ];

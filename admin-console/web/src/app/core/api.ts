@@ -3,6 +3,8 @@ import { Injectable, inject } from '@angular/core';
 import { firstValueFrom, type Observable } from 'rxjs';
 
 import type {
+  ArduinoCandidate,
+  BrowseResult,
   ConsoleConfig,
   DeletionRecord,
   DeviceRecord,
@@ -10,6 +12,8 @@ import type {
   InfraView,
   ProvisionIdentity,
   Session,
+  SettingsView,
+  TestResult,
 } from './models';
 
 interface OutputResponse {
@@ -128,6 +132,30 @@ export class ApiService {
     return this.request(
       this.http.post<OutputResponse>(`${this.base}/users/${identityId}/delete`, {}),
     ).then((response) => response.output);
+  }
+
+  settings(): Promise<SettingsView> {
+    return this.request(this.http.get<SettingsView>(`${this.base}/settings`));
+  }
+
+  saveSettings(values: Record<string, string>): Promise<SettingsView> {
+    return this.request(this.http.put<SettingsView>(`${this.base}/settings`, { values }));
+  }
+
+  browse(path: string): Promise<BrowseResult> {
+    return this.request(
+      this.http.get<BrowseResult>(`${this.base}/settings/browse`, { params: { path } }),
+    );
+  }
+
+  detectArduino(): Promise<ArduinoCandidate[]> {
+    return this.request(
+      this.http.post<{ candidates: ArduinoCandidate[] }>(`${this.base}/settings/detect-arduino`, {}),
+    ).then((response) => response.candidates);
+  }
+
+  testTarget(target: string, value?: string): Promise<TestResult> {
+    return this.request(this.http.post<TestResult>(`${this.base}/settings/test`, { target, value }));
   }
 
   private async request<T>(source: Observable<T>): Promise<T> {

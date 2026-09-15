@@ -22,6 +22,7 @@ export class App {
     { path: '/serial', label: 'Serial' },
     { path: '/users', label: 'Users' },
     { path: '/deletions', label: 'Deletions' },
+    { path: '/settings', label: 'Settings' },
   ];
 
   protected readonly dark = signal(readStoredTheme());

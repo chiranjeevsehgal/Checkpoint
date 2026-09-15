@@ -11,3 +11,4 @@ __pycache__/
 /admin-console/node_modules
 /admin-console/server/node_modules
 /admin-console/server/dist
+/admin-console/server/data

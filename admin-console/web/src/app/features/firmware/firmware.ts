@@ -3,6 +3,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@a
 import { ApiService } from '../../core/api';
 import { EventsService, isTaskBusy } from '../../core/events';
 import type { ConsoleConfig, TaskEvent } from '../../core/models';
+import { pickDefaultPort } from '../../core/serial';
 
 @Component({
   selector: 'ck-firmware',
@@ -128,8 +129,11 @@ export class Firmware {
 
   private async init(): Promise<void> {
     try {
-      this.config.set(await this.api.config());
-      await this.loadPorts();
+      const config = await this.api.config();
+      this.config.set(config);
+      const ports = await this.api.serialPorts();
+      this.ports.set(ports);
+      if (!this.port()) this.port.set(pickDefaultPort(config.defaultSerialPort, ports));
     } catch (error) {
       this.error.set(asMessage(error));
     }

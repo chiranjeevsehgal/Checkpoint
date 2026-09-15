@@ -43,11 +43,26 @@ Open either `http://localhost:4200` (dev) or `http://127.0.0.1:4300` (built).
 - **Users** — list Kratos identities, revoke sessions, queue account deletions.
 - **Deletions** — watch the account-deletion tombstones drain to `COMPLETE`.
 - **Dashboard** — service health, compose status, effective agent config.
+- **Settings** — per-admin backend URLs, paths, FQBN and device-admin mode; with a directory browser, arduino-cli detection and connection tests.
 
 ## Configuration
 
-Values are read from the repo-root `.env`, then overridden by `admin-console/.env`,
-then by real environment variables. See `.env.example` for every key.
+Most settings are editable in the console's **Settings** page: backend URLs, the
+database URL, `arduino-cli` path, sketch/build directories, FQBN, serial default,
+and how the privileged `device-admin` CLI runs. Values are saved to the gitignored
+`admin-console/server/data/settings.json` and applied without restarting.
+
+Resolution order (highest wins): real environment variables → Settings page
+(`settings.json`) → `admin-console/.env` → repo-root `.env` → built-in defaults.
+The bind address and port (`ADMIN_HOST`/`ADMIN_PORT`) come from the environment and
+need an agent restart.
+
+### Device admin CLI modes
+
+- `go` (default) — `go run ./cmd/device-admin` from the local repo; needs the repo + Go.
+- `binary` — a prebuilt `device-admin` executable (`ADMIN_DEVICE_ADMIN_BINARY`).
+- `ssh` — runs `./device-admin` on a remote host (`ADMIN_DEVICE_ADMIN_SSH_HOST`,
+  `ADMIN_DEVICE_ADMIN_SSH_DIR`); the remote host supplies its own `DATABASE_URL`.
 
 ### Remote services (VPS) with SSH tunnels
 
@@ -58,7 +73,7 @@ VPS, then tunnel from this machine:
 ssh -N -L 15432:127.0.0.1:5432 -L 14434:127.0.0.1:4434 user@your-vps
 ```
 
-and point the agent at the tunnels:
+and point the console at the tunnels (Settings page or `admin-console/.env`):
 
 ```dotenv
 ADMIN_DATABASE_URL=postgres://checkpoint_worker:...@localhost:15432/checkpoint_db?sslmode=disable

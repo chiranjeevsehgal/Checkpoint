@@ -12,14 +12,28 @@ export function buildDeviceAdminArgs(args: string[]): string[] {
   return ['go', 'run', './cmd/device-admin', ...args];
 }
 
+// How the privileged CLI runs: locally via go run, a prebuilt binary, or over
+// SSH against a remote host that already has the binary and its DATABASE_URL.
 export function deviceAdminInvocation(config: AppConfig, args: string[]): DeviceAdminInvocation {
+  if (config.deviceAdminMode === 'binary' && config.deviceAdminBinary) {
+    return { command: [config.deviceAdminBinary, ...args], options: { env: databaseEnv(config) } };
+  }
+  if (config.deviceAdminMode === 'ssh' && config.deviceAdminSshHost && config.deviceAdminSshDir) {
+    const remote = `cd ${config.deviceAdminSshDir} && ./device-admin ${args.map(shellQuote).join(' ')}`;
+    return { command: ['ssh', config.deviceAdminSshHost, remote], options: {} };
+  }
   return {
     command: buildDeviceAdminArgs(args),
-    options: {
-      cwd: resolve(config.repoRoot, 'ingestion-service'),
-      env: { ...process.env, DATABASE_URL: config.databaseUrl },
-    },
+    options: { cwd: resolve(config.repoRoot, 'ingestion-service'), env: databaseEnv(config) },
   };
+}
+
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function databaseEnv(config: AppConfig): NodeJS.ProcessEnv {
+  return { ...process.env, DATABASE_URL: config.databaseUrl };
 }
 
 export interface ProvisionIdentity {
