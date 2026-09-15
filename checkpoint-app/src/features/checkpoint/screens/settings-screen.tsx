@@ -182,6 +182,7 @@ function BackendSection({
   probe: { ok: boolean; latencyMs: number; at: number } | null;
 }) {
   const [serverUrl, setServerUrl] = useState(settings.serverUrl);
+  const dirty = serverUrl.trim() !== settings.serverUrl && serverUrl.trim() !== '';
 
   const save = () => {
     onSave({ serverUrl: serverUrl.trim() });
@@ -203,7 +204,7 @@ function BackendSection({
           />
         </View>
         <View className="flex-row gap-2">
-          <Button variant="outline" className="flex-1" onPress={save}>
+          <Button variant="outline" className="flex-1" disabled={!dirty} onPress={save}>
             <Text>Save server</Text>
           </Button>
           <Button variant="outline" className="flex-1" disabled={testing} onPress={onTest}>

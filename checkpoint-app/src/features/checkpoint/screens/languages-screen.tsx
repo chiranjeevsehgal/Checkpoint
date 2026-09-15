@@ -3,7 +3,7 @@ import { Check } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, View } from 'react-native';
 
-import { filterLanguages } from '../languageView.ts';
+import { filterLanguages, sameSelection, selectedFirst } from '../languageView.ts';
 
 import { AppHeader } from '@/components/shared/app-header';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -57,6 +57,7 @@ export function LanguagesScreen() {
   const { showToast } = useToast();
   const [catalog, setCatalog] = useState<LanguageOption[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
+  const [baseline, setBaseline] = useState<string[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -78,6 +79,7 @@ export function LanguagesScreen() {
         if (cancelled) return;
         setCatalog(settings.available);
         setSelected(settings.languages);
+        setBaseline(settings.languages);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load languages.');
       } finally {
@@ -105,6 +107,7 @@ export function LanguagesScreen() {
     try {
       const saved = await putUserSettings(token, selected);
       setSelected(saved);
+      setBaseline(saved);
       showToast('Languages saved.');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Could not save languages.');
@@ -113,7 +116,11 @@ export function LanguagesScreen() {
     }
   }, [selected, showToast]);
 
-  const visible = useMemo(() => filterLanguages(catalog, query), [catalog, query]);
+  const visible = useMemo(
+    () => selectedFirst(filterLanguages(catalog, query), selected),
+    [catalog, query, selected],
+  );
+  const dirty = !sameSelection(baseline, selected);
 
   return (
     <Screen>
@@ -172,7 +179,7 @@ export function LanguagesScreen() {
 
       <Button
         className="my-3"
-        disabled={saving || loading || error !== null}
+        disabled={saving || loading || error !== null || !dirty}
         onPress={() => void save()}
       >
         <Text>{saving ? 'Saving…' : 'Save'}</Text>

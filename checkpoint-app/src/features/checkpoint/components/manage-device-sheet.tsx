@@ -72,7 +72,7 @@ export function ManageDeviceSheet({ visible, onClose, onSetup }: ManageDeviceShe
                 />
                 <Button
                   variant="outline"
-                  disabled={connected || busy || name.trim() === deviceName}
+                  disabled={connected || busy || name.trim() === '' || name.trim() === deviceName}
                   onPress={saveName}
                 >
                   <Text>Save</Text>
