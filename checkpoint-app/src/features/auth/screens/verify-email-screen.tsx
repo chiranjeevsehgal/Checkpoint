@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView } from 'react-native';
 
@@ -10,12 +11,14 @@ import { describeAuthError } from '@/features/auth/auth-errors';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 
 export function VerifyEmailScreen() {
-  const { email, status, requestEmailVerification, confirmEmailVerification } = useAuth();
-  const [address, setAddress] = useState(email ?? '');
+  const router = useRouter();
+  const { email, status, requestEmailVerification, confirmEmailVerification, signOut } = useAuth();
+  const [manualEmail, setManualEmail] = useState('');
   const [code, setCode] = useState('');
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const address = email ?? manualEmail;
 
   async function send() {
     setBusy(true);
@@ -42,6 +45,12 @@ export function VerifyEmailScreen() {
     }
   }
 
+  async function startOver() {
+    setBusy(true);
+    await signOut();
+    router.replace('/(public)/sign-up');
+  }
+
   return (
     <Screen className="px-6">
       <ScrollView
@@ -60,14 +69,21 @@ export function VerifyEmailScreen() {
             </CardDescription>
           </CardHeader>
           <CardContent className="gap-4">
-            <Input
-              placeholder="Email"
-              keyboardType="email-address"
-              autoCapitalize="none"
-              value={address}
-              onChangeText={setAddress}
-              editable={!busy && !sent}
-            />
+            {email ? (
+              <Text className="text-muted-foreground">
+                We send the code to {email}. Unverified signups are removed automatically, so verify
+                soon.
+              </Text>
+            ) : (
+              <Input
+                placeholder="Email"
+                keyboardType="email-address"
+                autoCapitalize="none"
+                value={manualEmail}
+                onChangeText={setManualEmail}
+                editable={!busy && !sent}
+              />
+            )}
             {!sent ? (
               <Button onPress={() => void send()} disabled={busy || !address}>
                 <Text>{busy ? 'Sending…' : 'Send code'}</Text>
@@ -81,12 +97,15 @@ export function VerifyEmailScreen() {
                   onChangeText={setCode}
                   editable={!busy}
                 />
-                {error ? <Text className="text-destructive">{error}</Text> : null}
                 <Button onPress={() => void confirm()} disabled={busy || !code}>
                   <Text>{busy ? 'Verifying…' : 'Verify'}</Text>
                 </Button>
               </>
             )}
+            {error ? <Text className="text-destructive">{error}</Text> : null}
+            <Button variant="outline" onPress={() => void startOver()} disabled={busy}>
+              <Text>Use a different email</Text>
+            </Button>
           </CardContent>
         </Card>
       </ScrollView>
