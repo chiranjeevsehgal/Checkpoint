@@ -1,0 +1,16 @@
+{
+  "name": "checkpoint-admin-console",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local-only Checkpoint administration console (Angular SPA + local agent)",
+  "scripts": {
+    "dev": "concurrently -n web,server -c cyan,magenta \"npm --prefix web start\" \"npm --prefix server run dev\"",
+    "build": "npm --prefix web run build && npm --prefix server run build",
+    "start": "npm --prefix server run start",
+    "test": "npm --prefix server test && npm --prefix web test",
+    "typecheck": "npm --prefix server run typecheck && npm --prefix web run typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

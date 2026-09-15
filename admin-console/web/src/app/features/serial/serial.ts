@@ -1,0 +1,186 @@
+import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
+
+import { ApiService } from '../../core/api';
+import { EventsService } from '../../core/events';
+import type { SerialEvent } from '../../core/models';
+
+@Component({
+  selector: 'ck-serial',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
+    <div class="page-header">
+      <h1 class="page-title">Serial console</h1>
+      <button class="btn btn-ghost" type="button" (click)="events.clearSerial()">Clear</button>
+    </div>
+
+    @if (error()) {
+      <p class="error">{{ error() }}</p>
+    }
+
+    <div class="card">
+      <div class="row">
+        <div class="field">
+          <label>Port</label>
+          <select [value]="port()" (change)="port.set(selectValue($event))">
+            <option value="">—</option>
+            @for (item of ports(); track item) {
+              <option [value]="item">{{ item }}</option>
+            }
+          </select>
+        </div>
+        <button class="btn btn-ghost" type="button" (click)="refresh()">Refresh</button>
+        <button class="btn" type="button" [class.btn-primary]="!open()" (click)="toggle()">
+          {{ open() ? 'Close' : 'Open' }}
+        </button>
+        <span class="pill">{{ open() ? 'open @115200' : 'closed' }}</span>
+      </div>
+
+      <hr />
+
+      <div class="toolbar">
+        @for (quick of quickCommands; track quick.command) {
+          <button class="btn btn-ghost" type="button" [disabled]="!open()" (click)="send(quick.command)">
+            {{ quick.label }}
+          </button>
+        }
+        <span class="subtle">slot</span>
+        <select [value]="slot()" (change)="slot.set(selectValue($event))">
+          <option value="0">0</option>
+          <option value="1">1</option>
+        </select>
+        <button class="btn btn-ghost" type="button" [disabled]="!open()" (click)="send('auth forget ' + slot())">
+          Forget
+        </button>
+        <button class="btn btn-danger" type="button" [disabled]="!open()" (click)="send('power sleep')">
+          Sleep
+        </button>
+      </div>
+
+      <div class="row">
+        <input
+          [value]="command()"
+          (input)="command.set(inputValue($event))"
+          (keyup.enter)="sendFree()"
+          placeholder="auth reset"
+        />
+        <button class="btn" type="button" [disabled]="!open()" (click)="sendFree()">Send</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Console</h2>
+      <div class="log">
+        @for (entry of log(); track $index) {
+          <div
+            class="log-line"
+            [class.command]="entry.type === 'sent'"
+            [class.error]="entry.type === 'error'"
+          >
+            {{ describe(entry) }}
+          </div>
+        }
+      </div>
+    </div>
+  `,
+})
+export class Serial implements OnInit, OnDestroy {
+  private readonly api = inject(ApiService);
+  protected readonly events = inject(EventsService);
+
+  protected readonly quickCommands = [
+    { command: 'auth list', label: 'List' },
+    { command: 'auth export', label: 'Export' },
+    { command: 'auth provision', label: 'Provision' },
+    { command: 'auth reset', label: 'Reset' },
+  ];
+
+  protected readonly ports = signal<string[]>([]);
+  protected readonly port = signal('');
+  protected readonly slot = signal('0');
+  protected readonly command = signal('');
+  protected readonly open = signal(false);
+  protected readonly error = signal('');
+
+  protected readonly log = computed(() => this.events.serialEvents());
+
+  ngOnInit(): void {
+    this.events.connectSerial();
+    void this.refresh();
+  }
+
+  ngOnDestroy(): void {
+    this.events.disconnectSerial();
+  }
+
+  protected selectValue(event: Event): string {
+    return (event.target as HTMLSelectElement).value;
+  }
+
+  protected inputValue(event: Event): string {
+    return (event.target as HTMLInputElement).value;
+  }
+
+  protected describe(entry: SerialEvent): string {
+    switch (entry.type) {
+      case 'sent':
+        return `> ${entry.line}`;
+      case 'line':
+        return entry.line ?? '';
+      case 'error':
+        return `! ${entry.message}`;
+      default:
+        return `[serial] ${entry.open ? `opened ${entry.path ?? ''}` : 'closed'}`;
+    }
+  }
+
+  protected async refresh(): Promise<void> {
+    try {
+      const [ports, open] = await Promise.all([this.api.serialPorts(), this.api.serialState()]);
+      this.ports.set(ports);
+      this.open.set(open);
+      if (!this.port() && ports.length) this.port.set(ports[0]);
+      this.error.set('');
+    } catch (error) {
+      this.error.set(asMessage(error));
+    }
+  }
+
+  protected async toggle(): Promise<void> {
+    try {
+      if (this.open()) {
+        await this.api.closeSerial();
+        this.open.set(false);
+      } else {
+        await this.api.openSerial(this.port());
+        this.open.set(true);
+      }
+      this.error.set('');
+    } catch (error) {
+      this.error.set(asMessage(error));
+    }
+  }
+
+  protected send(command: string): void {
+    void this.dispatch(command);
+  }
+
+  protected sendFree(): void {
+    const command = this.command().trim();
+    if (!command) return;
+    this.command.set('');
+    void this.dispatch(command);
+  }
+
+  private async dispatch(command: string): Promise<void> {
+    try {
+      await this.api.sendSerial(command);
+      this.error.set('');
+    } catch (error) {
+      this.error.set(asMessage(error));
+    }
+  }
+}
+
+function asMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Request failed';
+}
