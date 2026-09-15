@@ -7,6 +7,7 @@ import {
   confirmPasswordRecovery,
   getAuthState,
   initializeAuth,
+  reauthenticate,
   requestEmailVerification,
   requestPasswordRecovery,
   signIn,
@@ -48,6 +49,7 @@ export function useAuth() {
     requestPasswordRecovery,
     confirmPasswordRecovery,
     changePassword,
+    reauthenticate,
     refresh: initializeAuth,
   };
 }

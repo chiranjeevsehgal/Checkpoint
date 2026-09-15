@@ -1,4 +1,10 @@
-import { ScanMode, type BleManager, type Characteristic, type Device } from 'react-native-ble-plx';
+import {
+  ScanMode,
+  State,
+  type BleManager,
+  type Characteristic,
+  type Device,
+} from 'react-native-ble-plx';
 
 import { base64Decode, base64Encode } from './base64.ts';
 import { BenchRecorder } from './bench.ts';
@@ -1102,6 +1108,25 @@ export class CheckpointClient {
     return res.status ?? CTRL_ERR_NOT_READY;
   }
 
+  private async adapterPoweredOn(): Promise<boolean> {
+    try {
+      return (await this.manager.state()) === State.PoweredOn;
+    } catch {
+      return true;
+    }
+  }
+
+  async readRssi(): Promise<number | null> {
+    const device = this.device;
+    if (!device) return null;
+    try {
+      const updated = await device.readRSSI();
+      return updated.rssi ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async supervise(
     target: string,
     claimKey: Uint8Array | null,
@@ -1118,6 +1143,10 @@ export class CheckpointClient {
     let readyOnce = false;
     const retryOrGiveUp = async (message: string): Promise<boolean> => {
       this.log(message);
+      if (!(await this.adapterPoweredOn())) {
+        this.log('[ble] adapter unavailable — pausing reconnect');
+        return true;
+      }
       if (!readyOnce) {
         this.failedAttempts += 1;
         if (this.failedAttempts >= CONNECT_ATTEMPT_LIMIT) {

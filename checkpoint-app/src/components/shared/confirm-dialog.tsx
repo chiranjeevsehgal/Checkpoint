@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { KeyboardAvoidingView, Modal, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Modal, View } from 'react-native';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 import { Text } from '@/components/ui/text';
 
 interface ConfirmDialogProps {
@@ -11,8 +12,9 @@ interface ConfirmDialogProps {
   body: string;
   confirmLabel: string;
   requireText?: string;
+  requirePassword?: boolean;
   onCancel: () => void;
-  onConfirm: () => void;
+  onConfirm: (password?: string) => void | Promise<void>;
 }
 
 type DialogBodyProps = Omit<ConfirmDialogProps, 'visible'>;
@@ -22,11 +24,31 @@ function DialogBody({
   body,
   confirmLabel,
   requireText,
+  requirePassword,
   onCancel,
   onConfirm,
 }: DialogBodyProps) {
   const [typed, setTyped] = useState('');
-  const ready = !requireText || typed.trim().toUpperCase() === requireText.toUpperCase();
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const textReady = !requireText || typed.trim().toUpperCase() === requireText.toUpperCase();
+  const passwordReady = !requirePassword || password !== '';
+  const ready = textReady && passwordReady && !busy;
+
+  const confirm = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onConfirm(requirePassword ? password : undefined);
+    } catch (err) {
+      setPassword('');
+      setError(err instanceof Error ? err.message : 'Something went wrong.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <View className="w-full gap-3 bg-popover p-4">
@@ -38,15 +60,26 @@ function DialogBody({
           onChangeText={setTyped}
           autoCapitalize="characters"
           autoCorrect={false}
+          editable={!busy}
           placeholder={requireText}
         />
       ) : null}
+      {requirePassword ? (
+        <PasswordInput
+          placeholder="Account password"
+          autoComplete="current-password"
+          value={password}
+          onChangeText={setPassword}
+          editable={!busy}
+        />
+      ) : null}
+      {error ? <Text className="text-[12px] text-destructive">{error}</Text> : null}
       <View className="mt-1 flex-row justify-end gap-2">
-        <Button variant="outline" size="sm" onPress={onCancel}>
+        <Button variant="outline" size="sm" disabled={busy} onPress={onCancel}>
           <Text>Cancel</Text>
         </Button>
-        <Button variant="destructive" size="sm" disabled={!ready} onPress={onConfirm}>
-          <Text>{confirmLabel}</Text>
+        <Button variant="destructive" size="sm" disabled={!ready} onPress={() => void confirm()}>
+          {busy ? <ActivityIndicator size="small" /> : <Text>{confirmLabel}</Text>}
         </Button>
       </View>
     </View>

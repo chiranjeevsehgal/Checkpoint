@@ -59,13 +59,14 @@ interface CheckpointContextValue {
   preview: PreviewSnapshot | null;
   deleting: string | null;
   erasing: boolean;
+  rssi: number | null;
   logs: LogEntry[];
   settings: CheckpointSettings;
   connect: () => Promise<void>;
   reconnect: () => Promise<void>;
   disconnect: () => Promise<void>;
   forgetDevice: () => Promise<void>;
-  releasePendant: () => Promise<void>;
+  releasePendant: (password: string) => Promise<void>;
   stopConnection: () => Promise<void>;
   refreshStatus: () => Promise<void>;
   refreshStorage: () => Promise<void>;
@@ -168,14 +169,13 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     showToast('Pendant forgotten.');
   }, [showToast]);
 
-  const releasePendant = useCallback(async () => {
-    try {
-      await syncEngine.releasePendant();
+  const releasePendant = useCallback(
+    async (password: string) => {
+      await syncEngine.releasePendant(password);
       showToast('Pendant released.');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Release failed.');
-    }
-  }, [showToast]);
+    },
+    [showToast],
+  );
 
   const setDeviceName = useCallback(
     (name: string) => {
@@ -261,14 +261,17 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
   const requestRelease = useCallback(() => setDialog({ kind: 'release' }), []);
   const cancelDialog = useCallback(() => setDialog(null), []);
 
-  const confirmDialog = useCallback(() => {
-    const pending = dialog;
-    setDialog(null);
-    if (pending?.kind === 'delete') void deleteFile(pending.path);
-    if (pending?.kind === 'erase') void eraseStorage();
-    if (pending?.kind === 'forget') void forgetDevice();
-    if (pending?.kind === 'release') void releasePendant();
-  }, [dialog, deleteFile, eraseStorage, forgetDevice, releasePendant]);
+  const confirmDialog = useCallback(
+    async (password?: string) => {
+      const pending = dialog;
+      if (pending?.kind === 'delete') await deleteFile(pending.path);
+      if (pending?.kind === 'erase') await eraseStorage();
+      if (pending?.kind === 'forget') await forgetDevice();
+      if (pending?.kind === 'release') await releasePendant(password ?? '');
+      setDialog(null);
+    },
+    [dialog, deleteFile, eraseStorage, forgetDevice, releasePendant],
+  );
 
   const value = useMemo<CheckpointContextValue>(
     () => ({
@@ -292,6 +295,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       preview: snapshot.preview,
       deleting: snapshot.deleting,
       erasing: snapshot.erasing,
+      rssi: snapshot.rssi,
       logs: snapshot.logs,
       settings,
       connect,
@@ -366,7 +370,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
             : dialog?.kind === 'forget'
               ? 'Forget this pendant? You will need its claim key to set it up again.'
               : dialog?.kind === 'release'
-                ? 'Release this pendant? Local recordings are erased, the pendant forgets this phone, and cloud ownership is removed. This cannot be undone.'
+                ? 'Release this pendant? Local recordings are erased, the pendant forgets this phone, and cloud ownership is removed. Enter your account password to confirm — this cannot be undone.'
                 : `Delete ${dialogFile} from the pendant? This cannot be undone.`
         }
         confirmLabel={
@@ -379,6 +383,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
                 : 'Delete'
         }
         requireText={dialog?.kind === 'erase' ? 'ERASE' : undefined}
+        requirePassword={dialog?.kind === 'release'}
         onCancel={cancelDialog}
         onConfirm={confirmDialog}
       />

@@ -1,9 +1,9 @@
-import { useRouter } from 'expo-router';
 import { Pause, Play, RefreshCw, Upload } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
 import { Pressable, SectionList, View } from 'react-native';
 
 import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
+import { DisconnectedState } from '../components/disconnected-state.tsx';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { playback, usePlayback } from '../playback.ts';
 import { statusDescriptor, TONE_TEXT } from '../status.ts';
@@ -116,7 +116,6 @@ function TransferRow({ item, developerMode }: { item: TransferRecord; developerM
 export function TransfersScreen() {
   const { connected, transfers, hydrated, settings, shareBench, refreshTransfers } =
     useCheckpoint();
-  const router = useRouter();
   const [filter, setFilter] = useState<TransferFilter>('all');
 
   const views = transfers.map(transferView);
@@ -207,24 +206,14 @@ export function TransfersScreen() {
               Loading transfers…
             </Text>
           ) : transfers.length === 0 ? (
-            <EmptyState
-              title="No transfers yet"
-              hint={
-                connected
-                  ? 'Listening for audio from the pendant — new recordings appear here.'
-                  : 'Connect and sync the pendant to receive audio.'
-              }
-              action={
-                connected ? undefined : (
-                  <Button
-                    variant="outline"
-                    onPress={() => router.navigate('/(app)/(tabs)/connect')}
-                  >
-                    <Text>Go to Pendant</Text>
-                  </Button>
-                )
-              }
-            />
+            connected ? (
+              <EmptyState
+                title="No transfers yet"
+                hint="Listening for audio from the pendant — new recordings appear here."
+              />
+            ) : (
+              <DisconnectedState />
+            )
           ) : (
             <EmptyState
               title={`No ${filter} transfers`}

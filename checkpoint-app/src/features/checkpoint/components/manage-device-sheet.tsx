@@ -121,7 +121,7 @@ export function ManageDeviceSheet({ visible, onClose, onSetup }: ManageDeviceShe
               )}
               <Button
                 variant="outline"
-                disabled={busy || !enrolled}
+                disabled={busy || !enrolled || !connected}
                 onPress={() => {
                   onClose();
                   requestRelease();

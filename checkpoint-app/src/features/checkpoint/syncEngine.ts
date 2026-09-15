@@ -25,6 +25,7 @@ import {
   releaseDevice as releaseDeviceOnServer,
 } from './device.ts';
 import { IngestionUploader } from './ingestion.ts';
+import { bluetoothLinkState } from './linkView.ts';
 import { networkMonitor } from './networkMonitor.ts';
 import type { HealthProbe } from './networkStatus.ts';
 import { ctrlStatusText } from './parsers.ts';
@@ -49,6 +50,7 @@ import {
   type TransferRecord,
 } from './transferStore.ts';
 import type {
+  BluetoothStatus,
   CheckpointEvent,
   DeviceFileList,
   DeviceStatus,
@@ -65,7 +67,7 @@ export interface ListPage {
   count: number;
 }
 
-export type BluetoothStatus = 'on' | 'off' | 'unauthorized' | 'unsupported' | 'unknown' | null;
+export type { BluetoothStatus };
 
 export interface PreviewSnapshot {
   path: string;
@@ -88,6 +90,7 @@ export interface EngineSnapshot {
   preview: PreviewSnapshot | null;
   deleting: string | null;
   erasing: boolean;
+  rssi: number | null;
   logs: LogEntry[];
   needsSettings: boolean;
   bluetooth: BluetoothStatus;
@@ -110,6 +113,7 @@ const INITIAL_SNAPSHOT: EngineSnapshot = {
   preview: null,
   deleting: null,
   erasing: false,
+  rssi: null,
   logs: [],
   needsSettings: false,
   bluetooth: null,
@@ -119,7 +123,29 @@ const INITIAL_SNAPSHOT: EngineSnapshot = {
   ownedDeviceId: null,
 };
 
-function mapBluetoothState(state: State): BluetoothStatus {
+/** Every snapshot field that must reset the moment the pendant link drops. */
+const DISCONNECTED_STATE: Pick<
+  EngineSnapshot,
+  | 'connected'
+  | 'autoConnecting'
+  | 'preview'
+  | 'status'
+  | 'storage'
+  | 'fileList'
+  | 'listPage'
+  | 'rssi'
+> = {
+  connected: false,
+  autoConnecting: false,
+  preview: null,
+  status: null,
+  storage: null,
+  fileList: null,
+  listPage: { start: 0, total: 0, count: 0 },
+  rssi: null,
+};
+
+function mapBluetoothState(state: State | string): BluetoothStatus {
   switch (state) {
     case State.PoweredOn:
       return 'on';
@@ -132,6 +158,10 @@ function mapBluetoothState(state: State): BluetoothStatus {
     default:
       return 'unknown';
   }
+}
+
+function isBluetoothBlocked(status: BluetoothStatus): boolean {
+  return status === 'off' || status === 'unauthorized' || status === 'unsupported';
 }
 
 function pushLog(entries: LogEntry[], entry: LogEntry): LogEntry[] {
@@ -159,6 +189,7 @@ class SyncEngine {
   private connectTask: Promise<void> | null = null;
   private connectOrigin: 'user' | 'auto' | null = null;
   private ownershipDenied = false;
+  private reauthenticate: ((password: string) => Promise<void>) | null = null;
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -175,6 +206,11 @@ class SyncEngine {
 
   setOwnedDevice(deviceId: string | null): void {
     this.setState({ ownedDeviceId: deviceId });
+  }
+
+  /** Injected by the auth bridge; refreshes the session before sensitive actions. */
+  setReauthenticator(fn: ((password: string) => Promise<void>) | null): void {
+    this.reauthenticate = fn;
   }
 
   async start(): Promise<void> {
@@ -258,10 +294,16 @@ class SyncEngine {
     if (!this.manager) {
       this.manager = new BleManager();
       try {
-        this.bluetoothSubscription = this.manager.onStateChange(
-          (state) => this.setState({ bluetooth: mapBluetoothState(state) }),
-          true,
-        );
+        this.bluetoothSubscription = this.manager.onStateChange((state) => {
+          const previous = this.snapshot.bluetooth;
+          const next = mapBluetoothState(state);
+          this.setState({ bluetooth: next });
+          if (isBluetoothBlocked(next)) {
+            this.stopReconnectForAdapter();
+          } else if (next === 'on' && isBluetoothBlocked(previous)) {
+            void this.maybeAutoConnect();
+          }
+        }, true);
       } catch (error) {
         this.appendLog(
           `[ble] state listener failed: ${error instanceof Error ? error.message : 'unknown'}`,
@@ -305,6 +347,13 @@ class SyncEngine {
     }
     this.appendLog('[sync] auto-connecting to enrolled pendant');
     await this.connect(DEVICE_NAME, '', 'auto');
+  }
+
+  private stopReconnectForAdapter(): void {
+    if (!this.connectTask) return;
+    this.appendLog('[sync] Bluetooth unavailable — pausing reconnect');
+    this.stopped = true;
+    this.client?.requestStop();
   }
 
   private async applyDesiredSync(client: CheckpointClient): Promise<void> {
@@ -510,7 +559,7 @@ class SyncEngine {
     if (event.type === 'link') {
       this.setState(
         event.state === 'down'
-          ? { linkState: 'reconnecting', connected: false, autoConnecting: false, preview: null }
+          ? { ...DISCONNECTED_STATE, linkState: 'reconnecting' }
           : { linkState: event.state },
       );
       return;
@@ -665,7 +714,7 @@ class SyncEngine {
           busy: false,
           autoConnecting: false,
           needsSettings: adapter === 'Unauthorized',
-          linkState: adapter === 'PoweredOff' ? 'bluetooth off' : 'bluetooth unavailable',
+          linkState: bluetoothLinkState(mapBluetoothState(adapter)),
         });
         return;
       }
@@ -760,6 +809,8 @@ class SyncEngine {
                 `[ui] status poll failed: ${error instanceof Error ? error.message : 'unknown'}`,
               );
             }
+            const dbm = await client.readRssi();
+            if (dbm !== null) this.setState({ rssi: dbm });
           },
         });
       } catch (error) {
@@ -771,7 +822,7 @@ class SyncEngine {
         connected: false,
         busy: false,
         autoConnecting: false,
-        linkState: this.ownershipDenied ? 'not owned' : 'idle',
+        linkState: this.ownershipDenied ? 'not owned' : bluetoothLinkState(this.snapshot.bluetooth),
         deviceId: null,
       });
       this.client = null;
@@ -813,13 +864,7 @@ class SyncEngine {
         );
       }
     }
-    this.setState({
-      connected: false,
-      autoConnecting: false,
-      linkState: 'idle',
-      deviceId: null,
-      preview: null,
-    });
+    this.setState({ ...DISCONNECTED_STATE, linkState: 'idle', deviceId: null });
   }
 
   async forgetDevice(): Promise<void> {
@@ -902,9 +947,11 @@ class SyncEngine {
     await this.forgetDevice();
   }
 
-  async releasePendant(): Promise<void> {
+  async releasePendant(password: string): Promise<void> {
     const token = getSessionToken();
     if (!token) throw new Error('Not signed in.');
+    if (!this.reauthenticate) throw new Error('Re-authentication is unavailable.');
+    await this.reauthenticate(password);
     const client = this.client;
     if (!client) throw new Error('Connect to the pendant first.');
     const erase = await this.eraseStorage();
