@@ -131,6 +131,10 @@
 #define UI_DEBOUNCE_MS 50
 #define UI_LED_ON_MS 120
 #define UI_LED_BOOKMARK_MS 250
+// Recording LED — slow breathing pulse so "recording" is not a static lamp.
+#define UI_REC_BREATH_MS 3500 // full inhale+exhale cycle
+#define UI_REC_BREATH_MIN 24  // trough (0-255 logical; global brightness scales)
+#define UI_REC_BREATH_MAX 200 // peak
 #define UI_LONG_PRESS_MS 5000
 #define UI_SLOT_DROP_MS 15000
 #define AUTH_ENROLL_WINDOW_MS 60000
