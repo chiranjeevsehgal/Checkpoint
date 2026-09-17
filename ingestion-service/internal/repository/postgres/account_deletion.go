@@ -155,9 +155,10 @@ func (p *Pool) QuarantineDevice(ctx context.Context, userID string) error {
 	return err
 }
 
-// PurgeDownstream removes transcripts and embeddings owned by the user.
-// The tables may live in a separate database in split deployments, so a
-// missing table is treated as nothing to purge.
+// PurgeDownstream removes the user's transcripts, embeddings and extraction
+// output (extraction_jobs + todos). The tables may live in a separate
+// database in split deployments, so a missing table is treated as nothing
+// to purge.
 func (p *Pool) PurgeDownstream(ctx context.Context, userID string) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -168,7 +169,7 @@ func (p *Pool) PurgeDownstream(ctx context.Context, userID string) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	for _, table := range []string{"transcripts", "embeddings"} {
+	for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos", "reminders", "insights"} {
 		exists, err := tableExists(ctx, tx, table)
 		if err != nil {
 			return err

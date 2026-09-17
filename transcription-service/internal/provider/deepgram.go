@@ -185,7 +185,8 @@ type deepgramResponse struct {
 		Channels []struct {
 			DetectedLanguage string `json:"detected_language"`
 			Alternatives     []struct {
-				Transcript string `json:"transcript"`
+				Transcript string   `json:"transcript"`
+				Languages  []string `json:"languages"`
 			} `json:"alternatives"`
 		} `json:"channels"`
 		Utterances []struct {
@@ -209,8 +210,13 @@ func parseDeepgramResponse(body []byte) (*model.TranscriptResult, error) {
 	channel := raw.Results.Channels[0]
 
 	var transcript string
+	language := channel.DetectedLanguage
 	if len(channel.Alternatives) > 0 {
-		transcript = channel.Alternatives[0].Transcript
+		alt := channel.Alternatives[0]
+		transcript = alt.Transcript
+		if language == "" && len(alt.Languages) > 0 {
+			language = alt.Languages[0]
+		}
 	}
 
 	segments := make([]model.SpeakerSegment, 0, len(raw.Results.Utterances))
@@ -226,7 +232,7 @@ func parseDeepgramResponse(body []byte) (*model.TranscriptResult, error) {
 
 	return &model.TranscriptResult{
 		Text:            transcript,
-		Language:        channel.DetectedLanguage,
+		Language:        language,
 		DurationSeconds: raw.Metadata.Duration,
 		SpeakerSegments: segments,
 		Provider:        "deepgram",

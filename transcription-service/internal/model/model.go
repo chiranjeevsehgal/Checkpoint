@@ -39,6 +39,7 @@ type TranscriptionRequestedData struct {
 	ContentType    string `json:"content_type"`
 	SizeBytes      int64  `json:"size_bytes"`
 	ChecksumSHA256 string `json:"checksum_sha256"`
+	RecordedAt     string `json:"recorded_at,omitempty"`
 }
 
 // SpeakerSegment mirrors a single utterance from the provider.
@@ -60,6 +61,7 @@ type TranscriptResult struct {
 	SpeakerSegments []SpeakerSegment `json:"speaker_segments"`
 	Provider        string           `json:"provider"`
 	RequestID       string           `json:"request_id"`
+	RecordedAt      string           `json:"recorded_at,omitempty"`
 }
 
 type EmbeddingJobRequestedEvent struct {
@@ -85,4 +87,5 @@ type ExtractionJobData struct {
 	Text            string           `json:"text"`
 	Language        string           `json:"language"`
 	SpeakerSegments []SpeakerSegment `json:"speaker_segments"`
+	RecordedAt      string           `json:"recorded_at,omitempty"`
 }

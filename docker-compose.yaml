@@ -260,6 +260,43 @@ services:
       EMBEDDING_CHUNK_OVERLAP_TOKENS: ${EMBEDDING_CHUNK_OVERLAP_TOKENS:-100}
     restart: unless-stopped
 
+  extraction-migrate:
+    build:
+      context: ./extraction-service
+      target: migrate
+    container_name: extraction-migrate
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+
+  extraction:
+    build:
+      context: ./extraction-service
+      target: worker
+    container_name: extraction
+    networks:
+      - backend
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      extraction-migrate:
+        condition: service_completed_successfully
+    environment:
+      CONFIG_PATH: /app/config.yaml
+      KAFKA_BROKERS: kafka:9092
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      REMINDERS_TIMEZONE: ${REMINDERS_TIMEZONE:-}
+      POSTGRES_DSN: postgres://checkpoint_worker:${CHECKPOINT_WORKER_PASSWORD:-checkpoint_worker_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    restart: unless-stopped
+
   mailpit:
     image: axllent/mailpit:latest
     container_name: mailpit

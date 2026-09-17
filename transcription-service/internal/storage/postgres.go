@@ -79,17 +79,18 @@ func (p *PostgresStore) SaveTranscript(ctx context.Context, t *model.TranscriptR
 	}
 
 	tag, err := p.pool.Exec(ctx, `
-		INSERT INTO transcripts (audio_id, user_id, text, language, duration_seconds, speaker_segments, provider, request_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO transcripts (audio_id, user_id, text, language, duration_seconds, speaker_segments, provider, request_id, recorded_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, '')::timestamptz)
 		ON CONFLICT (audio_id) DO UPDATE SET
 			text = EXCLUDED.text,
 			language = EXCLUDED.language,
 			duration_seconds = EXCLUDED.duration_seconds,
 			speaker_segments = EXCLUDED.speaker_segments,
 			provider = EXCLUDED.provider,
-			request_id = EXCLUDED.request_id
+			request_id = EXCLUDED.request_id,
+			recorded_at = COALESCE(EXCLUDED.recorded_at, transcripts.recorded_at)
 		WHERE transcripts.user_id = EXCLUDED.user_id`,
-		t.AudioID, t.UserID, t.Text, t.Language, t.DurationSeconds, segments, t.Provider, t.RequestID,
+		t.AudioID, t.UserID, t.Text, t.Language, t.DurationSeconds, segments, t.Provider, t.RequestID, t.RecordedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("saving transcript: %w", err)
