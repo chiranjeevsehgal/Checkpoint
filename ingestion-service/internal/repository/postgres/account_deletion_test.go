@@ -17,7 +17,7 @@ func TestPurgeDownstreamRemovesExtractionData(t *testing.T) {
 	audioID := uuid.NewString()
 
 	t.Cleanup(func() {
-		for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos"} {
+		for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos", "reminders", "insights"} {
 			_, _ = p.inner.Exec(ctx, `DELETE FROM `+table+` WHERE user_id = $1`, userID)
 		}
 	})
@@ -52,12 +52,26 @@ func TestPurgeDownstreamRemovesExtractionData(t *testing.T) {
 			t.Fatalf("seed todos: %v", err)
 		}
 	}
+	if hasTable(t, p, "reminders") {
+		if _, err := p.inner.Exec(ctx,
+			`INSERT INTO reminders (user_id, audio_id, text, model) VALUES ($1, $2, 't', 'test')`,
+			userID, audioID); err != nil {
+			t.Fatalf("seed reminders: %v", err)
+		}
+	}
+	if hasTable(t, p, "insights") {
+		if _, err := p.inner.Exec(ctx,
+			`INSERT INTO insights (user_id, audio_id, text, model) VALUES ($1, $2, 't', 'test')`,
+			userID, audioID); err != nil {
+			t.Fatalf("seed insights: %v", err)
+		}
+	}
 
 	if err := p.PurgeDownstream(ctx, userID); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
 
-	for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos"} {
+	for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos", "reminders", "insights"} {
 		if !hasTable(t, p, table) {
 			continue
 		}

@@ -169,7 +169,7 @@ func (p *Pool) PurgeDownstream(ctx context.Context, userID string) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos"} {
+	for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos", "reminders", "insights"} {
 		exists, err := tableExists(ctx, tx, table)
 		if err != nil {
 			return err
