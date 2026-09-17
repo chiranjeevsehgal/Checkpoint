@@ -24,6 +24,18 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+// Options carries the client's connection settings and generation controls.
+type Options struct {
+	BaseURL             string
+	APIKey              string
+	Model               string
+	MaxCompletionTokens int
+	Temperature         float64
+	TopP                float64
+	ReasoningEffort     string
+	Timeout             time.Duration
+}
+
 type Client struct {
 	http                *http.Client
 	baseURL             string
@@ -31,16 +43,20 @@ type Client struct {
 	model               string
 	maxCompletionTokens int
 	temperature         float64
+	topP                float64
+	reasoningEffort     string
 }
 
-func New(baseURL, apiKey, model string, maxCompletionTokens int, temperature float64, timeout time.Duration) *Client {
+func New(o Options) *Client {
 	return &Client{
-		http:                &http.Client{Timeout: timeout},
-		baseURL:             baseURL,
-		apiKey:              apiKey,
-		model:               model,
-		maxCompletionTokens: maxCompletionTokens,
-		temperature:         temperature,
+		http:                &http.Client{Timeout: o.Timeout},
+		baseURL:             o.BaseURL,
+		apiKey:              o.APIKey,
+		model:               o.Model,
+		maxCompletionTokens: o.MaxCompletionTokens,
+		temperature:         o.Temperature,
+		topP:                o.TopP,
+		reasoningEffort:     o.ReasoningEffort,
 	}
 }
 
@@ -61,6 +77,12 @@ func (c *Client) Chat(ctx context.Context, messages []Message) (string, error) {
 	}
 	if c.temperature > 0 {
 		payload["temperature"] = c.temperature
+	}
+	if c.topP > 0 {
+		payload["top_p"] = c.topP
+	}
+	if c.reasoningEffort != "" {
+		payload["reasoning_effort"] = c.reasoningEffort
 	}
 
 	body, err := json.Marshal(payload)

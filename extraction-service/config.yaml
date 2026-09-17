@@ -13,7 +13,7 @@ groq:
   model: openai/gpt-oss-120b
   base_url: https://api.groq.com/openai/v1
   timeout_seconds: 120
-  max_completion_tokens: 5000
+  max_completion_tokens: 8192
   temperature: 0.3
   top_p: 1
   reasoning_effort: low
@@ -22,9 +22,9 @@ batch:
   # Exactly-N batching: one LLM call per user once this many transcripts are
   size: 10
   poll_interval_seconds: 5
-  # 0 = strict exactly-N (a user with fewer items waits indefinitely for
-  # more). > 0 flushes a partial batch once its oldest item is this old.
-  max_wait_seconds: 0
+  # Flush a partial batch once its oldest item is this old, so a low-volume
+  # user's transcript is never stranded waiting for a full batch.
+  max_wait_seconds: 300
   worker_concurrency: 3
   max_attempts: 5
   reclaim_after_seconds: 300

@@ -112,12 +112,12 @@ func TestReadyUsersExcludesTombstonedUsers(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM extraction_jobs WHERE user_id = $1`, userID)
 	})
 	if err := store.EnqueueJob(ctx, model.Job{
-		UserID: userID, AudioID: userID, ExtractionType: "todo", Text: "test transcript",
+		UserID: userID, AudioID: userID, ExtractionType: model.TypeAll, Text: "test transcript",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	users, err := store.ReadyUsers(ctx, "todo", 1, 0)
+	users, err := store.ReadyUsers(ctx, model.TypeAll, 1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestCompleteBatchPersistsInsights(t *testing.T) {
 	})
 
 	if err := store.CompleteBatch(ctx, []model.Result{{
-		UserID: userID, AudioID: audioID, ExtractionType: model.TypeInsight,
+		UserID: userID, AudioID: audioID,
 		Insights: []model.Insight{{Text: "the vendor discount was already in the quote"}},
 	}}, "test-model"); err != nil {
 		t.Fatal(err)
@@ -154,5 +154,72 @@ func TestCompleteBatchPersistsInsights(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected 1 insight row, got %d", count)
+	}
+}
+
+func countUserRows(t *testing.T, pool *pgxpool.Pool, table, userID string) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM `+table+` WHERE user_id = $1`, userID).Scan(&count); err != nil {
+		t.Fatalf("counting %s: %v", table, err)
+	}
+	return count
+}
+
+// TestCompleteBatchMarksEmptyResultSkippedAndClears verifies the combined
+// writer always replaces all three tables and records an empty run as
+// 'skipped' rather than 'done'.
+func TestCompleteBatchMarksEmptyResultSkippedAndClears(t *testing.T) {
+	store, pool := newTestStore(t)
+	ctx := context.Background()
+	userID := "5e2b1a90-0000-4000-8000-00000000ab11"
+	audioID := "5e2b1a90-0000-4000-8000-00000000ab12"
+	tables := []string{"todos", "reminders", "insights"}
+
+	t.Cleanup(func() {
+		for _, table := range tables {
+			_, _ = pool.Exec(ctx, `DELETE FROM `+table+` WHERE user_id = $1`, userID)
+		}
+		_, _ = pool.Exec(ctx, `DELETE FROM extraction_jobs WHERE user_id = $1`, userID)
+	})
+
+	for _, table := range tables {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO `+table+` (user_id, audio_id, text, model) VALUES ($1, $2, 'stale', 'test')`,
+			userID, audioID); err != nil {
+			t.Skipf("%s schema mismatch: %v", table, err)
+		}
+	}
+
+	if err := store.EnqueueJob(ctx, model.Job{
+		UserID: userID, AudioID: audioID, ExtractionType: model.TypeAll, Text: "test transcript",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimBatch(ctx, userID, model.TypeAll, 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim: %v jobs=%d", err, len(claimed))
+	}
+
+	if err := store.CompleteBatch(ctx, []model.Result{{
+		JobID: claimed[0].ID, UserID: userID, AudioID: audioID,
+	}}, "test-model"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, table := range tables {
+		if count := countUserRows(t, pool, table, userID); count != 0 {
+			t.Fatalf("%s not cleared for empty result: %d rows", table, count)
+		}
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx,
+		`SELECT status FROM extraction_jobs WHERE id = $1`, claimed[0].ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "skipped" {
+		t.Fatalf("status = %q, want %q", status, "skipped")
 	}
 }

@@ -84,8 +84,7 @@ func TestUnmarshalMatchesTranscriptionContract(t *testing.T) {
 	}
 }
 
-func TestUnmarshalCarriesRecordedAt(t *testing.T) {
-	raw := `{
+func TestUnmarshalCarriesRecordedAt(t *testing.T) {	raw := `{
 		"schema_version": 2,
 		"event_id": "evt-2",
 		"event_type": "EXTRACTION_REQUESTED",
@@ -106,5 +105,17 @@ func TestUnmarshalCarriesRecordedAt(t *testing.T) {
 	}
 	if err := e.Validate(); err != nil {
 		t.Fatalf("event with recorded_at must validate: %v", err)
+	}
+}
+
+func TestResultIsEmpty(t *testing.T) {
+	if !(Result{}).IsEmpty() {
+		t.Fatal("zero result must be empty")
+	}
+	if (Result{Todos: []string{"x"}}).IsEmpty() {
+		t.Fatal("result with a todo must not be empty")
+	}
+	if (Result{Insights: []Insight{{Text: "x"}}}).IsEmpty() {
+		t.Fatal("result with an insight must not be empty")
 	}
 }

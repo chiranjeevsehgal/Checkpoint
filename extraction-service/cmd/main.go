@@ -52,21 +52,27 @@ func main() {
 	dlq := kafka.NewProducer(cfg.Kafka)
 	defer dlq.Close()
 
-	client := llm.New(cfg.Groq.BaseURL, cfg.Groq.APIKey(), cfg.Groq.Model, cfg.Groq.MaxCompletionTokens, cfg.Groq.Temperature, cfg.Groq.Timeout())
+	client := llm.New(llm.Options{
+		BaseURL:             cfg.Groq.BaseURL,
+		APIKey:              cfg.Groq.APIKey(),
+		Model:               cfg.Groq.Model,
+		MaxCompletionTokens: cfg.Groq.MaxCompletionTokens,
+		Temperature:         cfg.Groq.Temperature,
+		TopP:                cfg.Groq.TopP,
+		ReasoningEffort:     cfg.Groq.ReasoningEffort,
+		Timeout:             cfg.Groq.Timeout(),
+	})
 
-	registry := extractor.NewRegistry()
-	registry.Register(extractor.TodoExtractor{})
-	registry.Register(extractor.NewReminderExtractor(cfg.Reminders.Loc()))
-	registry.Register(extractor.InsightExtractor{})
+	ext := extractor.New(cfg.Reminders.Loc())
 
-	log.Printf("listening on kafka topic %q (group %q), model %s, batch=%d, types=%v, writing extractions to postgres",
-		cfg.Kafka.ConsumeTopic, cfg.Kafka.ConsumerGroup, cfg.Groq.Model, cfg.Batch.Size, registry.Types())
+	log.Printf("listening on kafka topic %q (group %q), model %s, batch=%d, writing todos+reminders+insights to postgres",
+		cfg.Kafka.ConsumeTopic, cfg.Kafka.ConsumerGroup, cfg.Groq.Model, cfg.Batch.Size)
 
 	var wg sync.WaitGroup
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		runConsumer(ctx, consumer, store, dlq, cfg, registry)
+		runConsumer(ctx, consumer, store, dlq, cfg)
 	}()
 	go func() {
 		defer wg.Done()
@@ -74,7 +80,7 @@ func main() {
 	}()
 	go func() {
 		defer wg.Done()
-		runBatcher(ctx, store, client, cfg, registry)
+		runBatcher(ctx, store, client, cfg, ext)
 	}()
 
 	<-ctx.Done()
@@ -86,7 +92,7 @@ func main() {
 // runConsumer is the fast path: event → pending queue row → commit. No LLM
 // work happens here — that is entirely the batcher's job. A poison message
 // goes to the DLQ and is committed so it never comes back.
-func runConsumer(ctx context.Context, consumer *kafka.Consumer, store *storage.PostgresStore, dlq *kafka.Producer, cfg *config.Config, registry *extractor.Registry) {
+func runConsumer(ctx context.Context, consumer *kafka.Consumer, store *storage.PostgresStore, dlq *kafka.Producer, cfg *config.Config) {
 	for {
 		var event model.ExtractionJobRequestedEvent
 		msg, err := consumer.ReadMessage(ctx, &event)
@@ -135,27 +141,20 @@ func runConsumer(ctx context.Context, consumer *kafka.Consumer, store *storage.P
 			continue
 		}
 
-		// One queue row per registered extraction type. ON CONFLICT DO
-		// NOTHING makes Kafka redelivery a no-op.
-		var enqueueErr error
-		for _, typ := range registry.Types() {
-			job := model.Job{
-				UserID:          event.Data.UserID,
-				AudioID:         event.Data.AudioID,
-				ExtractionType:  typ,
-				Text:            event.Data.Text,
-				Language:        event.Data.Language,
-				RecordedAt:      event.Data.RecordedAt,
-			}
-			if err := store.EnqueueJob(ctx, job); err != nil {
-				enqueueErr = err
-				break
-			}
+		// One combined queue row per audio; the ON CONFLICT makes Kafka
+		// redelivery a no-op.
+		job := model.Job{
+			UserID:         event.Data.UserID,
+			AudioID:        event.Data.AudioID,
+			ExtractionType: model.TypeAll,
+			Text:           event.Data.Text,
+			Language:       event.Data.Language,
+			RecordedAt:     event.Data.RecordedAt,
 		}
-		if enqueueErr != nil {
+		if err := store.EnqueueJob(ctx, job); err != nil {
 			// Not committing means redelivery on restart — the event is
 			// never silently lost.
-			log.Printf("enqueue failed audio_id=%s: %v", event.Data.AudioID, enqueueErr)
+			log.Printf("enqueue failed audio_id=%s: %v", event.Data.AudioID, err)
 			continue
 		}
 
@@ -190,9 +189,9 @@ func runReclaimer(ctx context.Context, store *storage.PostgresStore, cfg *config
 }
 
 // runBatcher polls the queue for users with a full batch and runs each
-// batch on a bounded worker pool. One batch = one user = one type; batches
-// for different users run in parallel, never mixed.
-func runBatcher(ctx context.Context, store *storage.PostgresStore, client *llm.Client, cfg *config.Config, registry *extractor.Registry) {
+// batch on a bounded worker pool. One batch = one user; batches for different
+// users run in parallel, never mixed.
+func runBatcher(ctx context.Context, store *storage.PostgresStore, client *llm.Client, cfg *config.Config, ext extractor.Extractor) {
 	sem := make(chan struct{}, cfg.Batch.WorkerConcurrency)
 	var wg sync.WaitGroup
 
@@ -204,30 +203,24 @@ func runBatcher(ctx context.Context, store *storage.PostgresStore, client *llm.C
 		case <-time.After(cfg.Batch.PollInterval()):
 		}
 
-		for _, typ := range registry.Types() {
-			ext, ok := registry.Get(typ)
-			if !ok {
-				continue
+		users, err := store.ReadyUsers(ctx, model.TypeAll, cfg.Batch.Size, cfg.Batch.MaxWait())
+		if err != nil {
+			log.Printf("ready users error: %v", err)
+			continue
+		}
+		for _, u := range users {
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				wg.Wait()
+				return
 			}
-			users, err := store.ReadyUsers(ctx, typ, cfg.Batch.Size, cfg.Batch.MaxWait())
-			if err != nil {
-				log.Printf("ready users error: %v", err)
-				continue
-			}
-			for _, u := range users {
-				select {
-				case sem <- struct{}{}:
-				case <-ctx.Done():
-					wg.Wait()
-					return
-				}
-				wg.Add(1)
-				go func(userID string, ext extractor.Extractor) {
-					defer wg.Done()
-					defer func() { <-sem }()
-					processBatch(ctx, store, client, ext, userID, cfg)
-				}(u, ext)
-			}
+			wg.Add(1)
+			go func(userID string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				processBatch(ctx, store, client, ext, userID, cfg)
+			}(u)
 		}
 	}
 }
@@ -236,9 +229,9 @@ func runBatcher(ctx context.Context, store *storage.PostgresStore, client *llm.C
 // larger than max_batch_chars is split into multiple LLM calls; all groups
 // must succeed before their jobs are marked done.
 func processBatch(ctx context.Context, store *storage.PostgresStore, client *llm.Client, ext extractor.Extractor, userID string, cfg *config.Config) {
-	jobs, err := store.ClaimBatch(ctx, userID, ext.Type(), cfg.Batch.Size)
+	jobs, err := store.ClaimBatch(ctx, userID, model.TypeAll, cfg.Batch.Size)
 	if err != nil {
-		log.Printf("claim error user_id=%s type=%s: %v", userID, ext.Type(), err)
+		log.Printf("claim error user_id=%s: %v", userID, err)
 		return
 	}
 	if len(jobs) == 0 {
@@ -260,11 +253,16 @@ func processBatch(ctx context.Context, store *storage.PostgresStore, client *llm
 			handleBatchFailure(ctx, store, group, err, cfg)
 			return
 		}
-		extracted := 0
+		skipped := 0
+		entries := 0
 		for _, r := range results {
-			extracted += len(r.Todos) + len(r.Reminders) + len(r.Insights)
+			if r.IsEmpty() {
+				skipped++
+			}
+			entries += len(r.Todos) + len(r.Reminders) + len(r.Insights)
 		}
-		log.Printf("extracted user_id=%s type=%s items=%d extracted=%d", userID, ext.Type(), len(group), extracted)
+		log.Printf("extracted user_id=%s items=%d done=%d skipped=%d entries=%d",
+			userID, len(group), len(results)-skipped, skipped, entries)
 	}
 }
 

@@ -12,8 +12,7 @@ import (
 
 const (
 	defaultGroqModel   = "openai/gpt-oss-120b"
-	defaultGroqBaseURL  = "https://api.groq.com/openai/v1"
-	DefaultExtractionType = "todo"
+	defaultGroqBaseURL = "https://api.groq.com/openai/v1"
 )
 
 // Config is the full service configuration, loaded from config.yaml with

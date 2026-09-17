@@ -107,26 +107,26 @@ type Job struct {
 	Attempts int
 }
 
-// Registered extraction types; extraction_jobs.extraction_type and
-// model.Result.ExtractionType both use these values.
-const (
-	TypeTodo     = "todo"
-	TypeReminder = "reminder"
-	TypeInsight  = "insight"
-)
+// TypeAll is the single extraction_jobs.extraction_type value: one combined
+// job per audio extracts todos, reminders and insights in one LLM call.
+const TypeAll = "all"
 
 // Result is what an extractor produced for one claimed job. Every claimed
-// job always yields a Result — empty output is a valid outcome ("no action
-// items") and still replaces any stale rows for that audio.
+// job always yields a Result — empty output is a valid outcome ("nothing to
+// extract") and still replaces any stale rows for that audio.
 type Result struct {
-	JobID          int64
-	UserID         string
-	AudioID        string
-	ExtractionType string
-	RecordedAt     string
-	Todos          []string
-	Reminders      []Reminder
-	Insights       []Insight
+	JobID      int64
+	UserID     string
+	AudioID    string
+	RecordedAt string
+	Todos      []string
+	Reminders  []Reminder
+	Insights   []Insight
+}
+
+// IsEmpty reports whether the run found nothing worth persisting.
+func (r Result) IsEmpty() bool {
+	return len(r.Todos) == 0 && len(r.Reminders) == 0 && len(r.Insights) == 0
 }
 
 // Reminder is a time-bound commitment: the LLM resolves the stated date

@@ -4,7 +4,7 @@ Monorepo with three separate Go modules plus firmware and a Python worker. No ro
 
 - `ingestion-service/` (module `checkpoint/ingestion`) — HTTP API `:8080`, in-process outbox dispatcher, upload cleanup, and account-deletion worker. Entrypoints: `cmd/api/main.go`, `cmd/migrate/main.go`, `cmd/device-admin/main.go`.
 - `transcription-service/` (module `transcription-service`) — Kafka worker. Entrypoint: `cmd/main.go`, `cmd/migrate/`.
-- `extraction-service/` (module `extraction-service`) — Kafka worker → LLM (Groq) todo extractor. Entrypoints: `cmd/main.go`, `cmd/migrate/`.
+- `extraction-service/` (module `extraction-service`) — Kafka worker → LLM (Groq) combined todo/reminder/insight extractor. Entrypoints: `cmd/main.go`, `cmd/migrate/`.
 - `embedding-service/` — Python Kafka worker, bge-m3 → pgvector. Entrypoint: `app/main.py`, `migrate.py`.
 - `firmware/checkpoint/` — PROD ESP32-S3 pendant (Arduino `.ino`). Pins/timings single source: `config.h`.
 - `firmware/tests/` — host-side pytest (grep/logic, no hardware). `firmware/host/checkpoint_client/` — Python BLE client.
@@ -73,11 +73,11 @@ docker compose ps        # postgres + kafka should be healthy
 
 ## Extraction worker quirks
 
-- Kafka is only the trigger: the consumer validates `EXTRACTION_REQUESTED` (schema v2, same envelope transcription publishes), inserts a pending `extraction_jobs` row, commits. Poison → `extraction.jobs.v1.dlq` + commit.
-- Postgres is the batch queue: batcher claims `batch.size` (default 10) rows per user with `FOR UPDATE SKIP LOCKED` → one Groq call per batch (`openai/gpt-oss-120b`, `response_format: json_object`) → todos replaced per audio in one tx.
-- Job states `pending|processing|done|failed`; retryable failures release back to `pending` with attempts+1, `failed` after `batch.max_attempts` (requeue: `UPDATE ... SET status='pending', attempts=0`). Stuck `processing` rows are reclaimed after `batch.reclaim_after_seconds`.
-- Strict exactly-N: `batch.max_wait_seconds: 0` means a user with fewer than N items waits indefinitely. `GROQ_API_KEY` and `POSTGRES_DSN` must be set or the worker fails fast at startup.
-- New extraction types = implement `extractor.Extractor` + register + one migration; consumer/batcher/claim/retry are shared.
+- Kafka is only the trigger: the consumer validates `EXTRACTION_REQUESTED` (schema v2, same envelope transcription publishes), inserts one pending `extraction_jobs` row per audio, commits. Poison → `extraction.jobs.v1.dlq` + commit.
+- One combined job per audio (`extraction_type='all'`): a single Groq call returns todos, reminders and insights, and the code guard drops a todo that duplicates a reminder. Postgres is the batch queue: the batcher claims `batch.size` (default 10) rows per user with `FOR UPDATE SKIP LOCKED` → one Groq call per batch (`openai/gpt-oss-120b`, `response_format: json_object`; `groq.temperature`/`top_p`/`reasoning_effort` are sent) → all three output tables replaced per audio in one tx.
+- Job states `pending|processing|done|skipped|failed`; a run that extracts nothing is terminal `skipped` (tables still cleared). Retryable failures release back to `pending` with attempts+1, `failed` after `batch.max_attempts` (requeue: `UPDATE ... SET status='pending', attempts=0`). Stuck `processing` rows are reclaimed after `batch.reclaim_after_seconds`.
+- Batches flush once a user has `batch.size` pending rows or the oldest has waited `batch.max_wait_seconds` (default 300). `GROQ_API_KEY` and `POSTGRES_DSN` must be set or the worker fails fast at startup.
+- New output types = extend the prompt + `model.Result` + an output table + one migration; consumer/batcher/claim/retry are shared.
 
 ## Test / verify
 

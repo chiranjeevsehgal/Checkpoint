@@ -1,63 +1,176 @@
 package extractor
 
 import (
-	"sort"
-	"sync"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
 
 	"extraction-service/internal/llm"
 	"extraction-service/internal/model"
 )
 
-// Extractor turns a batch of claimed jobs into structured output via the
-// LLM. One batch always belongs to a single user — the batcher guarantees it.
-//
-// Adding a new extraction type (insights, summaries, ...) means:
-//  1. implement this interface in a new file,
-//  2. register it in the registry,
-//  3. add its output table in a migration.
-// Consumer, queue, claim, retry, and commit logic are shared and untouched.
-type Extractor interface {
-	// Type is the extraction_jobs.extraction_type value this extractor owns.
-	Type() string
-	// Messages builds the chat messages for one batch. item order is the
-	// claim order; Parse receives the same slice to map answers back.
-	Messages(items []model.Job) []llm.Message
-	// Parse maps the LLM's JSON response onto the claimed jobs. Every
-	// claimed job must yield a Result (possibly with empty output).
-	Parse(content string, items []model.Job) ([]model.Result, error)
+// Extractor turns a claimed batch of transcripts into todos, reminders and
+// insights in a single LLM call. One batch always belongs to a single user —
+// the batcher guarantees it. The prompt assigns every entry to exactly one
+// list, and a deterministic guard enforces the reminder-over-todo precedence
+// so the same entry can never land in two tables.
+type Extractor struct {
+	loc *time.Location
 }
 
-// Registry is the type-keyed set of extractors the worker runs.
-type Registry struct {
-	mu         sync.RWMutex
-	extractors map[string]Extractor
-}
-
-func NewRegistry() *Registry {
-	return &Registry{extractors: make(map[string]Extractor)}
-}
-
-func (r *Registry) Register(e Extractor) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.extractors[e.Type()] = e
-}
-
-func (r *Registry) Get(t string) (Extractor, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	e, ok := r.extractors[t]
-	return e, ok
-}
-
-// Types returns the registered extraction types in stable order.
-func (r *Registry) Types() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	types := make([]string, 0, len(r.extractors))
-	for t := range r.extractors {
-		types = append(types, t)
+// New builds an extractor that resolves relative reminder times in the user's
+// wall-clock timezone; a nil loc falls back to UTC.
+func New(loc *time.Location) Extractor {
+	if loc == nil {
+		loc = time.UTC
 	}
-	sort.Strings(types)
-	return types
+	return Extractor{loc: loc}
+}
+
+const systemPrompt = `You are a precise extraction engine for personal audio transcripts (meetings, voice notes, calls).
+You are given numbered items, each one a separate transcript. For each item extract exactly three kinds of output:
+- todos: an action item - something a speaker said they (or someone) must do, schedule, follow up on, or deliver.
+- reminders: a time-bound commitment - an action item with a specific date and/or time.
+- insights: a reflection, realization, conclusion, idea, decision, or opinion worth remembering.
+Output rules:
+- Assign every extracted entry to exactly one list. If it has a concrete date and/or time it is a reminder, never a todo. Never repeat an entry in more than one list.
+- Extract only what was explicitly said. Do not invent entries, do not extract vague intentions or topics that were merely discussed, and do not produce an entry for an item that contains nothing relevant.
+- If an item yields nothing for a list, omit it from that list. An item that yields nothing at all appears in no list.
+- "item" must be the 1-based number of the item the entry came from.
+- "text" must be concise and self-contained. Todos and reminders are imperatives (e.g. "Send the Q3 report to Priya"); insights are statements (e.g. "Vendor quotes are 30% higher").
+- "remind_at" is the resolved due datetime as ISO 8601 in the user's timezone with its UTC offset (e.g. "2026-09-18T17:00:00+05:30"), computed against the current date/time given in the user message:
+  - a stated date without a time resolves to 09:00 on that date;
+  - a stated time without a date resolves to the next occurrence after now;
+  - if the statement is time-bound but no concrete date or time can be determined, use null.
+Return a JSON object and nothing else, exactly in this shape:
+{"todos":[{"item":<number>,"text":"<imperative>"}],"reminders":[{"item":<number>,"text":"<imperative>","remind_at":"<ISO 8601 with UTC offset>"}],"insights":[{"item":<number>,"text":"<statement>"}]}
+Never output anything outside the JSON object.`
+
+func (e Extractor) Messages(items []model.Job) []llm.Message {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Current date/time for the user (%s): %s\n", e.loc, time.Now().In(e.loc).Format(time.RFC3339))
+	b.WriteString("\nExtract todos, reminders and insights from the following numbered transcripts.\n")
+	for i, it := range items {
+		fmt.Fprintf(&b, "\n--- item %d ---\n%s\n", i+1, strings.TrimSpace(it.Text))
+	}
+	return []llm.Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: b.String()},
+	}
+}
+
+func (e Extractor) Parse(content string, items []model.Job) ([]model.Result, error) {
+	var payload struct {
+		Todos []struct {
+			Item int    `json:"item"`
+			Text string `json:"text"`
+		} `json:"todos"`
+		Reminders []struct {
+			Item     int     `json:"item"`
+			Text     string  `json:"text"`
+			RemindAt *string `json:"remind_at"`
+		} `json:"reminders"`
+		Insights []struct {
+			Item int    `json:"item"`
+			Text string `json:"text"`
+		} `json:"insights"`
+	}
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return nil, fmt.Errorf("parsing llm json: %w", err)
+	}
+
+	results := newResults(items)
+
+	for _, t := range payload.Todos {
+		idx, err := itemIndex(t.Item, len(items), "todo")
+		if err != nil {
+			return nil, err
+		}
+		if text := strings.TrimSpace(t.Text); text != "" {
+			results[idx].Todos = append(results[idx].Todos, text)
+		}
+	}
+	for _, rem := range payload.Reminders {
+		idx, err := itemIndex(rem.Item, len(items), "reminder")
+		if err != nil {
+			return nil, err
+		}
+		text := strings.TrimSpace(rem.Text)
+		if text == "" {
+			continue
+		}
+		reminder := model.Reminder{Text: text}
+		if rem.RemindAt != nil && strings.TrimSpace(*rem.RemindAt) != "" {
+			at, err := time.Parse(time.RFC3339, strings.TrimSpace(*rem.RemindAt))
+			if err != nil {
+				return nil, fmt.Errorf("llm returned unparseable remind_at %q: %w", *rem.RemindAt, err)
+			}
+			reminder.RemindAt = &at
+		}
+		results[idx].Reminders = append(results[idx].Reminders, reminder)
+	}
+	for _, ins := range payload.Insights {
+		idx, err := itemIndex(ins.Item, len(items), "insight")
+		if err != nil {
+			return nil, err
+		}
+		if text := strings.TrimSpace(ins.Text); text != "" {
+			results[idx].Insights = append(results[idx].Insights, model.Insight{Text: text})
+		}
+	}
+
+	for i := range results {
+		dropTodosShadowedByReminders(&results[i])
+	}
+	return results, nil
+}
+
+// newResults seeds one Result per claimed job so an item with no output still
+// replaces any stale rows for its audio.
+func newResults(items []model.Job) []model.Result {
+	results := make([]model.Result, len(items))
+	for i, it := range items {
+		results[i] = model.Result{
+			JobID:      it.ID,
+			UserID:     it.UserID,
+			AudioID:    it.AudioID,
+			RecordedAt: it.RecordedAt,
+		}
+	}
+	return results
+}
+
+// itemIndex converts the LLM's 1-based item number into a slice index.
+func itemIndex(item, n int, kind string) (int, error) {
+	idx := item - 1
+	if idx < 0 || idx >= n {
+		return 0, fmt.Errorf("llm returned %s item %d outside batch of %d", kind, item, n)
+	}
+	return idx, nil
+}
+
+// normalize lowercases and collapses whitespace for duplicate detection.
+func normalize(text string) string {
+	return strings.ToLower(strings.Join(strings.Fields(text), " "))
+}
+
+// dropTodosShadowedByReminders enforces the prompt's precedence rule in code:
+// a time-bound entry is a reminder, so an identical todo is a duplicate.
+func dropTodosShadowedByReminders(r *model.Result) {
+	if len(r.Todos) == 0 || len(r.Reminders) == 0 {
+		return
+	}
+	reminders := make(map[string]struct{}, len(r.Reminders))
+	for _, rem := range r.Reminders {
+		reminders[normalize(rem.Text)] = struct{}{}
+	}
+	kept := make([]string, 0, len(r.Todos))
+	for _, todo := range r.Todos {
+		if _, duplicate := reminders[normalize(todo)]; duplicate {
+			continue
+		}
+		kept = append(kept, todo)
+	}
+	r.Todos = kept
 }

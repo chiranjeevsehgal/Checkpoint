@@ -15,10 +15,11 @@ import (
 	"extraction-service/internal/model"
 )
 
-// PostgresStore is the durable batch queue (extraction_jobs) plus the todo
-// writer. The consumer goroutine only inserts pending rows; the batcher
-// claims them FOR UPDATE SKIP LOCKED, so concurrent workers can never claim
-// the same rows and a crashed worker's claims get reclaimed automatically.
+// PostgresStore is the durable batch queue (extraction_jobs) plus the
+// todos/reminders/insights writer. The consumer goroutine only inserts
+// pending rows; the batcher claims them FOR UPDATE SKIP LOCKED, so concurrent
+// workers can never claim the same rows and a crashed worker's claims get
+// reclaimed automatically.
 type PostgresStore struct {
 	pool *pgxpool.Pool
 }
@@ -71,8 +72,8 @@ func (p *PostgresStore) missingTombstoneTable(err error) bool {
 	return true
 }
 
-// EnqueueJob inserts one pending row per (user, audio, type). Idempotent
-// under Kafka redelivery: a duplicate event is a no-op.
+// EnqueueJob inserts the one pending row for (user, audio). Idempotent under
+// Kafka redelivery: a duplicate event is a no-op.
 func (p *PostgresStore) EnqueueJob(ctx context.Context, j model.Job) error {
 	_, err := p.pool.Exec(ctx, `
 		INSERT INTO extraction_jobs (user_id, audio_id, extraction_type, text, language, recorded_at)
@@ -176,9 +177,10 @@ func (p *PostgresStore) ClaimBatch(ctx context.Context, userID, extractionType s
 }
 
 // CompleteBatch persists extraction results and marks their jobs done in
-// one transaction. Each result's rows are replaced per audio (DELETE then
-// INSERT, dispatched on the result's extraction type) so a redelivery or
-// re-run can neither duplicate nor leave stale rows.
+// one transaction. Combined extraction yields all three lists per audio, so
+// each result replaces todos, reminders and insights for its audio (DELETE
+// then INSERT) — a redelivery or re-run can neither duplicate nor leave
+// stale rows. A result that found nothing is marked 'skipped'.
 func (p *PostgresStore) CompleteBatch(ctx context.Context, results []model.Result, llmModel string) error {
 	if len(results) == 0 {
 		return nil
@@ -200,27 +202,24 @@ func (p *PostgresStore) CompleteBatch(ctx context.Context, results []model.Resul
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	for _, r := range results {
-		switch r.ExtractionType {
-		case model.TypeTodo:
-			if err := replaceTodos(ctx, tx, r, llmModel); err != nil {
-				return err
-			}
-		case model.TypeReminder:
-			if err := replaceReminders(ctx, tx, r, llmModel); err != nil {
-				return err
-			}
-		case model.TypeInsight:
-			if err := replaceInsights(ctx, tx, r, llmModel); err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("completing batch: unknown extraction type %q", r.ExtractionType)
+		if err := replaceTodos(ctx, tx, r, llmModel); err != nil {
+			return err
+		}
+		if err := replaceReminders(ctx, tx, r, llmModel); err != nil {
+			return err
+		}
+		if err := replaceInsights(ctx, tx, r, llmModel); err != nil {
+			return err
+		}
+		status := "done"
+		if r.IsEmpty() {
+			status = "skipped"
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE extraction_jobs
-			SET status = 'done', processed_at = now(), updated_at = now(), last_error = NULL
-			WHERE id = $1`, r.JobID); err != nil {
-			return fmt.Errorf("marking job %d done: %w", r.JobID, err)
+			SET status = $2, processed_at = now(), updated_at = now(), last_error = NULL
+			WHERE id = $1`, r.JobID, status); err != nil {
+			return fmt.Errorf("marking job %d %s: %w", r.JobID, status, err)
 		}
 	}
 
