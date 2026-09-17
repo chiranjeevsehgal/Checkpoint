@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Envelope fields shared by every event on the bus — consumed and produced.
@@ -102,15 +103,37 @@ type Job struct {
 	Attempts int
 }
 
+// Registered extraction types; extraction_jobs.extraction_type and
+// model.Result.ExtractionType both use these values.
+const (
+	TypeTodo     = "todo"
+	TypeReminder = "reminder"
+	TypeInsight  = "insight"
+)
+
 // Result is what an extractor produced for one claimed job. Every claimed
-// job always yields a Result — an empty Todos list is a valid outcome ("no
-// action items") and still replaces any stale rows for that audio.
-//
-// Future extraction types (insights, summaries, ...) add their own field
-// here plus a matching Complete* store method; see Explain.md.
+// job always yields a Result — empty output is a valid outcome ("no action
+// items") and still replaces any stale rows for that audio. Only the field
 type Result struct {
-	JobID   int64
-	UserID  string
-	AudioID string
-	Todos   []string
+	JobID          int64
+	UserID         string
+	AudioID        string
+	ExtractionType string
+	Todos          []string
+	Reminders      []Reminder
+	Insights       []Insight
+}
+
+// Reminder is a time-bound commitment: the LLM resolves the stated date
+// and/or time against the current time sent in the prompt. A nil RemindAt
+// means the statement was clearly time-bound but no concrete time could
+// be resolved.
+type Reminder struct {
+	Text     string
+	RemindAt *time.Time
+}
+
+// Insight is a reflection, realization, idea, or conclusion worth remembering — deliberately not an action item.
+type Insight struct {
+	Text string
 }

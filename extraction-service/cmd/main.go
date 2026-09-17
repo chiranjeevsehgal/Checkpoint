@@ -56,9 +56,11 @@ func main() {
 
 	registry := extractor.NewRegistry()
 	registry.Register(extractor.TodoExtractor{})
+	registry.Register(extractor.ReminderExtractor{})
+	registry.Register(extractor.InsightExtractor{})
 
-	log.Printf("listening on kafka topic %q (group %q), model %s, batch=%d, writing todos to postgres",
-		cfg.Kafka.ConsumeTopic, cfg.Kafka.ConsumerGroup, cfg.Groq.Model, cfg.Batch.Size)
+	log.Printf("listening on kafka topic %q (group %q), model %s, batch=%d, types=%v, writing extractions to postgres",
+		cfg.Kafka.ConsumeTopic, cfg.Kafka.ConsumerGroup, cfg.Groq.Model, cfg.Batch.Size, registry.Types())
 
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -118,8 +120,8 @@ func runConsumer(ctx context.Context, consumer *kafka.Consumer, store *storage.P
 			continue
 		}
 
-		// One queue row per registered extraction type; today that is just
-		// "todo". ON CONFLICT DO NOTHING makes Kafka redelivery a no-op.
+		// One queue row per registered extraction type. ON CONFLICT DO
+		// NOTHING makes Kafka redelivery a no-op.
 		var enqueueErr error
 		for _, typ := range registry.Types() {
 			job := model.Job{
@@ -242,11 +244,11 @@ func processBatch(ctx context.Context, store *storage.PostgresStore, client *llm
 			handleBatchFailure(ctx, store, group, err, cfg)
 			return
 		}
-		todos := 0
+		extracted := 0
 		for _, r := range results {
-			todos += len(r.Todos)
+			extracted += len(r.Todos) + len(r.Reminders) + len(r.Insights)
 		}
-		log.Printf("extracted user_id=%s type=%s items=%d todos=%d", userID, ext.Type(), len(group), todos)
+		log.Printf("extracted user_id=%s type=%s items=%d extracted=%d", userID, ext.Type(), len(group), extracted)
 	}
 }
 

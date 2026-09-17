@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"extraction-service/internal/model"
@@ -114,8 +115,9 @@ func (p *PostgresStore) ClaimBatch(ctx context.Context, userID, extractionType s
 }
 
 // CompleteBatch persists extraction results and marks their jobs done in
-// one transaction. Todos are replaced per audio (DELETE then INSERT) so a
-// redelivery or re-run can neither duplicate nor leave stale rows.
+// one transaction. Each result's rows are replaced per audio (DELETE then
+// INSERT, dispatched on the result's extraction type) so a redelivery or
+// re-run can neither duplicate nor leave stale rows.
 func (p *PostgresStore) CompleteBatch(ctx context.Context, results []model.Result, llmModel string) error {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
@@ -124,17 +126,21 @@ func (p *PostgresStore) CompleteBatch(ctx context.Context, results []model.Resul
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	for _, r := range results {
-		if _, err := tx.Exec(ctx, `DELETE FROM todos WHERE user_id = $1 AND audio_id = $2`, r.UserID, r.AudioID); err != nil {
-			return fmt.Errorf("replacing todos for %s: %w", r.AudioID, err)
-		}
-		for _, text := range r.Todos {
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO todos (user_id, audio_id, text, model)
-				VALUES ($1, $2, $3, $4)
-				ON CONFLICT (user_id, audio_id, text) DO NOTHING`,
-				r.UserID, r.AudioID, text, llmModel); err != nil {
-				return fmt.Errorf("inserting todo for %s: %w", r.AudioID, err)
+		switch r.ExtractionType {
+		case model.TypeTodo:
+			if err := replaceTodos(ctx, tx, r, llmModel); err != nil {
+				return err
 			}
+		case model.TypeReminder:
+			if err := replaceReminders(ctx, tx, r, llmModel); err != nil {
+				return err
+			}
+		case model.TypeInsight:
+			if err := replaceInsights(ctx, tx, r, llmModel); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("completing batch: unknown extraction type %q", r.ExtractionType)
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE extraction_jobs
@@ -146,6 +152,54 @@ func (p *PostgresStore) CompleteBatch(ctx context.Context, results []model.Resul
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("committing complete-batch tx: %w", err)
+	}
+	return nil
+}
+
+func replaceTodos(ctx context.Context, tx pgx.Tx, r model.Result, llmModel string) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM todos WHERE user_id = $1 AND audio_id = $2`, r.UserID, r.AudioID); err != nil {
+		return fmt.Errorf("replacing todos for %s: %w", r.AudioID, err)
+	}
+	for _, text := range r.Todos {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO todos (user_id, audio_id, text, model)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (user_id, audio_id, text) DO NOTHING`,
+			r.UserID, r.AudioID, text, llmModel); err != nil {
+			return fmt.Errorf("inserting todo for %s: %w", r.AudioID, err)
+		}
+	}
+	return nil
+}
+
+func replaceReminders(ctx context.Context, tx pgx.Tx, r model.Result, llmModel string) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM reminders WHERE user_id = $1 AND audio_id = $2`, r.UserID, r.AudioID); err != nil {
+		return fmt.Errorf("replacing reminders for %s: %w", r.AudioID, err)
+	}
+	for _, rem := range r.Reminders {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO reminders (user_id, audio_id, text, remind_at, model)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (user_id, audio_id, text) DO NOTHING`,
+			r.UserID, r.AudioID, rem.Text, rem.RemindAt, llmModel); err != nil {
+			return fmt.Errorf("inserting reminder for %s: %w", r.AudioID, err)
+		}
+	}
+	return nil
+}
+
+func replaceInsights(ctx context.Context, tx pgx.Tx, r model.Result, llmModel string) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM insights WHERE user_id = $1 AND audio_id = $2`, r.UserID, r.AudioID); err != nil {
+		return fmt.Errorf("replacing insights for %s: %w", r.AudioID, err)
+	}
+	for _, text := range r.Insights {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO insights (user_id, audio_id, text, model)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (user_id, audio_id, text) DO NOTHING`,
+			r.UserID, r.AudioID, text, llmModel); err != nil {
+			return fmt.Errorf("inserting insight for %s: %w", r.AudioID, err)
+		}
 	}
 	return nil
 }

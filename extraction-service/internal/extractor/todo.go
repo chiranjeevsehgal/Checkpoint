@@ -14,7 +14,7 @@ import (
 // 1-based position in the prompt.
 type TodoExtractor struct{}
 
-func (TodoExtractor) Type() string { return "todo" }
+func (TodoExtractor) Type() string { return model.TypeTodo }
 
 const todoSystemPrompt = `You are a precise extraction engine for personal audio transcripts (meetings, voice notes, calls).
 Find explicit action items / todos: things a speaker said they (or someone) need to do, schedule, follow up on, or deliver.
@@ -54,7 +54,7 @@ func (TodoExtractor) Parse(content string, items []model.Job) ([]model.Result, e
 	// items" outcome must still replace any stale rows for that audio.
 	results := make([]model.Result, len(items))
 	for i, it := range items {
-		results[i] = model.Result{JobID: it.ID, UserID: it.UserID, AudioID: it.AudioID}
+		results[i] = model.Result{JobID: it.ID, UserID: it.UserID, AudioID: it.AudioID, ExtractionType: model.TypeTodo}
 	}
 	for _, t := range payload.Todos {
 		idx := t.Item - 1
