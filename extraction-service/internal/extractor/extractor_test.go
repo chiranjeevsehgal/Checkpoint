@@ -35,7 +35,7 @@ func TestMessagesIncludeCurrentTimeAndItems(t *testing.T) {
 		t.Fatalf("user prompt missing the user's UTC offset: %q", msgs[1].Content)
 	}
 	for i := 1; i <= 3; i++ {
-		marker := "--- item " + string(rune('0'+i)) + " ---"
+		marker := "--- item " + string(rune('0'+i)) + " (recorded"
 		if !strings.Contains(msgs[1].Content, marker) {
 			t.Fatalf("user prompt missing marker %q: %q", marker, msgs[1].Content)
 		}
@@ -141,5 +141,98 @@ func TestParsePreservesRecordedAt(t *testing.T) {
 	}
 	if results[0].RecordedAt != "2026-09-13T10:15:00Z" {
 		t.Fatalf("result lost recorded_at: %+v", results[0])
+	}
+}
+
+func TestMessagesIncludeRecordedAt(t *testing.T) {
+	items := []model.Job{
+		{ID: 1, Text: "a", RecordedAt: "2026-09-17 23:17:47+05:30"},
+		{ID: 2, Text: "b"},
+	}
+	content := New(time.UTC).Messages(items)[1].Content
+	if !strings.Contains(content, "--- item 1 (recorded 2026-09-17 23:17:47+05:30) ---") {
+		t.Fatalf("item 1 heading missing recorded time: %q", content)
+	}
+	if !strings.Contains(content, "--- item 2 ---") {
+		t.Fatalf("item 2 heading wrong: %q", content)
+	}
+	if strings.Contains(content, "--- item 2 (recorded") {
+		t.Fatalf("item 2 must not show a recorded time: %q", content)
+	}
+}
+
+func TestRollForwardPast(t *testing.T) {
+	loc := time.FixedZone("IST", 5*60*60+30*60)
+	now := time.Date(2026, 9, 17, 23, 18, 0, 0, loc)
+	cases := []struct {
+		name string
+		at   time.Time
+		want time.Time
+	}{
+		{
+			name: "future unchanged",
+			at:   time.Date(2026, 9, 18, 9, 0, 0, 0, loc),
+			want: time.Date(2026, 9, 18, 9, 0, 0, 0, loc),
+		},
+		{
+			name: "earlier today rolls to tomorrow",
+			at:   time.Date(2026, 9, 17, 19, 0, 0, 0, loc),
+			want: time.Date(2026, 9, 18, 19, 0, 0, 0, loc),
+		},
+		{
+			name: "just under a day ago rolls to tomorrow",
+			at:   time.Date(2026, 9, 16, 23, 30, 0, 0, loc),
+			want: time.Date(2026, 9, 17, 23, 30, 0, 0, loc),
+		},
+		{
+			name: "over a day ago rolls to the next future day",
+			at:   time.Date(2026, 9, 16, 23, 0, 0, 0, loc),
+			want: time.Date(2026, 9, 18, 23, 0, 0, 0, loc),
+		},
+		{
+			name: "exactly now rolls to tomorrow",
+			at:   now,
+			want: time.Date(2026, 9, 18, 23, 18, 0, 0, loc),
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := rollForwardPast(c.at, now); !got.Equal(c.want) {
+				t.Fatalf("rollForwardPast(%v) = %v, want %v", c.at, got, c.want)
+			}
+		})
+	}
+}
+
+func TestParseRollsForwardPastRemindAt(t *testing.T) {
+	results, err := New(time.UTC).Parse(
+		`{"reminders":[{"item":1,"text":"Call Dad","remind_at":"2000-01-01T19:00:00+05:30"}]}`, jobs(1))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got := results[0].Reminders[0].RemindAt
+	if got == nil {
+		t.Fatal("expected a rolled-forward remind_at, got nil")
+	}
+	if !got.After(time.Now()) {
+		t.Fatalf("remind_at must be in the future, got %v", got)
+	}
+	if got.Hour() != 19 || got.Minute() != 0 {
+		t.Fatalf("clock time not preserved: %v", got)
+	}
+}
+
+func TestParseKeepsFutureRemindAt(t *testing.T) {
+	want, err := time.Parse(time.RFC3339, time.Now().Add(48*time.Hour).Format(time.RFC3339))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := `{"reminders":[{"item":1,"text":"x","remind_at":"` + want.Format(time.RFC3339) + `"}]}`
+	results, err := New(time.UTC).Parse(content, jobs(1))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := results[0].Reminders[0].RemindAt; got == nil || !got.Equal(want) {
+		t.Fatalf("future remind_at changed: got %v want %v", got, want)
 	}
 }

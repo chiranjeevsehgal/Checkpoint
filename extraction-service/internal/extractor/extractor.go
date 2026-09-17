@@ -39,9 +39,11 @@ Output rules:
 - If an item yields nothing for a list, omit it from that list. An item that yields nothing at all appears in no list.
 - "item" must be the 1-based number of the item the entry came from.
 - "text" must be concise and self-contained. Todos and reminders are imperatives (e.g. "Send the Q3 report to Priya"); insights are statements (e.g. "Vendor quotes are 30% higher").
-- "remind_at" is the resolved due datetime as ISO 8601 in the user's timezone with its UTC offset (e.g. "2026-09-18T17:00:00+05:30"), computed against the current date/time given in the user message:
+- "remind_at" is the resolved due datetime as ISO 8601 in the user's timezone with its UTC offset (e.g. "2026-09-18T17:00:00+05:30"):
+  - resolve relative expressions ("tonight", "tomorrow", "Friday") against the recorded date/time in the item's heading; use the current date/time only when an item has no recorded time;
   - a stated date without a time resolves to 09:00 on that date;
-  - a stated time without a date resolves to the next occurrence after now;
+  - a stated time without a date resolves to the next occurrence after the anchor;
+  - remind_at must be strictly in the future: if the stated moment has already passed, move it forward to the next day at the same clock time (a weekday moves to the next occurrence of that weekday);
   - if the statement is time-bound but no concrete date or time can be determined, use null.
 Return a JSON object and nothing else, exactly in this shape:
 {"todos":[{"item":<number>,"text":"<imperative>"}],"reminders":[{"item":<number>,"text":"<imperative>","remind_at":"<ISO 8601 with UTC offset>"}],"insights":[{"item":<number>,"text":"<statement>"}]}
@@ -52,7 +54,7 @@ func (e Extractor) Messages(items []model.Job) []llm.Message {
 	fmt.Fprintf(&b, "Current date/time for the user (%s): %s\n", e.loc, time.Now().In(e.loc).Format(time.RFC3339))
 	b.WriteString("\nExtract todos, reminders and insights from the following numbered transcripts.\n")
 	for i, it := range items {
-		fmt.Fprintf(&b, "\n--- item %d ---\n%s\n", i+1, strings.TrimSpace(it.Text))
+		fmt.Fprintf(&b, "\n--- item %d%s ---\n%s\n", i+1, recordedLabel(it.RecordedAt), strings.TrimSpace(it.Text))
 	}
 	return []llm.Message{
 		{Role: "system", Content: systemPrompt},
@@ -106,6 +108,7 @@ func (e Extractor) Parse(content string, items []model.Job) ([]model.Result, err
 			if err != nil {
 				return nil, fmt.Errorf("llm returned unparseable remind_at %q: %w", *rem.RemindAt, err)
 			}
+			at = rollForwardPast(at, time.Now())
 			reminder.RemindAt = &at
 		}
 		results[idx].Reminders = append(results[idx].Reminders, reminder)
@@ -148,6 +151,25 @@ func itemIndex(item, n int, kind string) (int, error) {
 		return 0, fmt.Errorf("llm returned %s item %d outside batch of %d", kind, item, n)
 	}
 	return idx, nil
+}
+
+// recordedLabel renders " (recorded 2026-09-17 23:17:47+05:30)" when the item
+// carries a recording time, and "" otherwise.
+func recordedLabel(recordedAt string) string {
+	if recorded := strings.TrimSpace(recordedAt); recorded != "" {
+		return " (recorded " + recorded + ")"
+	}
+	return ""
+}
+
+// rollForwardPast moves at to the next future occurrence of its clock time
+// when it has already passed, so stored reminders are always actionable.
+func rollForwardPast(at, now time.Time) time.Time {
+	if at.After(now) {
+		return at
+	}
+	days := int(now.Sub(at)/(24*time.Hour)) + 1
+	return at.AddDate(0, 0, days)
 }
 
 // normalize lowercases and collapses whitespace for duplicate detection.
