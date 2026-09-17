@@ -120,6 +120,21 @@ func runConsumer(ctx context.Context, consumer *kafka.Consumer, store *storage.P
 			continue
 		}
 
+		deleting, err := store.IsUserDeleting(ctx, event.Data.UserID)
+		if err != nil {
+			// Not committing means redelivery on restart — the event is
+			// never silently lost.
+			log.Printf("tombstone check failed audio_id=%s: %v", event.Data.AudioID, err)
+			continue
+		}
+		if deleting {
+			log.Printf("stale_deleted_user_event audio_id=%s", event.Data.AudioID)
+			if err := consumer.Commit(ctx, msg); err != nil {
+				log.Printf("commit error for stale event: %v", err)
+			}
+			continue
+		}
+
 		// One queue row per registered extraction type. ON CONFLICT DO
 		// NOTHING makes Kafka redelivery a no-op.
 		var enqueueErr error
@@ -130,6 +145,7 @@ func runConsumer(ctx context.Context, consumer *kafka.Consumer, store *storage.P
 				ExtractionType:  typ,
 				Text:            event.Data.Text,
 				Language:        event.Data.Language,
+				RecordedAt:      event.Data.RecordedAt,
 			}
 			if err := store.EnqueueJob(ctx, job); err != nil {
 				enqueueErr = err

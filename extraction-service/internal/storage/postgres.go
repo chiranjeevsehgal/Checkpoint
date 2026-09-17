@@ -2,10 +2,14 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"extraction-service/internal/model"
@@ -34,14 +38,48 @@ func (p *PostgresStore) Close() {
 	p.pool.Close()
 }
 
+// tombstoneMissingWarned keeps the "gating disabled" warning to one line per
+// process instead of one per poll.
+var tombstoneMissingWarned sync.Once
+
+// IsUserDeleting reports whether a deletion tombstone exists for the user.
+// A missing table means downstream runs against a separate database, so
+// there is nothing to gate on.
+func (p *PostgresStore) IsUserDeleting(ctx context.Context, userID string) (bool, error) {
+	var deleting bool
+	err := p.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM account_deletions WHERE user_id = $1::uuid)`, userID).Scan(&deleting)
+	if err != nil {
+		if p.missingTombstoneTable(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("checking tombstone for %s: %w", userID, err)
+	}
+	return deleting, nil
+}
+
+// missingTombstoneTable reports whether the error is the account_deletions
+// table not existing (a worker pointed at a DB without the ingestion schema).
+func (p *PostgresStore) missingTombstoneTable(err error) bool {
+	var pgErr *pgconn.PgError
+	if err == nil || !errors.As(err, &pgErr) || pgErr.Code != "42P01" {
+		return false
+	}
+	tombstoneMissingWarned.Do(func() {
+		log.Printf("account_deletions missing; deletion-tombstone gating disabled")
+	})
+	return true
+}
+
 // EnqueueJob inserts one pending row per (user, audio, type). Idempotent
 // under Kafka redelivery: a duplicate event is a no-op.
 func (p *PostgresStore) EnqueueJob(ctx context.Context, j model.Job) error {
 	_, err := p.pool.Exec(ctx, `
-		INSERT INTO extraction_jobs (user_id, audio_id, extraction_type, text, language)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (user_id, audio_id, extraction_type) DO NOTHING`,
-		j.UserID, j.AudioID, j.ExtractionType, j.Text, j.Language)
+		INSERT INTO extraction_jobs (user_id, audio_id, extraction_type, text, language, recorded_at)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::timestamptz)
+		ON CONFLICT (user_id, audio_id, extraction_type) DO UPDATE SET
+			recorded_at = COALESCE(extraction_jobs.recorded_at, EXCLUDED.recorded_at)`,
+		j.UserID, j.AudioID, j.ExtractionType, j.Text, j.Language, j.RecordedAt)
 	if err != nil {
 		return fmt.Errorf("enqueueing extraction job: %w", err)
 	}
@@ -50,15 +88,38 @@ func (p *PostgresStore) EnqueueJob(ctx context.Context, j model.Job) error {
 
 // ReadyUsers returns user_ids whose pending rows form a full batch, or —
 // when maxWait > 0 — a partial batch whose oldest row has waited that long.
-// One GROUP BY covers every user; nothing is tracked in memory.
+// One GROUP BY covers every user; nothing is tracked in memory. Deleted
+// accounts are excluded so tombstoned transcripts never reach the LLM.
 func (p *PostgresStore) ReadyUsers(ctx context.Context, extractionType string, batchSize int, maxWait time.Duration) ([]string, error) {
+	users, err := p.readyUsers(ctx, true, extractionType, batchSize, maxWait)
+	if err != nil && p.missingTombstoneTable(err) {
+		users, err = p.readyUsers(ctx, false, extractionType, batchSize, maxWait)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying ready users: %w", err)
+	}
+	return users, nil
+}
+
+// readyUsers runs ReadyUsers' queue query; withTombstoneGate joins the
+// account_deletions table to skip deleted accounts.
+func (p *PostgresStore) readyUsers(ctx context.Context, withTombstoneGate bool, extractionType string, batchSize int, maxWait time.Duration) ([]string, error) {
 	query := `
 		SELECT user_id
 		FROM extraction_jobs
-		WHERE status = 'pending' AND extraction_type = $1
+		WHERE status = 'pending' AND extraction_type = $1`
+	args := []interface{}{extractionType}
+	if withTombstoneGate {
+		query += `
+		  AND NOT EXISTS (
+			SELECT 1 FROM account_deletions tt
+			WHERE tt.user_id = extraction_jobs.user_id::uuid
+		  )`
+	}
+	query += `
 		GROUP BY user_id
 		HAVING count(*) >= $2`
-	args := []interface{}{extractionType, batchSize}
+	args = append(args, batchSize)
 	if maxWait > 0 {
 		query += ` OR min(created_at) <= now() - make_interval(secs => $3)`
 		args = append(args, int(maxWait.Seconds()))
@@ -68,7 +129,7 @@ func (p *PostgresStore) ReadyUsers(ctx context.Context, extractionType string, b
 
 	rows, err := p.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("querying ready users: %w", err)
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -76,7 +137,7 @@ func (p *PostgresStore) ReadyUsers(ctx context.Context, extractionType string, b
 	for rows.Next() {
 		var u string
 		if err := rows.Scan(&u); err != nil {
-			return nil, fmt.Errorf("scanning ready user: %w", err)
+			return nil, err
 		}
 		users = append(users, u)
 	}
@@ -96,7 +157,7 @@ func (p *PostgresStore) ClaimBatch(ctx context.Context, userID, extractionType s
 			LIMIT $3
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, user_id, audio_id, extraction_type, text, language, attempts`,
+		RETURNING id, user_id, audio_id, extraction_type, text, language, COALESCE(recorded_at::text, ''), attempts`,
 		userID, extractionType, n)
 	if err != nil {
 		return nil, fmt.Errorf("claiming batch for user %s: %w", userID, err)
@@ -106,7 +167,7 @@ func (p *PostgresStore) ClaimBatch(ctx context.Context, userID, extractionType s
 	var jobs []model.Job
 	for rows.Next() {
 		var j model.Job
-		if err := rows.Scan(&j.ID, &j.UserID, &j.AudioID, &j.ExtractionType, &j.Text, &j.Language, &j.Attempts); err != nil {
+		if err := rows.Scan(&j.ID, &j.UserID, &j.AudioID, &j.ExtractionType, &j.Text, &j.Language, &j.RecordedAt, &j.Attempts); err != nil {
 			return nil, fmt.Errorf("scanning claimed job: %w", err)
 		}
 		jobs = append(jobs, j)
@@ -119,6 +180,19 @@ func (p *PostgresStore) ClaimBatch(ctx context.Context, userID, extractionType s
 // INSERT, dispatched on the result's extraction type) so a redelivery or
 // re-run can neither duplicate nor leave stale rows.
 func (p *PostgresStore) CompleteBatch(ctx context.Context, results []model.Result, llmModel string) error {
+	if len(results) == 0 {
+		return nil
+	}
+	// The account may have been deleted while the LLM call ran; never
+	// re-create extracted rows for a tombstoned user.
+	deleting, err := p.IsUserDeleting(ctx, results[0].UserID)
+	if err != nil {
+		return fmt.Errorf("checking tombstone before persisting: %w", err)
+	}
+	if deleting {
+		return nil
+	}
+
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning complete-batch tx: %w", err)
@@ -162,10 +236,10 @@ func replaceTodos(ctx context.Context, tx pgx.Tx, r model.Result, llmModel strin
 	}
 	for _, text := range r.Todos {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO todos (user_id, audio_id, text, model)
-			VALUES ($1, $2, $3, $4)
+			INSERT INTO todos (user_id, audio_id, text, model, recorded_at)
+			VALUES ($1, $2, $3, $4, NULLIF($5, '')::timestamptz)
 			ON CONFLICT (user_id, audio_id, text) DO NOTHING`,
-			r.UserID, r.AudioID, text, llmModel); err != nil {
+			r.UserID, r.AudioID, text, llmModel, r.RecordedAt); err != nil {
 			return fmt.Errorf("inserting todo for %s: %w", r.AudioID, err)
 		}
 	}

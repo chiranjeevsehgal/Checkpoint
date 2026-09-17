@@ -14,8 +14,8 @@ func validEvent() ExtractionJobRequestedEvent {
 			OccurredAt:    "2026-09-14T10:00:00.000Z",
 		},
 		Data: ExtractionJobData{
-			AudioID: "audio-1",
-			UserID:  "user-1",
+			AudioID: "a5a3a0ae-1e56-4cc0-8aae-6d38170c2b31",
+			UserID:  "df38ec6e-cb33-4f10-b5e2-4d24c17e4c26",
 			Text:    "please send the report",
 		},
 	}
@@ -32,9 +32,12 @@ func TestValidateRejectsPoison(t *testing.T) {
 	cases := map[string]func(*ExtractionJobRequestedEvent){
 		"wrong schema_version":  func(e *ExtractionJobRequestedEvent) { e.SchemaVersion = 1 },
 		"wrong event_type":      func(e *ExtractionJobRequestedEvent) { e.EventType = "SOMETHING_ELSE" },
-		"missing audio_id":      func(e *ExtractionJobRequestedEvent) { e.Data.AudioID = "" },
+		"empty audio_id":        func(e *ExtractionJobRequestedEvent) { e.Data.AudioID = "" },
 		"whitespace audio_id":   func(e *ExtractionJobRequestedEvent) { e.Data.AudioID = "   " },
-		"missing user_id":       func(e *ExtractionJobRequestedEvent) { e.Data.UserID = "" },
+		"non-uuid audio_id":     func(e *ExtractionJobRequestedEvent) { e.Data.AudioID = "audio-1" },
+		"empty user_id":         func(e *ExtractionJobRequestedEvent) { e.Data.UserID = "" },
+		"whitespace user_id":    func(e *ExtractionJobRequestedEvent) { e.Data.UserID = "   " },
+		"non-uuid user_id":      func(e *ExtractionJobRequestedEvent) { e.Data.UserID = "user-1" },
 		"missing text":          func(e *ExtractionJobRequestedEvent) { e.Data.Text = "" },
 		"whitespace text":       func(e *ExtractionJobRequestedEvent) { e.Data.Text = "\n\t " },
 	}
@@ -78,5 +81,30 @@ func TestUnmarshalMatchesTranscriptionContract(t *testing.T) {
 	}
 	if err := e.Validate(); err != nil {
 		t.Fatalf("expected published event to validate: %v", err)
+	}
+}
+
+func TestUnmarshalCarriesRecordedAt(t *testing.T) {
+	raw := `{
+		"schema_version": 2,
+		"event_id": "evt-2",
+		"event_type": "EXTRACTION_REQUESTED",
+		"occurred_at": "2026-09-14T10:00:00.000Z",
+		"data": {
+			"audio_id": "04f232ee-4a3f-4883-aac6-cdfe1c133cad",
+			"user_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+			"text": "I need to call the dentist tomorrow.",
+			"recorded_at": "2026-09-13T10:15:00Z"
+		}
+	}`
+	var e ExtractionJobRequestedEvent
+	if err := json.Unmarshal([]byte(raw), &e); err != nil {
+		t.Fatalf("unmarshalling: %v", err)
+	}
+	if e.Data.RecordedAt != "2026-09-13T10:15:00Z" {
+		t.Fatalf("recorded_at = %q, want 2026-09-13T10:15:00Z", e.Data.RecordedAt)
+	}
+	if err := e.Validate(); err != nil {
+		t.Fatalf("event with recorded_at must validate: %v", err)
 	}
 }

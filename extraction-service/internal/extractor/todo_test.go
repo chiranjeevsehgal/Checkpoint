@@ -10,7 +10,7 @@ import (
 func jobs(n int) []model.Job {
 	out := make([]model.Job, n)
 	for i := range out {
-		out[i] = model.Job{ID: int64(i + 1), UserID: "u1", AudioID: string(rune('a' + i)), Text: "we should do thing " + string(rune('A'+i))}
+		out[i] = model.Job{ID: int64(i + 1), UserID: "u1", AudioID: string(rune('a' + i)), Text: "we should do thing " + string(rune('A'+i)), RecordedAt: "2026-09-13T10:15:00Z"}
 	}
 	return out
 }
@@ -39,6 +39,11 @@ func TestTodoParseMapsItemsToJobs(t *testing.T) {
 	}
 	if len(results[0].Todos) != 1 || results[0].Todos[0] != "Send the Q3 report to Priya" {
 		t.Fatalf("job 1 todos wrong: %+v", results[0])
+	}
+	for i, r := range results {
+		if r.RecordedAt != "2026-09-13T10:15:00Z" {
+			t.Fatalf("result %d lost recorded_at: %+v", i, r)
+		}
 	}
 	if len(results[1].Todos) != 1 || results[1].Todos[0] != "Call the dentist" {
 		t.Fatalf("job 2 todos wrong: %+v", results[1])
