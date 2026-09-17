@@ -100,7 +100,9 @@ class BleWorker:
         self.client = CheckpointClient(
             address, bench_csv=self.bench_csv,
             ingest_enabled=settings.ingest,
-            ingest_base_url=cfg.INGEST_BASE_URL, ingest_user_id=cfg.INGEST_USER_ID,
+            ingest_base_url=cfg.INGEST_BASE_URL,
+            ingest_session_token=cfg.INGEST_SESSION_TOKEN,
+            ingest_device_id=cfg.INGEST_DEVICE_ID,
             ingest_delete_after=(not settings.keep),
             ingest_poll_enabled=cfg.INGEST_POLL_ENABLED_DEFAULT,
             ingest_poll_timeout=cfg.INGEST_POLL_TIMEOUT_S,

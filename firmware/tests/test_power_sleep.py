@@ -61,10 +61,11 @@ def test_power_sleep_gating():
     assert "transfer_is_busy" in cpp
     assert "ble_is_connected" in cpp
     assert "ble_enrollment_active" in cpp
-    assert "control_sync_enabled" in cpp
-    assert "manifest_pending_count" in cpp
-    # two clean reads guard the mutex-timeout false zero
-    assert "s_synced_confirm" in cpp
+    # Queued (pending) recordings must NOT pin the device awake: they persist
+    # on SD, so only an in-flight transfer blocks sleep. Gating on the pending
+    # count dead-locked the device whenever sync was on with no peer connected.
+    assert "control_sync_enabled" not in cpp
+    assert "manifest_pending_count" not in cpp
     print("PASS sleep gating")
 
 

@@ -4,23 +4,39 @@ import { describe, it } from 'node:test';
 import {
   assertValidStoreKey,
   credentialKey,
+  enrolledDeviceKey,
   isValidStoreKey,
+  sessionKey,
   settingsKey,
 } from '../../../lib/storage/keys.ts';
 
+const IDENTITY = '11111111-1111-1111-1111-111111111111';
+const DEVICE = '474f8bcaff162d3f18fbda36a168f201';
+
 describe('store key builders', () => {
   it('builds valid settings keys without slashes', () => {
-    for (const name of ['serverUrl', 'userId', 'vadThreshold']) {
+    for (const name of ['serverUrl', 'vadThreshold']) {
       const key = settingsKey(name);
       assert.ok(!key.includes('/'), key);
       assert.ok(isValidStoreKey(key), key);
     }
   });
 
-  it('builds valid credential keys without slashes', () => {
-    const key = credentialKey('474f8bcaff162d3f18fbda36a168f201');
-    assert.equal(key, 'Checkpoint.474f8bcaff162d3f18fbda36a168f201');
+  it('builds account-namespaced credential keys', () => {
+    const key = credentialKey(IDENTITY, DEVICE);
+    assert.equal(key, `Checkpoint.${IDENTITY}.${DEVICE}`);
     assert.ok(isValidStoreKey(key));
+  });
+
+  it('builds account-namespaced enrolled device keys', () => {
+    const key = enrolledDeviceKey(IDENTITY);
+    assert.equal(key, `checkpoint.${IDENTITY}.enrolledDeviceId`);
+    assert.ok(isValidStoreKey(key));
+  });
+
+  it('builds a valid session key', () => {
+    assert.equal(sessionKey(), 'checkpoint.session');
+    assert.ok(isValidStoreKey(sessionKey()));
   });
 });
 

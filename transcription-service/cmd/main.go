@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -12,10 +14,19 @@ import (
 
 	"transcription-service/internal/config"
 	"transcription-service/internal/kafka"
+	"transcription-service/internal/language"
 	"transcription-service/internal/model"
 	"transcription-service/internal/provider"
 	"transcription-service/internal/storage"
 )
+
+// errStaleDeletedUser means the event belongs to an account that is being
+// deleted. The message is committed and dropped rather than retried.
+var errStaleDeletedUser = errors.New("stale event for deleted user")
+
+// errOmitTranscript means the transcript is blank or in a language the user
+// did not select. The message is committed and dropped rather than retried.
+var errOmitTranscript = errors.New("transcript omitted")
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -75,8 +86,32 @@ func main() {
 			continue
 		}
 
+		if err := event.Validate(); err != nil {
+			// Malformed identifiers never succeed on redelivery, so drop the
+			// message instead of looping on it.
+			log.Printf("dropping invalid event: %v", err)
+			if cerr := consumer.Commit(ctx, msg); cerr != nil {
+				log.Printf("commit error for invalid event: %v", cerr)
+			}
+			continue
+		}
+
 		if err := handleMessage(ctx, event, transcriber, minioClient, pgStore, producer, cfg.Kafka); err != nil {
-			// Not committing here means this message will be
+			if errors.Is(err, errStaleDeletedUser) {
+				log.Printf("stale_deleted_user_event audio_id=%s", event.Data.AudioID)
+			if cerr := consumer.Commit(ctx, msg); cerr != nil {
+				log.Printf("commit error for stale event: %v", cerr)
+			}
+			continue
+		}
+		if errors.Is(err, errOmitTranscript) {
+			log.Printf("omitted transcript audio_id=%s reason=%v", event.Data.AudioID, err)
+			if cerr := consumer.Commit(ctx, msg); cerr != nil {
+				log.Printf("commit error for omitted transcript: %v", cerr)
+			}
+			continue
+		}
+		// Not committing here means this message will be
 			// redelivered on restart — intentional, so a failed
 			// transcription isn't silently lost.
 			log.Printf("failed to process audio_id=%s: %v", event.Data.AudioID, err)
@@ -101,6 +136,19 @@ func handleMessage(
 	data := event.Data
 	log.Printf("processing audio_id=%s bucket=%s key=%s", data.AudioID, data.Bucket, data.ObjectKey)
 
+	deleting, err := pgStore.IsUserDeleting(ctx, data.UserID)
+	if err != nil {
+		return err
+	}
+	if deleting {
+		return errStaleDeletedUser
+	}
+
+	languages, err := pgStore.AllowedLanguages(ctx, data.UserID)
+	if err != nil {
+		return err
+	}
+
 	audio, fetchedContentType, err := minioClient.FetchObject(ctx, data.Bucket, data.ObjectKey)
 	if err != nil {
 		return err
@@ -110,12 +158,26 @@ func handleMessage(
 		contentType = fetchedContentType
 	}
 
-	result, err := transcriber.Transcribe(ctx, audio, contentType)
+	result, err := transcriber.Transcribe(ctx, audio, contentType, languages)
 	if err != nil {
 		return err
 	}
+	if reason := language.OmitReason(result.Text, result.Language, languages); reason != "" {
+		return fmt.Errorf("%w: %s", errOmitTranscript, reason)
+	}
 	result.AudioID = data.AudioID
 	result.UserID = data.UserID
+	result.RecordedAt = data.RecordedAt
+
+	// Re-check immediately before persistence: the account may have been
+	// deleted while the expensive transcription ran.
+	deleting, err = pgStore.IsUserDeleting(ctx, data.UserID)
+	if err != nil {
+		return err
+	}
+	if deleting {
+		return errStaleDeletedUser
+	}
 
 	if err := pgStore.SaveTranscript(ctx, result); err != nil {
 		return err
@@ -154,6 +216,7 @@ func publishExtractionJob(ctx context.Context, producer *kafka.Producer, topic s
 			Text:            result.Text,
 			Language:        result.Language,
 			SpeakerSegments: result.SpeakerSegments,
+			RecordedAt:      result.RecordedAt,
 		},
 	}
 	return producer.Publish(ctx, topic, result.AudioID, evt)

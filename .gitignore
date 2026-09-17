@@ -8,3 +8,7 @@ __pycache__/
 /firmware/host/checkpoint_client/received
 /firmware/checkpoint/build
 /references
+/admin-console/node_modules
+/admin-console/server/node_modules
+/admin-console/server/dist
+/admin-console/server/data

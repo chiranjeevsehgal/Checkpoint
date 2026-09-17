@@ -60,6 +60,7 @@ type CreateCommand struct {
 	ContentType string
 	SizeBytes   int64
 	RecordedAt  *time.Time
+	DeviceID    string
 }
 
 // CreateResult pairs the persisted upload with its presigned PUT URL.
@@ -78,6 +79,7 @@ func (s *UploadService) buildUpload(userID string, cmd CreateCommand, now time.T
 	upload := &domain.Upload{
 		ID:               uploadID,
 		UserID:           userID,
+		DeviceID:         cmd.DeviceID,
 		Bucket:           s.bucket,
 		ObjectKey:        domain.ObjectKeyFor(userID, uploadID, now),
 		OriginalFilename: filename,
@@ -156,6 +158,7 @@ func (s *UploadService) CreateUploadIdempotent(
 		Upload:         upload,
 		Key:            key,
 		UserID:         userID,
+		DeviceID:       upload.DeviceID,
 		RequestHash:    requestHash,
 		ResponseStatus: 201,
 		ResponseBody:   body,

@@ -1,5 +1,22 @@
 package model
 
+import (
+	"fmt"
+
+	"github.com/google/uuid"
+)
+
+// Validate ensures tenant identifiers are canonical UUIDs before any work.
+func (e TranscriptionRequestedEvent) Validate() error {
+	if _, err := uuid.Parse(e.Data.AudioID); err != nil {
+		return fmt.Errorf("invalid audio_id: %w", err)
+	}
+	if _, err := uuid.Parse(e.Data.UserID); err != nil {
+		return fmt.Errorf("invalid user_id: %w", err)
+	}
+	return nil
+}
+
 // Envelope fields shared by every event on the bus — consumed and produced.
 type Envelope struct {
 	SchemaVersion int    `json:"schema_version"`
@@ -22,6 +39,7 @@ type TranscriptionRequestedData struct {
 	ContentType    string `json:"content_type"`
 	SizeBytes      int64  `json:"size_bytes"`
 	ChecksumSHA256 string `json:"checksum_sha256"`
+	RecordedAt     string `json:"recorded_at,omitempty"`
 }
 
 // SpeakerSegment mirrors a single utterance from the provider.
@@ -43,6 +61,7 @@ type TranscriptResult struct {
 	SpeakerSegments []SpeakerSegment `json:"speaker_segments"`
 	Provider        string           `json:"provider"`
 	RequestID       string           `json:"request_id"`
+	RecordedAt      string           `json:"recorded_at,omitempty"`
 }
 
 type EmbeddingJobRequestedEvent struct {
@@ -68,4 +87,5 @@ type ExtractionJobData struct {
 	Text            string           `json:"text"`
 	Language        string           `json:"language"`
 	SpeakerSegments []SpeakerSegment `json:"speaker_segments"`
+	RecordedAt      string           `json:"recorded_at,omitempty"`
 }

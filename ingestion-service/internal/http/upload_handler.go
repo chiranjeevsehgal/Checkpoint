@@ -32,18 +32,25 @@ type uploadService interface {
 // encodes the result; it holds no business logic. Idempotency replay is
 // owned by the transactional service; idem is retained for wiring
 // compatibility and future direct lookups.
+// deviceOwnership reports whether a pendant belongs to the caller.
+type deviceOwnership interface {
+	IsOwnedBy(ctx context.Context, userID, deviceID string) (bool, error)
+}
+
 type Handler struct {
 	uploads   uploadService
+	devices   deviceOwnership
 	idem      repository.IdempotencyRepository
 	created   *metrics.Counter
 	completed *metrics.Counter
 }
 
 // NewHandler wires the upload endpoints.
-func NewHandler(uploads uploadService, idem repository.IdempotencyRepository, reg *metrics.Registry) *Handler {
+func NewHandler(uploads uploadService, devices deviceOwnership, idem repository.IdempotencyRepository, reg *metrics.Registry) *Handler {
 	_ = idem
 	return &Handler{
 		uploads:   uploads,
+		devices:   devices,
 		idem:      idem,
 		created:   reg.Counter("uploads_created_total"),
 		completed: reg.Counter("uploads_completed_total", "status"),
@@ -55,11 +62,16 @@ type createRequest struct {
 	ContentType string `json:"content_type"`
 	SizeBytes   int64  `json:"size_bytes"`
 	RecordedAt  string `json:"recorded_at"`
+	DeviceID    string `json:"device_id"`
 }
 
-// toCreateCommand validates optional recorded_at and builds the command once
-// so the plain and idempotent create paths share canonical fields.
+// toCreateCommand validates the device id and optional recorded_at once so
+// the plain and idempotent create paths share canonical fields.
 func toCreateCommand(req createRequest) (service.CreateCommand, error) {
+	deviceID, err := domain.NormalizeDeviceID(req.DeviceID)
+	if err != nil {
+		return service.CreateCommand{}, err
+	}
 	recordedAt, err := domain.ParseRecordedAt(req.RecordedAt, time.Now().UTC())
 	if err != nil {
 		return service.CreateCommand{}, err
@@ -69,6 +81,7 @@ func toCreateCommand(req createRequest) (service.CreateCommand, error) {
 		ContentType: req.ContentType,
 		SizeBytes:   req.SizeBytes,
 		RecordedAt:  recordedAt,
+		DeviceID:    deviceID,
 	}, nil
 }
 
@@ -102,17 +115,21 @@ func (h *Handler) CreateUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := r.Header.Get("Idempotency-Key")
-	if key != "" {
-		h.createIdempotent(w, r, principal.UserID, key, req)
-		return
-	}
-
 	cmd, err := toCreateCommand(req)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
 	}
+	if !h.deviceOwned(w, r, principal.UserID, cmd.DeviceID) {
+		return
+	}
+
+	key := r.Header.Get("Idempotency-Key")
+	if key != "" {
+		h.createIdempotent(w, r, principal.UserID, key, cmd)
+		return
+	}
+
 	res, err := h.uploads.CreateUpload(r.Context(), principal.UserID, cmd)
 	if err != nil {
 		writeServiceError(w, r, err)
@@ -131,13 +148,8 @@ func (h *Handler) CreateUpload(w http.ResponseWriter, r *http.Request) {
 // collapse to a single upload; persistence errors fail the request so
 // the client can safely retry. Replay returns the same upload_id with
 // a freshly minted URL.
-func (h *Handler) createIdempotent(w http.ResponseWriter, r *http.Request, userID, key string, req createRequest) {
+func (h *Handler) createIdempotent(w http.ResponseWriter, r *http.Request, userID, key string, cmd service.CreateCommand) {
 	if err := domain.ValidateIdempotencyKey(key); err != nil {
-		writeServiceError(w, r, err)
-		return
-	}
-	cmd, err := toCreateCommand(req)
-	if err != nil {
 		writeServiceError(w, r, err)
 		return
 	}
@@ -290,6 +302,24 @@ func (h *Handler) GetUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// deviceOwned rejects uploads whose pendant is not owned by the caller.
+// Foreign and nonexistent devices return the same response.
+func (h *Handler) deviceOwned(w http.ResponseWriter, r *http.Request, userID, deviceID string) bool {
+	if h.devices == nil {
+		return true
+	}
+	owned, err := h.devices.IsOwnedBy(r.Context(), userID, deviceID)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return false
+	}
+	if !owned {
+		writeError(w, r, http.StatusNotFound, CodeDeviceNotFound, "Device was not found.")
+		return false
+	}
+	return true
+}
+
 func readRawBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
 	if r.Body == nil {
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Request body is required.")
@@ -317,6 +347,6 @@ func hashCreateCommand(cmd service.CreateCommand) string {
 	if cmd.RecordedAt != nil {
 		recordedAt = cmd.RecordedAt.UTC().Format(time.RFC3339)
 	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d|%s", filename, contentType, cmd.SizeBytes, recordedAt)))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d|%s|%s", filename, contentType, cmd.SizeBytes, recordedAt, cmd.DeviceID)))
 	return hex.EncodeToString(sum[:])
 }

@@ -1,9 +1,10 @@
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { Pause, Play, Trash2 } from 'lucide-react-native';
 import { useCallback, useEffect, useRef } from 'react';
 import { ActivityIndicator, FlatList, Pressable, View } from 'react-native';
 
 import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
+import { DisconnectedState } from '../components/disconnected-state.tsx';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { fileStateLabel, formatBytes } from '../parsers.ts';
 import { playback, usePlayback } from '../playback.ts';
@@ -195,7 +196,6 @@ export function StorageScreen() {
     erasing,
   } = useCheckpoint();
   const { label: playingLabel, playing, paused } = usePlayback();
-  const router = useRouter();
 
   const busyRef = useRef(false);
   useEffect(() => {
@@ -278,15 +278,7 @@ export function StorageScreen() {
         }}
         ListEmptyComponent={
           !connected ? (
-            <EmptyState
-              title="Not connected"
-              hint="Connect to a pendant to browse its recordings."
-              action={
-                <Button variant="outline" onPress={() => router.navigate('/(app)/(tabs)/connect')}>
-                  <Text>Go to Connect</Text>
-                </Button>
-              }
-            />
+            <DisconnectedState />
           ) : fileList === null ? (
             <Text variant="muted" className="py-12 text-center">
               Reading storage…

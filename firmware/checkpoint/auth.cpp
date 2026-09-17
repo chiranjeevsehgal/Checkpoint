@@ -7,6 +7,7 @@ namespace {
 
 uint8_t s_device_id[AUTH_DEVICE_ID_BYTES];
 uint8_t s_claim[AUTH_CLAIM_KEY_BYTES];
+uint8_t s_cloud_secret[AUTH_CLOUD_SECRET_BYTES];
 uint8_t s_client_id[AUTH_MAX_CLIENTS][AUTH_CLIENT_ID_BYTES];
 uint8_t s_client_key[AUTH_MAX_CLIENTS][AUTH_CLIENT_KEY_BYTES];
 bool s_slot_valid[AUTH_MAX_CLIENTS];
@@ -150,8 +151,15 @@ bool auth_init() {
     pref.putBytes("claim", gen, sizeof(gen));
     memset(gen, 0, sizeof(gen));
   }
+  if (pref.getBytesLength("cloud") != AUTH_CLOUD_SECRET_BYTES) {
+    uint8_t gen[AUTH_CLOUD_SECRET_BYTES];
+    crypto_random_bytes(gen, sizeof(gen));
+    pref.putBytes("cloud", gen, sizeof(gen));
+    memset(gen, 0, sizeof(gen));
+  }
   pref.getBytes("dev_id", s_device_id, AUTH_DEVICE_ID_BYTES);
   pref.getBytes("claim", s_claim, AUTH_CLAIM_KEY_BYTES);
+  pref.getBytes("cloud", s_cloud_secret, AUTH_CLOUD_SECRET_BYTES);
   pref.end();
   load_slots();
   s_ready = true;
@@ -176,6 +184,17 @@ bool auth_export_claim_key(uint8_t out[AUTH_CLAIM_KEY_BYTES]) {
   if (!out || !s_ready) return false;
   memcpy(out, s_claim, AUTH_CLAIM_KEY_BYTES);
   return true;
+}
+
+bool auth_get_cloud_secret(uint8_t out[AUTH_CLOUD_SECRET_BYTES]) {
+  if (!out || !s_ready) return false;
+  memcpy(out, s_cloud_secret, AUTH_CLOUD_SECRET_BYTES);
+  return true;
+}
+
+bool auth_cloud_secret_hash(uint8_t out[32]) {
+  if (!out || !s_ready) return false;
+  return crypto_sha256(s_cloud_secret, AUTH_CLOUD_SECRET_BYTES, out);
 }
 
 bool auth_enrollment_active() {
@@ -372,11 +391,22 @@ bool auth_drop_first_slot() {
   return true;
 }
 
-void auth_factory_reset() {
+bool auth_forget_self() {
+  if (!auth_is_authenticated()) return false;
+  int slot = find_slot(s_pending_client);
+  if (slot < 0) return false;
+  if (!auth_forget_client(slot)) return false;
+  auth_clear_session();
+  return true;
+}
+
+void auth_clear_slots() {
   for (int i = 0; i < AUTH_MAX_CLIENTS; i++) auth_forget_client(i);
   auth_clear_session();
   auth_close_enrollment();
 }
+
+void auth_factory_reset() { auth_clear_slots(); }
 
 namespace {
 
@@ -450,12 +480,25 @@ void auth_usb_poll() {
       Serial.println("keep this secret — it enrolls new devices");
       memset(claim, 0, sizeof(claim));
       memset(dev, 0, sizeof(dev));
+    } else if (line == "auth provision") {
+      uint8_t dev[AUTH_DEVICE_ID_BYTES];
+      uint8_t hash[32];
+      auth_get_device_id(dev);
+      auth_cloud_secret_hash(hash);
+      Serial.print("device ");
+      print_hex(dev, sizeof(dev));
+      Serial.println();
+      Serial.print("cloud-sha256 ");
+      print_hex(hash, sizeof(hash));
+      Serial.println();
+      memset(dev, 0, sizeof(dev));
+      memset(hash, 0, sizeof(hash));
     } else if (line == "power sleep") {
       Serial.println("sleeping");
       Serial.flush();
       power_sleep_now();
     } else if (line.length() > 0) {
-      Serial.println("commands: auth list | auth forget 0|1 | auth reset | auth export | power sleep");
+      Serial.println("commands: auth list | auth forget 0|1 | auth reset | auth export | auth provision | power sleep");
     }
     line = "";
   }

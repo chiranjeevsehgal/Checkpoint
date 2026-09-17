@@ -18,16 +18,44 @@ type Pinger interface {
 
 // Router wires health and upload routes with middleware.
 type Router struct {
-	handler *Handler
-	db      Pinger
-	storage Pinger
-	reg     *metrics.Registry
+	handler  *Handler
+	devices  *DeviceHandler
+	account  *AccountHandler
+	sessions *SessionHandler
+	settings *SettingsHandler
+	db       Pinger
+	storage  Pinger
+	reg      *metrics.Registry
+}
+
+// RouterDeps carries the router's collaborators.
+type RouterDeps struct {
+	Auth     Authenticator
+	Accounts AccountGuard
+	Uploads  uploadService
+	Devices  deviceService
+	Account  accountService
+	Sessions sessionRevoker
+	Settings settingsService
+	Idem     repository.IdempotencyRepository
+	DB       Pinger
+	Storage  Pinger
+	Metrics  *metrics.Registry
 }
 
 // NewRouter builds the full route tree. Health and metrics endpoints
 // stay outside Auth; everything under /v1 requires it.
-func NewRouter(uploads uploadService, idem repository.IdempotencyRepository, db, objectStore Pinger, reg *metrics.Registry) http.Handler {
-	r := &Router{handler: NewHandler(uploads, idem, reg), db: db, storage: objectStore, reg: reg}
+func NewRouter(deps RouterDeps) http.Handler {
+	r := &Router{
+		handler:  NewHandler(deps.Uploads, deps.Devices, deps.Idem, deps.Metrics),
+		devices:  NewDeviceHandler(deps.Devices, deps.Metrics),
+		account:  NewAccountHandler(deps.Account, deps.Metrics),
+		sessions: NewSessionHandler(deps.Sessions),
+		settings: NewSettingsHandler(deps.Settings),
+		db:       deps.DB,
+		storage:  deps.Storage,
+		reg:      deps.Metrics,
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", live)
@@ -35,11 +63,18 @@ func NewRouter(uploads uploadService, idem repository.IdempotencyRepository, db,
 	mux.HandleFunc("GET /metrics", r.serveMetrics)
 
 	protected := func(h http.HandlerFunc) http.Handler {
-		return RequestID(Observe(reg, Auth(h)))
+		return RequestID(Observe(deps.Metrics, Auth(deps.Auth, deps.Accounts, h)))
 	}
 	mux.Handle("POST /v1/uploads", protected(r.handler.CreateUpload))
 	mux.Handle("POST /v1/uploads/{id}/complete", protected(r.handler.CompleteUpload))
 	mux.Handle("GET /v1/uploads/{id}", protected(r.handler.GetUpload))
+	mux.Handle("GET /v1/device", protected(r.devices.Get))
+	mux.Handle("POST /v1/device/claim", protected(r.devices.Claim))
+	mux.Handle("POST /v1/device/release", protected(r.devices.Release))
+	mux.Handle("DELETE /v1/me", protected(r.account.Delete))
+	mux.Handle("GET /v1/me/settings", protected(r.settings.Get))
+	mux.Handle("PUT /v1/me/settings", protected(r.settings.Put))
+	mux.Handle("DELETE /v1/me/sessions", protected(r.sessions.Delete))
 	return mux
 }
 

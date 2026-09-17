@@ -61,20 +61,22 @@ class IngestionUploader:
     """3-step upload (create, PUT to MinIO, complete) + queue-wait poll to SUBMITTED."""
 
     def __init__(self, base_url: str = cfg.INGEST_BASE_URL,
-                 user_id: str = cfg.INGEST_USER_ID,
+                 session_token: str = cfg.INGEST_SESSION_TOKEN,
+                 device_id: str = cfg.INGEST_DEVICE_ID,
                  timeout: float = cfg.INGEST_TIMEOUT_S,
                  poll_enabled: bool = cfg.INGEST_POLL_ENABLED_DEFAULT,
                  poll_timeout: float = cfg.INGEST_POLL_TIMEOUT_S,
                  poll_interval: float = cfg.INGEST_POLL_INTERVAL_S):
         self.base_url = (base_url or cfg.INGEST_BASE_URL).rstrip("/")
-        self.user_id = user_id or cfg.INGEST_USER_ID
+        self.session_token = session_token or cfg.INGEST_SESSION_TOKEN
+        self.device_id = device_id or cfg.INGEST_DEVICE_ID
         self.timeout = timeout
         self.poll_enabled = poll_enabled
         self.poll_timeout = poll_timeout
         self.poll_interval = poll_interval if poll_interval > 0 else 1.0
 
     def _auth(self, extra: dict | None = None) -> dict:
-        headers = {"Authorization": f"Bearer {self.user_id}"}
+        headers = {"Authorization": f"Bearer {self.session_token}"}
         if extra:
             headers.update(extra)
         return headers
@@ -109,12 +111,15 @@ class IngestionUploader:
         size = len(data)
         if size > cfg.INGEST_MAX_BYTES:
             raise RuntimeError(f"too-large: {size} > {cfg.INGEST_MAX_BYTES}")
+        if not self.device_id:
+            raise RuntimeError("INGEST_DEVICE_ID is required (32 lowercase hex)")
         headers = self._auth()
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key[:128]
         status, body = http_json(
             "POST", f"{self.base_url}/v1/uploads",
-            {"filename": filename, "content_type": content_type, "size_bytes": size},
+            {"filename": filename, "content_type": content_type, "size_bytes": size,
+             "device_id": self.device_id},
             headers, self.timeout)
         if not isinstance(body, dict) or "upload_id" not in body or "upload" not in body:
             raise RuntimeError(f"create: unexpected response HTTP {status}: {str(body)[:300]}")

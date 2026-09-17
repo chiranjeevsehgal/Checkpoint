@@ -1,14 +1,23 @@
 import { bytesToHex, hexToBytes } from './crypto.ts';
 
+import { getIdentityId } from '@/lib/session';
 import { storage } from '@/lib/storage';
-import { credentialKey } from '@/lib/storage/keys';
-
-const ENROLLED_DEVICE_KEY = 'checkpoint.enrolledDeviceId';
+import { credentialKey, enrolledDeviceKey } from '@/lib/storage/keys';
 
 export interface DeviceCredential {
   clientId: string;
   clientKey: string;
   pending: boolean;
+}
+
+function requireIdentityId(): string {
+  const identityId = getIdentityId();
+  if (!identityId) throw new Error('Not signed in.');
+  return identityId;
+}
+
+function keyForDevice(deviceId: Uint8Array): string {
+  return credentialKey(requireIdentityId(), bytesToHex(deviceId));
 }
 
 function encodeCredential(clientId: Uint8Array, clientKey: Uint8Array, pending: boolean): string {
@@ -43,16 +52,13 @@ export async function saveCredential(
   clientKey: Uint8Array,
   pending = false,
 ): Promise<void> {
-  await storage.set(
-    credentialKey(bytesToHex(deviceId)),
-    encodeCredential(clientId, clientKey, pending),
-  );
+  await storage.set(keyForDevice(deviceId), encodeCredential(clientId, clientKey, pending));
 }
 
 export async function loadCredential(
   deviceId: Uint8Array,
 ): Promise<{ clientId: Uint8Array; clientKey: Uint8Array } | null> {
-  const record = decodeCredential(await storage.get(credentialKey(bytesToHex(deviceId))));
+  const record = decodeCredential(await storage.get(keyForDevice(deviceId)));
   if (!record) return null;
   try {
     return {
@@ -65,12 +71,12 @@ export async function loadCredential(
 }
 
 export async function isCredentialPending(deviceId: Uint8Array): Promise<boolean> {
-  const record = decodeCredential(await storage.get(credentialKey(bytesToHex(deviceId))));
+  const record = decodeCredential(await storage.get(keyForDevice(deviceId)));
   return record?.pending === true;
 }
 
 export async function markCredentialActive(deviceId: Uint8Array): Promise<void> {
-  const key = credentialKey(bytesToHex(deviceId));
+  const key = keyForDevice(deviceId);
   const record = decodeCredential(await storage.get(key));
   if (record?.pending) {
     await storage.set(key, JSON.stringify({ ...record, pending: false }));
@@ -78,17 +84,17 @@ export async function markCredentialActive(deviceId: Uint8Array): Promise<void> 
 }
 
 export async function deleteCredential(deviceId: Uint8Array): Promise<void> {
-  await storage.remove(credentialKey(bytesToHex(deviceId)));
+  await storage.remove(keyForDevice(deviceId));
 }
 
 export async function setEnrolledDeviceId(deviceIdHex: string): Promise<void> {
-  await storage.set(ENROLLED_DEVICE_KEY, deviceIdHex);
+  await storage.set(enrolledDeviceKey(requireIdentityId()), deviceIdHex);
 }
 
 export async function getEnrolledDeviceId(): Promise<string | null> {
-  return storage.get(ENROLLED_DEVICE_KEY);
+  return storage.get(enrolledDeviceKey(requireIdentityId()));
 }
 
 export async function clearEnrolledDeviceId(): Promise<void> {
-  await storage.remove(ENROLLED_DEVICE_KEY);
+  await storage.remove(enrolledDeviceKey(requireIdentityId()));
 }

@@ -201,6 +201,16 @@ export function deleteSaved(fileIdHex: string): void {
   }
 }
 
+export function clearAllSaved(): void {
+  try {
+    const dir = checkpointDir();
+    if (dir.exists) dir.delete();
+  } catch {
+    /* best-effort */
+  }
+  ensureDirs();
+}
+
 export function decodeText(data: Uint8Array): string {
   return textDecoder.decode(data);
 }

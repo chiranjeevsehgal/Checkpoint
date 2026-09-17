@@ -95,6 +95,7 @@ func ValidateChecksumFormat(checksum string) error {
 type Upload struct {
 	ID               string
 	UserID           string
+	DeviceID         string
 	Bucket           string
 	ObjectKey        string
 	OriginalFilename string

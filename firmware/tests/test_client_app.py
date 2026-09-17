@@ -1804,3 +1804,30 @@ def test_end_to_end_key_schedule():
         prk3, b"checkpoint-file-v1" + struct.pack("<IQ", session, uid) + b"\x01",
         hashlib.sha256).digest()[:16]
     assert file_key == expect_file
+
+
+@needs_deps
+def test_cloud_opcodes_present():
+    from client_app import config as cfg
+    assert cfg.CTRL_CMD_TIME_SET == 0x14
+    assert cfg.CTRL_CMD_GET_CLOUD_SECRET == 0x23
+    assert cfg.CTRL_CMD_CLEAR_TRUSTED_SLOTS == 0x24
+    assert cfg.CTRL_CMD_FORGET_SELF == 0x25
+
+
+@needs_deps
+def test_cloud_secret_roundtrip():
+    from client_app import config as cfg
+    from client_app.crypto import build_cloud_nonce, open_cloud_secret
+    from cryptography.hazmat.primitives.ciphers.aead import AESCCM
+
+    session_id = 0x11223344
+    seq = 0x0102
+    session_key = bytes(range(16))
+    secret = bytes([0x11]) * cfg.AUTH_CLOUD_SECRET_BYTES
+    nonce = build_cloud_nonce(session_id, seq)
+    aad = struct.pack("<BBH", cfg.PROTO_VER, cfg.CTRL_CMD_GET_CLOUD_SECRET, seq)
+    sealed = AESCCM(session_key, tag_length=cfg.CRYPTO_TAG_BYTES).encrypt(nonce, secret, aad)
+
+    assert open_cloud_secret(session_key, session_id, seq, nonce + sealed) == secret
+    assert open_cloud_secret(session_key, session_id, seq + 1, nonce + sealed) is None

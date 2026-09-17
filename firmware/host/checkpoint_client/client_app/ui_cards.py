@@ -67,8 +67,15 @@ def build_device_card(parent, actions, dev_status_var, led_muted_var,
                                command=actions["sync_toggle"],
                                bootstyle="primary-round-toggle", state="disabled")
     sync_chk.pack(side=LEFT, padx=4)
+    btn_cloud = ttk.Button(dev, text="Get secret", command=actions["cloud_secret"],
+                           bootstyle="info-outline", state="disabled")
+    btn_cloud.pack(side=LEFT, padx=4)
+    btn_slots = ttk.Button(dev, text="Clear slots…", command=actions["clear_slots"],
+                           bootstyle="danger-outline", state="disabled")
+    btn_slots.pack(side=LEFT, padx=2)
     return {"rec": btn_rec, "status": btn_status,
-            "led_chk": led_chk, "bright": bright_scale, "sync_chk": sync_chk}
+            "led_chk": led_chk, "bright": bright_scale, "sync_chk": sync_chk,
+            "cloud": btn_cloud, "clear_slots": btn_slots}
 
 
 def build_storage_card(parent, actions, storage_var, list_page_var):

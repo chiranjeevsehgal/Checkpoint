@@ -7,9 +7,10 @@ import {
   INGEST_TIMEOUT_S,
 } from './config.ts';
 import { bytesToHex } from './crypto.ts';
-import { isValidUserId } from './parsers.ts';
+import { isValidDeviceId } from './parsers.ts';
 
 import { apiFetch, apiPutBytes } from '@/lib/api/api-client';
+import { getSessionToken } from '@/lib/session';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -60,7 +61,7 @@ export class IngestionUploader {
 
   constructor(
     private readonly baseUrl: string,
-    private readonly userId: string,
+    private readonly deviceId: string,
     timeoutS = INGEST_TIMEOUT_S,
     private readonly pollEnabled = true,
     pollTimeoutS = INGEST_POLL_TIMEOUT_S,
@@ -69,6 +70,12 @@ export class IngestionUploader {
     this.timeoutMs = Math.max(1, timeoutS) * 1000;
     this.pollIntervalMs = Math.max(0.1, pollIntervalS) * 1000;
     this.pollTimeoutMs = Math.max(0, pollTimeoutS) * 1000;
+  }
+
+  private requireToken(): string {
+    const token = getSessionToken();
+    if (!token) throw new Error('Not signed in.');
+    return token;
   }
 
   private signal(): AbortSignal | undefined {
@@ -82,7 +89,7 @@ export class IngestionUploader {
     const body = await apiFetch<StatusResponse>(
       `${this.baseUrl}/v1/uploads/${uploadId}`,
       { signal: this.signal() },
-      this.userId,
+      this.requireToken(),
     );
     if (!body || typeof body.status !== 'string' || body.status === '') {
       throw new Error(`get status: unexpected response for ${uploadId}`);
@@ -115,8 +122,8 @@ export class IngestionUploader {
     if (data.length > INGEST_MAX_BYTES) {
       throw new Error(`too-large: ${data.length} > ${INGEST_MAX_BYTES}`);
     }
-    if (!isValidUserId(this.userId)) {
-      throw new Error('ingest user ID is not a valid UUID — check Settings > User ID');
+    if (!isValidDeviceId(this.deviceId)) {
+      throw new Error('no cloud-owned pendant — set up the pendant before uploading');
     }
     const headers: Record<string, string> = {};
     if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey.slice(0, 128);
@@ -130,6 +137,7 @@ export class IngestionUploader {
             filename,
             content_type: contentType,
             size_bytes: data.length,
+            device_id: this.deviceId,
             ...(options.recordedAtMs
               ? { recorded_at: new Date(options.recordedAtMs).toISOString() }
               : {}),
@@ -137,7 +145,7 @@ export class IngestionUploader {
           signal: this.signal(),
           headers,
         },
-        this.userId,
+        this.requireToken(),
       );
     } catch (error) {
       throw new Error(`create failed: ${describeError(error)}`);
@@ -160,7 +168,7 @@ export class IngestionUploader {
           body: JSON.stringify({ size_bytes: data.length, checksum_sha256: checksum }),
           signal: this.signal(),
         },
-        this.userId,
+        this.requireToken(),
       );
     } catch (error) {
       throw new Error(`complete failed: ${describeError(error)}`);

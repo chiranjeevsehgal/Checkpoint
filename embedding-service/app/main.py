@@ -14,11 +14,22 @@ log = logging.getLogger("embedding")
 RETRY_BACKOFFS = [1, 5, 15, 60]
 
 
+class StaleDeletedUser(Exception):
+    """The event belongs to an account being deleted; commit and drop it."""
+
+
 def process(event: EmbeddingJobEvent, embedder: Embedder, chunker: TokenChunker, store: Store) -> None:
+    if store.is_user_deleting(event.user_id):
+        raise StaleDeletedUser(event.user_id)
+
     chunks = chunker.chunk(event.text)
     if not chunks:
         raise InvalidEvent("text is empty after normalization")
     vectors = embedder.embed(chunks)
+
+    if store.is_user_deleting(event.user_id):
+        raise StaleDeletedUser(event.user_id)
+
     store.save(
         user_id=event.user_id,
         audio_id=event.audio_id,
@@ -86,6 +97,11 @@ def main() -> None:
         except InvalidEvent as exc:
             kafka.send_to_dlq("INVALID_EVENT", str(exc), msg.value())
             log.error("dlq audio_id=%s: %s", event.audio_id, exc)
+            kafka.commit(msg)
+            retry_attempt = 0
+            continue
+        except StaleDeletedUser:
+            log.info("stale_deleted_user_event audio_id=%s", event.audio_id)
             kafka.commit(msg)
             retry_attempt = 0
             continue

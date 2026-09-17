@@ -8,6 +8,7 @@ import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { linkView } from '../linkView.ts';
 import { isInProgress } from '../transferStore.ts';
 
+import { SignalMeter } from './signal-meter.tsx';
 import { Toggle } from './toggle.tsx';
 
 import { DetailRow, DeveloperDetails } from '@/components/shared/developer-details';
@@ -39,6 +40,7 @@ export function PendantStatusCard({ onManage }: { onManage: () => void }) {
     deviceName,
     status,
     transfers,
+    rssi,
     settings,
     toggleRec,
     stopConnection,
@@ -108,14 +110,17 @@ export function PendantStatusCard({ onManage }: { onManage: () => void }) {
         </View>
 
         {connected ? (
-          <View className="flex-row items-center gap-1.5">
-            <Animated.View
-              style={{ opacity: activityLive ? livePulse : 1 }}
-              className={cn('h-2 w-2', ACTIVITY_DOT[activity.tone])}
-            />
-            <Text variant="muted" className="text-[11px]">
-              {activity.label}
-            </Text>
+          <View className="flex-row items-center justify-between gap-2">
+            <View className="flex-row items-center gap-1.5">
+              <Animated.View
+                style={{ opacity: activityLive ? livePulse : 1 }}
+                className={cn('h-2 w-2', ACTIVITY_DOT[activity.tone])}
+              />
+              <Text variant="muted" className="text-[11px]">
+                {activity.label}
+              </Text>
+            </View>
+            {rssi !== null ? <SignalMeter dbm={rssi} /> : null}
           </View>
         ) : null}
 
@@ -142,8 +147,8 @@ export function PendantStatusCard({ onManage }: { onManage: () => void }) {
         ) : null}
 
         <Toggle
-          label="Auto-sync"
-          description="Discover and sync your pendant automatically."
+          label="Auto-connect & sync"
+          description="Discover, connect and sync your pendant automatically."
           value={settings.autoSyncEnabled}
           onChange={(next) => void updateSettings({ ...settings, autoSyncEnabled: next })}
         />

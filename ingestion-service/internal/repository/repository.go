@@ -22,6 +22,11 @@ var (
 	// caller no longer owns: another worker reclaimed and completed the
 	// event. The caller must do nothing; the rightful owner acted.
 	ErrStaleLease = errors.New("stale outbox lease")
+	// ErrDeviceNotFound is returned when a user has no owned pendant.
+	ErrDeviceNotFound = errors.New("device not found")
+	// ErrDeviceClaimFailed is returned for every claim failure, so callers
+	// cannot distinguish nonexistent, foreign or quarantined devices.
+	ErrDeviceClaimFailed = errors.New("device claim failed")
 )
 
 // UploadRepository covers single-row upload reads and writes.
@@ -41,6 +46,7 @@ type IdempotentCreateParams struct {
 	Upload         *domain.Upload
 	Key            string
 	UserID         string
+	DeviceID       string
 	RequestHash    string
 	ResponseStatus int
 	ResponseBody   []byte
@@ -59,6 +65,7 @@ type IdempotentCreateResult struct {
 type IdempotencyRecord struct {
 	Key            string
 	UserID         string
+	DeviceID       string
 	RequestHash    string
 	ResponseStatus int
 	ResponseBody   []byte

@@ -13,7 +13,7 @@ import {
   ctrlStatusText,
   fileStateLabel,
   formatBytes,
-  isValidUserId,
+  isValidDeviceId,
   parseCmdResp,
   parseFileDoneTime,
   parseFileList,
@@ -193,23 +193,17 @@ describe('labels', () => {
   });
 });
 
-describe('isValidUserId', () => {
-  it('accepts the dev identity', () => {
-    assert.equal(isValidUserId('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'), true);
+describe('isValidDeviceId', () => {
+  it('accepts 32 lowercase hex characters', () => {
+    assert.equal(isValidDeviceId('474f8bcaff162d3f18fbda36a168f201'), true);
+    assert.equal(isValidDeviceId('  474f8bcaff162d3f18fbda36a168f201  '), true);
   });
 
-  it('accepts uppercase and padded input', () => {
-    assert.equal(isValidUserId('AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA'), true);
-    assert.equal(isValidUserId('  aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa  '), true);
-  });
-
-  it('rejects empty and non-UUID values', () => {
-    assert.equal(isValidUserId(''), false);
-    assert.equal(isValidUserId('null'), false);
-    assert.equal(isValidUserId('Bearer aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'), false);
-    assert.equal(isValidUserId('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa'), false);
-    assert.equal(isValidUserId('checkpoint://claim?key=' + 'ab'.repeat(32)), false);
-    assert.equal(isValidUserId('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' + '\u200B'), false);
-    assert.equal(isValidUserId('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' + '\u00A0'), true);
+  it('rejects wrong length, uppercase and non-hex values', () => {
+    assert.equal(isValidDeviceId(''), false);
+    assert.equal(isValidDeviceId('474f8bcaff162d3f18fbda36a168f20'), false);
+    assert.equal(isValidDeviceId('474F8BCAFF162D3F18FBDA36A168F201'), false);
+    assert.equal(isValidDeviceId('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'), false);
+    assert.equal(isValidDeviceId('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'), false);
   });
 });

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func setEnv(t *testing.T, k, v string) {
@@ -28,6 +29,9 @@ func TestLoadProductionRequiresExplicit(t *testing.T) {
 	canonical := canonicalForTest(t)
 	setEnv(t, "ENV", "production")
 	setEnv(t, "DATABASE_URL", "postgres://u:p@localhost:5432/db?sslmode=disable")
+	setEnv(t, "DATABASE_REQUEST_URL", "postgres://request:p@localhost:5432/db?sslmode=disable")
+	setEnv(t, "DATABASE_WORKER_URL", "postgres://worker:p@localhost:5432/db?sslmode=disable")
+	setEnv(t, "KRATOS_PUBLIC_URL", "http://kratos:4433")
 	setEnv(t, "MINIO_ACCESS_KEY", "ak")
 	setEnv(t, "MINIO_SECRET_KEY", "sk")
 	setEnv(t, "KAFKA_BROKERS", "kafka:9092")
@@ -42,6 +46,18 @@ func TestLoadProductionRequiresExplicit(t *testing.T) {
 		t.Fatal("missing DATABASE_URL in prod must fail")
 	}
 	setEnv(t, "DATABASE_URL", "postgres://u:p@localhost:5432/db?sslmode=disable")
+
+	setEnv(t, "DATABASE_REQUEST_URL", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("missing DATABASE_REQUEST_URL in prod must fail")
+	}
+	setEnv(t, "DATABASE_REQUEST_URL", "postgres://request:p@localhost:5432/db?sslmode=disable")
+
+	setEnv(t, "KRATOS_PUBLIC_URL", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("missing KRATOS_PUBLIC_URL in prod must fail")
+	}
+	setEnv(t, "KRATOS_PUBLIC_URL", "http://kratos:4433")
 
 	setEnv(t, "KAFKA_BROKERS", "")
 	if _, err := Load(); err == nil {
@@ -151,6 +167,28 @@ func TestLoadInvalidBoolAndPort(t *testing.T) {
 	setEnv(t, "UPLOAD_EXPIRY_HOURS", "-1")
 	if _, err := Load(); err == nil {
 		t.Fatal("negative duration must fail")
+	}
+	setEnv(t, "UPLOAD_EXPIRY_HOURS", "1")
+	setEnv(t, "IDENTITY_TTL_HOURS", "abc")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid identity TTL must fail")
+	}
+}
+
+func TestLoadIdentityCleanupDefaults(t *testing.T) {
+	canonicalForTest(t)
+	setEnv(t, "ENV", "development")
+	setEnv(t, "IDENTITY_TTL_HOURS", "")
+	setEnv(t, "IDENTITY_CLEANUP_INTERVAL_MINUTES", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("dev defaults must load: %v", err)
+	}
+	if cfg.IdentityTTL != time.Hour {
+		t.Fatalf("identity TTL = %v, want 1h", cfg.IdentityTTL)
+	}
+	if cfg.IdentityCleanupInterval != 15*time.Minute {
+		t.Fatalf("cleanup interval = %v, want 15m", cfg.IdentityCleanupInterval)
 	}
 }
 

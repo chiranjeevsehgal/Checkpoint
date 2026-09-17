@@ -242,10 +242,25 @@ void ui_task(void *arg) {
       ui_set_rgb(0, 0, on ? POWER_LED_B : 0);
     } else switch (s_state) {
       case LED_OFF: ui_set_rgb(0, 0, 0); break;
-      case LED_ON:
-        if (stealth) ui_set_rgb(0, 0, 0);
-        else ui_set_rgb(0, 180, 0);
+      case LED_ON: {
+        if (stealth) {
+          ui_set_rgb(0, 0, 0);
+          break;
+        }
+        // Breathe: triangle wave trough->peak->trough over UI_REC_BREATH_MS.
+        uint32_t period = UI_REC_BREATH_MS;
+        uint32_t half = period / 2;
+        if (half == 0) {
+          ui_set_rgb(0, UI_REC_BREATH_MAX, 0);
+          break;
+        }
+        uint32_t t = (now - state_enter_ms) % period;
+        uint32_t phase = (t < half) ? t : (period - t);
+        uint8_t g = (uint8_t)(UI_REC_BREATH_MIN +
+            (uint32_t)(UI_REC_BREATH_MAX - UI_REC_BREATH_MIN) * phase / half);
+        ui_set_rgb(0, g, 0);
         break;
+      }
       case LED_BOOKMARK: {
         ui_set_rgb(0, 0, 0);
         break;

@@ -6,6 +6,7 @@
 #define AUTH_CLIENT_KEY_BYTES 32
 #define AUTH_DEVICE_ID_BYTES 16
 #define AUTH_CLAIM_KEY_BYTES 32
+#define AUTH_CLOUD_SECRET_BYTES 32
 #define AUTH_NONCE_BYTES 16
 #define AUTH_PROOF_BYTES 32
 #define AUTH_MAX_CLIENTS 2
@@ -15,6 +16,9 @@ bool auth_init();
 int auth_trusted_count();
 bool auth_get_device_id(uint8_t out[AUTH_DEVICE_ID_BYTES]);
 bool auth_export_claim_key(uint8_t out[AUTH_CLAIM_KEY_BYTES]);
+// Cloud ownership secret: separate from the BLE claim key, never broadcast.
+bool auth_get_cloud_secret(uint8_t out[AUTH_CLOUD_SECRET_BYTES]);
+bool auth_cloud_secret_hash(uint8_t out[32]);
 
 bool auth_enrollment_active();
 bool auth_open_enrollment(uint32_t duration_ms);
@@ -32,6 +36,10 @@ void auth_clear_session();
 
 bool auth_get_slot(int slot, uint8_t id_out[AUTH_CLIENT_ID_BYTES]);
 bool auth_forget_client(int slot);
+// Drops the calling client's own trusted slot and clears its session.
+bool auth_forget_self();
 bool auth_drop_first_slot();
+// Clears trusted clients + active session, keeping device id, claim and cloud secret.
+void auth_clear_slots();
 void auth_factory_reset();
 void auth_usb_poll();

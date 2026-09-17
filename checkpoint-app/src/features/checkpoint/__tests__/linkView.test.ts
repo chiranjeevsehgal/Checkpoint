@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { linkView } from '../linkView.ts';
+import { bluetoothLinkState, linkView } from '../linkView.ts';
 
 describe('linkView', () => {
   it('describes idle', () => {
@@ -27,7 +27,28 @@ describe('linkView', () => {
     assert.equal(linkView('reconnecting', 'Checkpoint').label, 'Reconnecting…');
   });
 
+  it('explains a pendant linked to another account', () => {
+    const view = linkView('not owned', 'Checkpoint');
+    assert.equal(view.label, 'Linked to another account');
+    assert.match(view.sub, /another Checkpoint account/);
+    assert.equal(view.openSettings, false);
+  });
+
   it('falls back to idle for unknown states', () => {
     assert.equal(linkView('something-else', 'Checkpoint').label, 'Not connected');
+  });
+});
+
+describe('bluetoothLinkState', () => {
+  it('maps adapter states to link states', () => {
+    assert.equal(bluetoothLinkState('off'), 'bluetooth off');
+    assert.equal(bluetoothLinkState('unauthorized'), 'needs permission');
+    assert.equal(bluetoothLinkState('unsupported'), 'bluetooth unavailable');
+  });
+
+  it('is idle when the adapter is usable or unknown', () => {
+    assert.equal(bluetoothLinkState('on'), 'idle');
+    assert.equal(bluetoothLinkState('unknown'), 'idle');
+    assert.equal(bluetoothLinkState(null), 'idle');
   });
 });

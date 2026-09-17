@@ -25,9 +25,19 @@ type Config struct {
 	Port string
 	Env  string
 
-	// DatabaseURL is the PostgreSQL connection string.
-	// Consumed from task 2 (migrations) onwards.
-	DatabaseURL string
+	// DatabaseURL is the privileged PostgreSQL connection string used by
+	// migrations. DatabaseRequestURL is the NOBYPASSRLS request role and
+	// DatabaseWorkerURL the trusted background role; both default to
+	// DatabaseURL in development.
+	DatabaseURL        string
+	DatabaseRequestURL string
+	DatabaseWorkerURL  string
+
+	// KratosPublicURL validates opaque session tokens via /sessions/whoami.
+	KratosPublicURL string
+	// KratosAdminURL is the private admin API used by the deletion worker.
+	KratosAdminURL string
+	KratosTimeout  time.Duration
 
 	// MinIO settings, consumed from task 5 onwards.
 	MinIOEndpoint  string
@@ -51,6 +61,11 @@ type Config struct {
 	UploadExpiry time.Duration
 	// CleanupInterval is how often the expiry sweep runs.
 	CleanupInterval time.Duration
+
+	// IdentityTTL is how old an unverified identity must be before the
+	// cleanup worker deletes it. IdentityCleanupInterval is the sweep period.
+	IdentityTTL             time.Duration
+	IdentityCleanupInterval time.Duration
 
 	// HTTP timeouts, see LLD section 22.
 	ReadHeaderTimeout time.Duration
@@ -86,26 +101,45 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	identityHours, err := parsePositiveIntStrict("IDENTITY_TTL_HOURS", 1)
+	if err != nil {
+		return Config{}, err
+	}
+	identityCleanupMinutes, err := parsePositiveIntStrict("IDENTITY_CLEANUP_INTERVAL_MINUTES", 15)
+	if err != nil {
+		return Config{}, err
+	}
+	kratosSeconds, err := parsePositiveIntStrict("KRATOS_TIMEOUT_SECONDS", 5)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
-		Port:                envOr("PORT", defaultPort),
-		Env:                 envOr("ENV", defaultEnv),
-		DatabaseURL:         os.Getenv("DATABASE_URL"),
-		MinIOEndpoint:       envOr("MINIO_ENDPOINT", "localhost:9000"),
-		MinIOAccessKey:      os.Getenv("MINIO_ACCESS_KEY"),
-		MinIOSecretKey:      os.Getenv("MINIO_SECRET_KEY"),
-		MinIOUseSSL:         useSSL,
-		MinIOBucket:         envOr("MINIO_BUCKET", "audio"),
-		MinIOPublicEndpoint: os.Getenv("MINIO_PUBLIC_ENDPOINT"),
-		KafkaBrokers:        envOr("KAFKA_BROKERS", "kafka:9092"),
-		KafkaTopic:          canonicalTopic,
-		KafkaClientID:       envOr("KAFKA_CLIENT_ID", "ingestion"),
-		UploadExpiry:        time.Duration(uploadHours) * time.Hour,
-		CleanupInterval:     time.Duration(cleanupMinutes) * time.Minute,
-		ReadHeaderTimeout:   5 * time.Second,
-		ReadTimeout:         15 * time.Second,
-		WriteTimeout:        15 * time.Second,
-		IdleTimeout:         60 * time.Second,
-		ShutdownTimeout:     defaultShutdownTimeout,
+		Port:                    envOr("PORT", defaultPort),
+		Env:                     envOr("ENV", defaultEnv),
+		DatabaseURL:             os.Getenv("DATABASE_URL"),
+		DatabaseRequestURL:      envOr("DATABASE_REQUEST_URL", os.Getenv("DATABASE_URL")),
+		DatabaseWorkerURL:       envOr("DATABASE_WORKER_URL", os.Getenv("DATABASE_URL")),
+		KratosPublicURL:         strings.TrimRight(os.Getenv("KRATOS_PUBLIC_URL"), "/"),
+		KratosAdminURL:          strings.TrimRight(os.Getenv("KRATOS_ADMIN_URL"), "/"),
+		KratosTimeout:           time.Duration(kratosSeconds) * time.Second,
+		MinIOEndpoint:           envOr("MINIO_ENDPOINT", "localhost:9000"),
+		MinIOAccessKey:          os.Getenv("MINIO_ACCESS_KEY"),
+		MinIOSecretKey:          os.Getenv("MINIO_SECRET_KEY"),
+		MinIOUseSSL:             useSSL,
+		MinIOBucket:             envOr("MINIO_BUCKET", "audio"),
+		MinIOPublicEndpoint:     os.Getenv("MINIO_PUBLIC_ENDPOINT"),
+		KafkaBrokers:            envOr("KAFKA_BROKERS", "kafka:9092"),
+		KafkaTopic:              canonicalTopic,
+		KafkaClientID:           envOr("KAFKA_CLIENT_ID", "ingestion"),
+		UploadExpiry:            time.Duration(uploadHours) * time.Hour,
+		CleanupInterval:         time.Duration(cleanupMinutes) * time.Minute,
+		IdentityTTL:             time.Duration(identityHours) * time.Hour,
+		IdentityCleanupInterval: time.Duration(identityCleanupMinutes) * time.Minute,
+		ReadHeaderTimeout:       5 * time.Second,
+		ReadTimeout:             15 * time.Second,
+		WriteTimeout:            15 * time.Second,
+		IdleTimeout:             60 * time.Second,
+		ShutdownTimeout:         defaultShutdownTimeout,
 	}
 
 	if v := os.Getenv("SHUTDOWN_TIMEOUT_SECONDS"); v != "" {
@@ -129,6 +163,15 @@ func Load() (Config, error) {
 	if strings.EqualFold(cfg.Env, "production") {
 		if cfg.DatabaseURL == "" {
 			return Config{}, fmt.Errorf("DATABASE_URL must be set in production")
+		}
+		if strings.TrimSpace(os.Getenv("DATABASE_REQUEST_URL")) == "" {
+			return Config{}, fmt.Errorf("DATABASE_REQUEST_URL must be set in production")
+		}
+		if strings.TrimSpace(os.Getenv("DATABASE_WORKER_URL")) == "" {
+			return Config{}, fmt.Errorf("DATABASE_WORKER_URL must be set in production")
+		}
+		if cfg.KratosPublicURL == "" {
+			return Config{}, fmt.Errorf("KRATOS_PUBLIC_URL must be set in production")
 		}
 		if cfg.MinIOAccessKey == "" || cfg.MinIOSecretKey == "" {
 			return Config{}, fmt.Errorf("MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set in production")

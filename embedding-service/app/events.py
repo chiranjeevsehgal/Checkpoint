@@ -1,8 +1,18 @@
 import json
+import uuid
 from dataclasses import dataclass
 
 SCHEMA_VERSION = 2
 EVENT_TYPE_EMBEDDING_REQUESTED = "EMBEDDING_REQUESTED"
+
+
+def canonical_uuid(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise InvalidEvent(f"missing {field}")
+    try:
+        return str(uuid.UUID(value))
+    except ValueError as exc:
+        raise InvalidEvent(f"invalid {field}: {value!r}") from exc
 
 class InvalidEvent(Exception):
     """Raised for poison messages: bad JSON, wrong envelope, or unusable data.
@@ -46,13 +56,8 @@ class EmbeddingJobEvent:
         if not isinstance(event_id, str) or not event_id:
             raise InvalidEvent("missing event_id")
 
-        audio_id = data.get("audio_id")
-        if not isinstance(audio_id, str) or not audio_id:
-            raise InvalidEvent("missing audio_id")
-
-        user_id = data.get("user_id")
-        if not isinstance(user_id, str) or not user_id:
-            raise InvalidEvent("missing user_id")
+        audio_id = canonical_uuid(data.get("audio_id"), "audio_id")
+        user_id = canonical_uuid(data.get("user_id"), "user_id")
 
         text = data.get("text")
         if not isinstance(text, str):

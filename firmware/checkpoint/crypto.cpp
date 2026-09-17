@@ -36,6 +36,56 @@ bool crypto_set_key(const uint8_t key[CRYPTO_KEY_BYTES]) {
   return rc == 0;
 }
 
+bool crypto_sha256(const uint8_t *in, size_t len, uint8_t out[32]) {
+  if (!out) return false;
+  if (len && !in) return false;
+  return mbedtls_sha256(in, len, out, 0) == 0;
+}
+
+bool crypto_aead_encrypt(const uint8_t key[CRYPTO_KEY_BYTES], const uint8_t nonce[CRYPTO_NONCE_BYTES], const uint8_t *plain, size_t plain_len, const uint8_t *aad, size_t aad_len, uint8_t *cipher, uint8_t tag[CRYPTO_TAG_BYTES]) {
+  if (!key || !nonce || !tag) return false;
+  if (plain_len && (!plain || !cipher)) return false;
+  mbedtls_ccm_context ctx;
+  mbedtls_ccm_init(&ctx);
+  int rc = mbedtls_ccm_setkey(&ctx, MBEDTLS_CIPHER_ID_AES, key, 128);
+  if (rc == 0) {
+    rc = mbedtls_ccm_encrypt_and_tag(&ctx, plain_len, nonce, CRYPTO_NONCE_BYTES, aad, aad_len, plain, cipher, tag, CRYPTO_TAG_BYTES);
+  }
+  mbedtls_ccm_free(&ctx);
+  return rc == 0;
+}
+
+bool crypto_aead_decrypt(const uint8_t key[CRYPTO_KEY_BYTES], const uint8_t nonce[CRYPTO_NONCE_BYTES], const uint8_t *cipher, size_t cipher_len, const uint8_t *aad, size_t aad_len, const uint8_t tag[CRYPTO_TAG_BYTES], uint8_t *plain) {
+  if (!key || !nonce || !tag) return false;
+  if (cipher_len && (!cipher || !plain)) return false;
+  mbedtls_ccm_context ctx;
+  mbedtls_ccm_init(&ctx);
+  int rc = mbedtls_ccm_setkey(&ctx, MBEDTLS_CIPHER_ID_AES, key, 128);
+  if (rc == 0) {
+    rc = mbedtls_ccm_auth_decrypt(&ctx, cipher_len, nonce, CRYPTO_NONCE_BYTES, aad, aad_len, cipher, plain, tag, CRYPTO_TAG_BYTES);
+  }
+  mbedtls_ccm_free(&ctx);
+  return rc == 0;
+}
+
+void crypto_build_cloud_nonce(uint32_t session_id, uint16_t seq, uint8_t out[CRYPTO_NONCE_BYTES]) {
+  static const char kDom[] = "checkpoint-cloud-v1";
+  const size_t base = sizeof(kDom) - 1;
+  uint8_t msg[sizeof(kDom) - 1 + 4 + 2];
+  memcpy(msg, kDom, base);
+  msg[base] = session_id & 0xFF;
+  msg[base + 1] = (session_id >> 8) & 0xFF;
+  msg[base + 2] = (session_id >> 16) & 0xFF;
+  msg[base + 3] = (session_id >> 24) & 0xFF;
+  msg[base + 4] = seq & 0xFF;
+  msg[base + 5] = (seq >> 8) & 0xFF;
+  uint8_t hash[32];
+  mbedtls_sha256(msg, sizeof(msg), hash, 0);
+  memcpy(out, hash, CRYPTO_NONCE_BYTES);
+  memset(msg, 0, sizeof(msg));
+  memset(hash, 0, sizeof(hash));
+}
+
 bool crypto_has_key() {
   if (!crypto_lock(100)) return s_has_key;
   bool v = s_has_key;

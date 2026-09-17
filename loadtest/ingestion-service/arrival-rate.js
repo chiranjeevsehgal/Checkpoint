@@ -50,19 +50,18 @@ export const options = {
 };
 
 
-// Generate a different valid UUID for each VU.
-// Arrival-rate executors reuse VUs, so fold the iteration counter in
-// to keep every virtual user distinct across the whole run.
-function userId() {
-  const id = (exec.vu.idInTest * 100000) + exec.vu.iterationInScenario;
-  const suffix = id.toString(16).padStart(12, '0').slice(-12);
+const SESSION_TOKEN = __ENV.SESSION_TOKEN;
+const DEVICE_ID = __ENV.DEVICE_ID;
 
-  return `aaaaaaaa-aaaa-4aaa-8aaa-${suffix}`;
+function requireAuth() {
+  if (!SESSION_TOKEN || !DEVICE_ID) {
+    exec.test.abort('SESSION_TOKEN and DEVICE_ID env vars are required (Kratos session + owned pendant).');
+  }
 }
 
 
 export default function () {
-  const user = userId();
+  requireAuth();
 
   //
   // 1. CREATE UPLOAD
@@ -71,6 +70,7 @@ export default function () {
   const createPayload = JSON.stringify({
     filename: 'load-test.ogg',
     content_type: 'audio/ogg',
+    device_id: DEVICE_ID,
     size_bytes: audioSize,
   });
 
@@ -80,7 +80,7 @@ export default function () {
     {
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${user}`,
+        'Authorization': `Bearer ${SESSION_TOKEN}`,
 
         // Unique per logical request.
         'Idempotency-Key':
@@ -165,7 +165,7 @@ export default function () {
     {
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${user}`,
+        'Authorization': `Bearer ${SESSION_TOKEN}`,
       },
 
       tags: {
@@ -210,7 +210,7 @@ export default function () {
     `${BASE_URL}/v1/uploads/${uploadId}`,
     {
       headers: {
-        'Authorization': `Bearer ${user}`,
+        'Authorization': `Bearer ${SESSION_TOKEN}`,
       },
 
       tags: {

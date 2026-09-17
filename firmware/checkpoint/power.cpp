@@ -1,8 +1,6 @@
 #include "power.h"
 #include "config.h"
 #include "ble_service.h"
-#include "control.h"
-#include "manifest.h"
 #include "recorder.h"
 #include "sd_manager.h"
 #include "transfer.h"
@@ -15,29 +13,20 @@ namespace {
 
 bool s_idle_tracking = false;
 uint32_t s_idle_since_ms = 0;
-uint8_t s_synced_confirm = 0;
 
 // Instantaneous gates. The idle clock keeps running while these are busy, so
 // the device sleeps as soon as the mic is off long enough and everything else
 // is clear.
+//
+// An in-flight transfer blocks sleep, but queued (pending) recordings do not:
+// they persist on SD and resume after the next wake + reconnect. Gating on the
+// pending count dead-locks the device whenever sync is on but no peer is
+// connected — the pending check is only reachable while disconnected, where it
+// can never clear.
 bool power_clear_to_sleep() {
   if (transfer_is_busy()) return false;
   if (ble_is_connected()) return false;
   if (ble_enrollment_active()) return false;
-  // Pending uploads block sleep only when auto-sync can actually clear them;
-  // with sync off, waiting would keep the device awake forever.
-  if (control_sync_enabled()) {
-    if (manifest_pending_count() != 0) {
-      s_synced_confirm = 0;
-      return false;
-    }
-    // manifest_pending_count() returns 0 on a 200ms mutex timeout, so require
-    // two consecutive clean reads before treating the manifest as synced.
-    if (s_synced_confirm < 2) {
-      s_synced_confirm++;
-      return false;
-    }
-  }
   return true;
 }
 
@@ -75,7 +64,6 @@ void power_poll() {
   if (recorder_is_recording()) {
     s_idle_tracking = false;
     s_idle_since_ms = 0;
-    s_synced_confirm = 0;
     return;
   }
   uint32_t now = millis();

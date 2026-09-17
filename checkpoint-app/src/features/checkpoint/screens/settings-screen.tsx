@@ -1,7 +1,5 @@
-import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
-import { Copy, Eye, EyeOff } from 'lucide-react-native';
 import { useCallback, useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
@@ -11,14 +9,12 @@ import { Toggle } from '../components/toggle.tsx';
 import { useBluetoothState } from '../hooks/useBluetoothState.ts';
 import { useCheckpoint } from '../hooks/useCheckpoint.tsx';
 import { classifyLog, formatLogTime, isErrorLog } from '../logFilter.ts';
-import { isValidUserId } from '../parsers.ts';
 import type { CheckpointSettings } from '../settings.ts';
 import { transferView } from '../transferView.ts';
 
 import { AppHeader } from '@/components/shared/app-header';
 import { BatteryOptimizationCard } from '@/components/shared/battery-optimization-card';
 import { DetailRow, DeveloperDetails } from '@/components/shared/developer-details';
-import { HeaderIconButton } from '@/components/shared/header-icon-button';
 import { Section } from '@/components/shared/section';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -28,7 +24,6 @@ import { Text } from '@/components/ui/text';
 import { env } from '@/lib/env';
 import { cn } from '@/lib/utils';
 import { useAppTheme } from '@/providers/theme-provider';
-import { useToast } from '@/providers/toast-provider';
 
 type Apply = (patch: Partial<CheckpointSettings>) => void;
 
@@ -86,10 +81,12 @@ function SpeechSection({
   settings,
   apply,
   applySilent,
+  onOpenLanguages,
 }: {
   settings: CheckpointSettings;
   apply: Apply;
   applySilent: Apply;
+  onOpenLanguages: () => void;
 }) {
   return (
     <Section title="Speech">
@@ -120,6 +117,12 @@ function SpeechSection({
           hint={`Clips shorter than ${settings.minSpeechS.toFixed(1)}s are dropped as noise.`}
           onChange={(value) => applySilent({ minSpeechS: Number(value.toFixed(1)) })}
         />
+        <Button variant="outline" onPress={onOpenLanguages}>
+          <Text>Transcription languages</Text>
+        </Button>
+        <Text variant="muted" className="text-[11px]">
+          Only transcribe the languages you select. Leave empty to transcribe all.
+        </Text>
       </Card>
     </Section>
   );
@@ -138,8 +141,8 @@ function TransferSection({
     <Section title="Sync">
       <Card>
         <Toggle
-          label="Auto-sync"
-          description="Find your pendant and sync automatically when the app opens."
+          label="Auto-connect & sync"
+          description="Discover, connect and sync your pendant automatically."
           value={settings.autoSyncEnabled}
           onChange={(next) => apply({ autoSyncEnabled: next })}
         />
@@ -173,29 +176,16 @@ function BackendSection({
   probe,
 }: {
   settings: CheckpointSettings;
-  onSave: (next: { serverUrl: string; userId: string }) => void;
+  onSave: (next: { serverUrl: string }) => void;
   onTest: () => void;
   testing: boolean;
   probe: { ok: boolean; latencyMs: number; at: number } | null;
 }) {
-  const { showToast } = useToast();
   const [serverUrl, setServerUrl] = useState(settings.serverUrl);
-  const [userId, setUserId] = useState(settings.userId);
-  const [revealed, setRevealed] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const dirty = serverUrl.trim() !== settings.serverUrl && serverUrl.trim() !== '';
 
   const save = () => {
-    if (!isValidUserId(userId)) {
-      setError('Enter a valid user ID (UUID like aaaaaaaa-…).');
-      return;
-    }
-    setError(null);
-    onSave({ serverUrl: serverUrl.trim(), userId: userId.trim() });
-  };
-
-  const copyUserId = () => {
-    void Clipboard.setStringAsync(userId);
-    showToast('User ID copied.');
+    onSave({ serverUrl: serverUrl.trim() });
   };
 
   return (
@@ -213,29 +203,8 @@ function BackendSection({
             className="font-mono text-[13px]"
           />
         </View>
-        <View className="gap-1">
-          <Text className="text-[11px] text-subtle-foreground">Bearer token / User ID</Text>
-          <View className="flex-row gap-2">
-            <Input
-              className="flex-1 font-mono text-[13px]"
-              value={userId}
-              onChangeText={setUserId}
-              autoCapitalize="none"
-              autoCorrect={false}
-              secureTextEntry={!revealed}
-              placeholder="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-            />
-            <HeaderIconButton
-              icon={revealed ? EyeOff : Eye}
-              label={revealed ? 'Hide user ID' : 'Reveal user ID'}
-              onPress={() => setRevealed((current) => !current)}
-            />
-            <HeaderIconButton icon={Copy} label="Copy user ID" onPress={copyUserId} />
-          </View>
-          {error ? <Text className="text-[11px] text-destructive">{error}</Text> : null}
-        </View>
         <View className="flex-row gap-2">
-          <Button variant="outline" className="flex-1" onPress={save}>
+          <Button variant="outline" className="flex-1" disabled={!dirty} onPress={save}>
             <Text>Save server</Text>
           </Button>
           <Button variant="outline" className="flex-1" disabled={testing} onPress={onTest}>
@@ -351,7 +320,7 @@ export function CheckpointSettingsScreen() {
   }, [testConnection]);
 
   const onSaveServer = useCallback(
-    (next: { serverUrl: string; userId: string }) => {
+    (next: { serverUrl: string }) => {
       void updateSettings({ ...settings, ...next });
     },
     [settings, updateSettings],
@@ -381,7 +350,12 @@ export function CheckpointSettingsScreen() {
         contentContainerStyle={{ gap: 24, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
       >
-        <SpeechSection settings={settings} apply={apply} applySilent={applySilent} />
+        <SpeechSection
+          settings={settings}
+          apply={apply}
+          applySilent={applySilent}
+          onOpenLanguages={() => router.push('/languages')}
+        />
         <TransferSection settings={settings} apply={apply} applySilent={applySilent} />
         <BackendSection
           settings={settings}
@@ -391,6 +365,13 @@ export function CheckpointSettingsScreen() {
           probe={probe}
         />
         <AppearanceSection />
+        <Section title="Account">
+          <Card>
+            <Button variant="outline" onPress={() => router.push('/account')}>
+              <Text>Account & security</Text>
+            </Button>
+          </Card>
+        </Section>
         <Section title="Danger zone">
           <EraseCard />
         </Section>

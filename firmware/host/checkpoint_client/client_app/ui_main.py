@@ -1,6 +1,7 @@
 """ttkbootstrap main window. Same features as the original gui.py."""
 
 import asyncio
+import hashlib
 import queue
 import sys
 import tkinter as tk
@@ -111,7 +112,9 @@ class CheckpointWindow:
             {"rec_toggle": self.on_rec_toggle, "status": self.on_status_refresh, "led_toggle": self.on_led_toggle,
              "sync_toggle": self.on_sync_toggle,
              "bright_slide": self.on_bright_slide,
-             "bright_release": self.on_bright_release},
+             "bright_release": self.on_bright_release,
+             "cloud_secret": self.on_cloud_secret,
+             "clear_slots": self.on_clear_slots},
             self.dev_status_var, self.led_muted_var, self.bright_var, self.sync_var)
         self.storage_var = tk.StringVar(value="SD: —")
         self.list_page_var = tk.StringVar(value="")
@@ -203,6 +206,7 @@ class CheckpointWindow:
         for w in (self.dev_btns["rec"],
                   self.dev_btns["status"], self.dev_btns["led_chk"],
                   self.dev_btns["bright"], self.dev_btns["sync_chk"],
+                  self.dev_btns["cloud"], self.dev_btns["clear_slots"],
                   self.stor_btns["refresh"], self.stor_btns["delete"],
                   self.stor_btns["erase"], self.stor_btns["prev"],
                   self.stor_btns["next"]):
@@ -409,6 +413,35 @@ class CheckpointWindow:
         status = await self.worker.client.cmd_file_delete(path)
         self._put("log", f"[gui] file-delete {path} status={ctrl_status_text(status)}")
         self._storage_refresh_soon()
+
+    def on_cloud_secret(self):
+        if not self._device_ready():
+            return
+        fut = self.worker.submit(self._cloud_secret_flow())
+        fut.add_done_callback(lambda f: self._device_done("cloud-secret", f))
+
+    async def _cloud_secret_flow(self):
+        secret = await self.worker.client.cmd_get_cloud_secret()
+        if secret is None:
+            self._put("log", "[gui] cloud-secret fetch failed")
+            return
+        digest = hashlib.sha256(secret).hexdigest()
+        self._put("log", f"[gui] cloud-secret fetched ({len(secret)} bytes) sha256={digest[:16]}…")
+
+    def on_clear_slots(self):
+        if not self._device_ready():
+            return
+        if not messagebox.askyesno(
+                "Clear trusted slots",
+                "Clear ALL trusted BLE clients on the pendant?\n"
+                "You will need the claim key to enroll again."):
+            return
+        fut = self.worker.submit(self._clear_slots_flow())
+        fut.add_done_callback(lambda f: self._device_done("clear-slots", f))
+
+    async def _clear_slots_flow(self):
+        status = await self.worker.client.cmd_clear_trusted_slots()
+        self._put("log", f"[gui] clear-slots status={ctrl_status_text(status)}")
 
     async def _erase_flow(self):
         arm = await self.worker.client.cmd_storage_erase(cfg.CTRL_ERASE_ARM)

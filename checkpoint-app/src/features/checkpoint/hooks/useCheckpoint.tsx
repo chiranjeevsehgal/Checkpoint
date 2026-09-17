@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
@@ -27,9 +28,15 @@ import type { TransferRecord } from '../transferStore.ts';
 import type { DeviceFileList, DeviceStatus, LogEntry, StorageInfo } from '../types.ts';
 
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
+import { resolveApiUrl, subscribeServerConfig } from '@/lib/server-config';
 import { useToast } from '@/providers/toast-provider';
 
-type DialogState = { kind: 'delete'; path: string } | { kind: 'erase' } | { kind: 'forget' } | null;
+type DialogState =
+  | { kind: 'delete'; path: string }
+  | { kind: 'erase' }
+  | { kind: 'forget' }
+  | { kind: 'release' }
+  | null;
 
 interface CheckpointContextValue {
   connected: boolean;
@@ -38,6 +45,7 @@ interface CheckpointContextValue {
   hydrated: boolean;
   deviceId: string | null;
   enrolled: boolean;
+  ownedDeviceId: string | null;
   autoConnecting: boolean;
   deviceName: string;
   setDeviceName: (name: string) => void;
@@ -51,12 +59,14 @@ interface CheckpointContextValue {
   preview: PreviewSnapshot | null;
   deleting: string | null;
   erasing: boolean;
+  rssi: number | null;
   logs: LogEntry[];
   settings: CheckpointSettings;
   connect: () => Promise<void>;
   reconnect: () => Promise<void>;
   disconnect: () => Promise<void>;
   forgetDevice: () => Promise<void>;
+  releasePendant: (password: string) => Promise<void>;
   stopConnection: () => Promise<void>;
   refreshStatus: () => Promise<void>;
   refreshStorage: () => Promise<void>;
@@ -68,6 +78,7 @@ interface CheckpointContextValue {
   requestDelete: (path: string) => void;
   requestErase: () => void;
   requestForget: () => void;
+  requestRelease: () => void;
   previewStorageFile: (path: string) => Promise<number | null>;
   updateSettings: (settings: CheckpointSettings, options?: { silent?: boolean }) => Promise<void>;
   shareBench: () => Promise<void>;
@@ -83,6 +94,30 @@ export function useCheckpoint(): CheckpointContextValue {
   const value = useContext(CheckpointContext);
   if (!value) throw new Error('useCheckpoint must be used inside CheckpointProvider');
   return value;
+}
+
+/** Points sync/upload at the host chosen on the sign-in screen, so the auth
+ * feature never has to reach into checkpoint settings. */
+function useServerConfigSync(
+  settings: CheckpointSettings,
+  applySettings: (next: CheckpointSettings, options?: { silent?: boolean }) => Promise<void>,
+): void {
+  const applySettingsRef = useRef(applySettings);
+  const settingsRef = useRef(settings);
+
+  useEffect(() => {
+    applySettingsRef.current = applySettings;
+    settingsRef.current = settings;
+  });
+
+  useEffect(() => {
+    return subscribeServerConfig(() => {
+      void applySettingsRef.current(
+        { ...settingsRef.current, serverUrl: resolveApiUrl() },
+        { silent: true },
+      );
+    });
+  }, []);
 }
 
 export function CheckpointProvider({ children }: PropsWithChildren) {
@@ -134,6 +169,14 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     showToast('Pendant forgotten.');
   }, [showToast]);
 
+  const releasePendant = useCallback(
+    async (password: string) => {
+      await syncEngine.releasePendant(password);
+      showToast('Pendant released.');
+    },
+    [showToast],
+  );
+
   const setDeviceName = useCallback(
     (name: string) => {
       const next = { ...settings, deviceName: name };
@@ -183,6 +226,8 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     [settings.autoSyncEnabled, showToast],
   );
 
+  useServerConfigSync(settings, updateSettings);
+
   const testConnection = useCallback(async () => {
     const probe = await syncEngine.testConnection();
     if (!probe) showToast('No internet connection — see debug log.');
@@ -213,15 +258,20 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
   const requestDelete = useCallback((path: string) => setDialog({ kind: 'delete', path }), []);
   const requestErase = useCallback(() => setDialog({ kind: 'erase' }), []);
   const requestForget = useCallback(() => setDialog({ kind: 'forget' }), []);
+  const requestRelease = useCallback(() => setDialog({ kind: 'release' }), []);
   const cancelDialog = useCallback(() => setDialog(null), []);
 
-  const confirmDialog = useCallback(() => {
-    const pending = dialog;
-    setDialog(null);
-    if (pending?.kind === 'delete') void deleteFile(pending.path);
-    if (pending?.kind === 'erase') void eraseStorage();
-    if (pending?.kind === 'forget') void forgetDevice();
-  }, [dialog, deleteFile, eraseStorage, forgetDevice]);
+  const confirmDialog = useCallback(
+    async (password?: string) => {
+      const pending = dialog;
+      if (pending?.kind === 'delete') await deleteFile(pending.path);
+      if (pending?.kind === 'erase') await eraseStorage();
+      if (pending?.kind === 'forget') await forgetDevice();
+      if (pending?.kind === 'release') await releasePendant(password ?? '');
+      setDialog(null);
+    },
+    [dialog, deleteFile, eraseStorage, forgetDevice, releasePendant],
+  );
 
   const value = useMemo<CheckpointContextValue>(
     () => ({
@@ -231,6 +281,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       hydrated: snapshot.hydrated,
       deviceId: snapshot.deviceId,
       enrolled: snapshot.enrolled,
+      ownedDeviceId: snapshot.ownedDeviceId,
       autoConnecting: snapshot.autoConnecting,
       deviceName: settings.deviceName,
       setDeviceName,
@@ -244,12 +295,14 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       preview: snapshot.preview,
       deleting: snapshot.deleting,
       erasing: snapshot.erasing,
+      rssi: snapshot.rssi,
       logs: snapshot.logs,
       settings,
       connect,
       reconnect: syncEngine.reconnect,
       disconnect,
       forgetDevice,
+      releasePendant,
       stopConnection: syncEngine.stopConnection,
       refreshStatus: syncEngine.refreshStatus,
       refreshStorage: syncEngine.refreshStorage,
@@ -261,6 +314,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       requestDelete,
       requestErase,
       requestForget,
+      requestRelease,
       previewStorageFile,
       updateSettings,
       shareBench: syncEngine.shareBench,
@@ -275,11 +329,13 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       connect,
       disconnect,
       forgetDevice,
+      releasePendant,
       openAppSettings,
       previewStorageFile,
       requestDelete,
       requestErase,
       requestForget,
+      requestRelease,
       setDeviceName,
       settings,
       snapshot,
@@ -300,7 +356,9 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
             ? 'Erase all recordings'
             : dialog?.kind === 'forget'
               ? 'Forget pendant'
-              : 'Delete file'
+              : dialog?.kind === 'release'
+                ? 'Release pendant'
+                : 'Delete file'
         }
         body={
           dialog?.kind === 'erase'
@@ -311,12 +369,21 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
               } Type ERASE to confirm.`
             : dialog?.kind === 'forget'
               ? 'Forget this pendant? You will need its claim key to set it up again.'
-              : `Delete ${dialogFile} from the pendant? This cannot be undone.`
+              : dialog?.kind === 'release'
+                ? 'Release this pendant? Local recordings are erased, the pendant forgets this phone, and cloud ownership is removed. Enter your account password to confirm — this cannot be undone.'
+                : `Delete ${dialogFile} from the pendant? This cannot be undone.`
         }
         confirmLabel={
-          dialog?.kind === 'erase' ? 'Erase all' : dialog?.kind === 'forget' ? 'Forget' : 'Delete'
+          dialog?.kind === 'erase'
+            ? 'Erase all'
+            : dialog?.kind === 'forget'
+              ? 'Forget'
+              : dialog?.kind === 'release'
+                ? 'Release'
+                : 'Delete'
         }
         requireText={dialog?.kind === 'erase' ? 'ERASE' : undefined}
+        requirePassword={dialog?.kind === 'release'}
         onCancel={cancelDialog}
         onConfirm={confirmDialog}
       />

@@ -75,6 +75,17 @@ def test_drop_first_slot_compacts():
     print("PASS drop-first-slot compacts")
 
 
+def test_forget_self_drops_caller_slot():
+    auth = read("auth.cpp")
+    assert "auth_forget_self" in read("auth.h")
+    block = auth.split("bool auth_forget_self()")[1].split("\n}\n")[0]
+    assert "auth_is_authenticated()" in block
+    assert "find_slot(s_pending_client)" in block
+    assert "auth_forget_client(slot)" in block
+    assert "auth_clear_session()" in block
+    print("PASS forget-self drops caller slot")
+
+
 def test_central_auth_gate():
     ble = read("ble_service.cpp")
     assert "if (!auth_is_authenticated())" in ble

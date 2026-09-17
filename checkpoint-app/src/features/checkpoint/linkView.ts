@@ -1,7 +1,17 @@
+import type { BluetoothStatus } from './types.ts';
+
 export interface LinkView {
   label: string;
   sub: string;
   openSettings: boolean;
+}
+
+/** Maps the phone's Bluetooth adapter state to the link-state vocabulary. */
+export function bluetoothLinkState(status: BluetoothStatus): string {
+  if (status === 'off') return 'bluetooth off';
+  if (status === 'unauthorized') return 'needs permission';
+  if (status === 'unsupported') return 'bluetooth unavailable';
+  return 'idle';
 }
 
 const VIEWS: Record<string, LinkView> = {
@@ -43,6 +53,11 @@ const VIEWS: Record<string, LinkView> = {
   'bluetooth unavailable': {
     label: 'Bluetooth unavailable',
     sub: "This device doesn't support Bluetooth.",
+    openSettings: false,
+  },
+  'not owned': {
+    label: 'Linked to another account',
+    sub: 'This pendant is linked to another Checkpoint account. Ask the owner to release it.',
     openSettings: false,
   },
 };
