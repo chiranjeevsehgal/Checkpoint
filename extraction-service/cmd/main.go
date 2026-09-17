@@ -56,7 +56,7 @@ func main() {
 
 	registry := extractor.NewRegistry()
 	registry.Register(extractor.TodoExtractor{})
-	registry.Register(extractor.ReminderExtractor{})
+	registry.Register(extractor.NewReminderExtractor(cfg.Reminders.Loc()))
 	registry.Register(extractor.InsightExtractor{})
 
 	log.Printf("listening on kafka topic %q (group %q), model %s, batch=%d, types=%v, writing extractions to postgres",

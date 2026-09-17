@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const testYAML = `
@@ -85,5 +86,29 @@ func TestLoadRejectsInvalidBatchSize(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected batch.size 0 to be rejected")
+	}
+}
+
+func TestLoadDefaultsRemindersTimezoneToUTC(t *testing.T) {
+	t.Setenv("POSTGRES_DSN", "postgres://x")
+	t.Setenv("GROQ_API_KEY", "gsk_test")
+	t.Setenv("REMINDERS_TIMEZONE", "")
+
+	cfg, err := Load(writeConfig(t))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Reminders.Timezone != "UTC" || cfg.Reminders.Loc() != time.UTC {
+		t.Fatalf("reminders timezone default wrong: %q loc=%v", cfg.Reminders.Timezone, cfg.Reminders.Loc())
+	}
+}
+
+func TestLoadRejectsInvalidRemindersTimezone(t *testing.T) {
+	t.Setenv("POSTGRES_DSN", "postgres://x")
+	t.Setenv("GROQ_API_KEY", "gsk_test")
+	t.Setenv("REMINDERS_TIMEZONE", "Mars/Olympus_Mons")
+
+	if _, err := Load(writeConfig(t)); err == nil {
+		t.Fatal("expected invalid reminders.timezone to be rejected")
 	}
 }

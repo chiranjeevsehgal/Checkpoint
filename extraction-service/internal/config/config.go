@@ -5,6 +5,8 @@ import (
 	"os"
 	"time"
 
+	_ "time/tzdata" // embedded IANA database so LoadLocation works on any host OS
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -17,10 +19,11 @@ const (
 // Config is the full service configuration, loaded from config.yaml with
 // environment overrides for container/orchestration flexibility.
 type Config struct {
-	Kafka    KafkaConfig    `yaml:"kafka"`
-	Postgres PostgresConfig `yaml:"postgres"`
-	Groq     GroqConfig     `yaml:"groq"`
-	Batch    BatchConfig    `yaml:"batch"`
+	Kafka     KafkaConfig     `yaml:"kafka"`
+	Postgres  PostgresConfig  `yaml:"postgres"`
+	Groq      GroqConfig      `yaml:"groq"`
+	Batch     BatchConfig     `yaml:"batch"`
+	Reminders RemindersConfig `yaml:"reminders"`
 }
 
 type KafkaConfig struct {
@@ -65,6 +68,16 @@ type BatchConfig struct {
 func (b *BatchConfig) PollInterval() time.Duration { return time.Duration(b.PollIntervalSeconds) * time.Second }
 func (b *BatchConfig) MaxWait() time.Duration       { return time.Duration(b.MaxWaitSeconds) * time.Second }
 func (b *BatchConfig) ReclaimAfter() time.Duration  { return time.Duration(b.ReclaimAfterSeconds) * time.Second }
+
+// RemindersConfig carries the user's wall-clock timezone the reminder
+// prompt resolves relative times in ("tomorrow at 5pm"). remind_at itself
+// is always stored as a UTC instant.
+type RemindersConfig struct {
+	Timezone string `yaml:"timezone"`
+	loc      *time.Location
+}
+
+func (r *RemindersConfig) Loc() *time.Location { return r.loc }
 
 // Load reads the yaml file at path, resolves *_env fields against actual
 // environment variables, applies defaults, and rejects invalid values
@@ -140,6 +153,20 @@ func Load(path string) (*Config, error) {
 	if cfg.Batch.MaxBatchChars <= 0 {
 		cfg.Batch.MaxBatchChars = 200000
 	}
+
+	// Reminder timezone: env wins, then yaml, then UTC. Validated here so a
+	// typo fails fast at startup instead of producing wrong remind_at times.
+	if tz := os.Getenv("REMINDERS_TIMEZONE"); tz != "" {
+		cfg.Reminders.Timezone = tz
+	}
+	if cfg.Reminders.Timezone == "" {
+		cfg.Reminders.Timezone = "UTC"
+	}
+	loc, err := time.LoadLocation(cfg.Reminders.Timezone)
+	if err != nil {
+		return nil, fmt.Errorf("reminders.timezone %q is not a valid IANA zone: %w", cfg.Reminders.Timezone, err)
+	}
+	cfg.Reminders.loc = loc
 
 	return &cfg, nil
 }

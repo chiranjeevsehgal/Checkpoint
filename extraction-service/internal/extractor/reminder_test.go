@@ -9,12 +9,16 @@ import (
 )
 
 func TestReminderMessagesIncludeCurrentTimeAndItems(t *testing.T) {
-	msgs := ReminderExtractor{}.Messages(jobs(3))
+	loc := time.FixedZone("IST", 5*60*60+30*60)
+	msgs := NewReminderExtractor(loc).Messages(jobs(3))
 	if len(msgs) != 2 || msgs[0].Role != "system" || msgs[1].Role != "user" {
 		t.Fatalf("expected system+user messages, got %+v", msgs)
 	}
-	if !strings.Contains(msgs[1].Content, "Current date/time (UTC): ") {
+	if !strings.Contains(msgs[1].Content, "Current date/time for the user (IST): ") {
 		t.Fatalf("user prompt missing current date/time: %q", msgs[1].Content)
+	}
+	if !strings.Contains(msgs[1].Content, "+05:30") {
+		t.Fatalf("user prompt missing the user's UTC offset: %q", msgs[1].Content)
 	}
 	for i := 1; i <= 3; i++ {
 		marker := "--- item " + string(rune('0'+i)) + " ---"
@@ -25,8 +29,8 @@ func TestReminderMessagesIncludeCurrentTimeAndItems(t *testing.T) {
 }
 
 func TestReminderParseMapsItemsToJobs(t *testing.T) {
-	content := `{"reminders":[{"item":2,"text":"Call the bank","remind_at":"2026-09-18T11:30:00Z"},{"item":1,"text":"Submit the report","remind_at":null},{"item":2,"text":""}]}`
-	results, err := ReminderExtractor{}.Parse(content, jobs(3))
+	content := `{"reminders":[{"item":2,"text":"Call the bank","remind_at":"2026-09-18T17:00:00+05:30"},{"item":1,"text":"Submit the report","remind_at":null},{"item":2,"text":""}]}`
+	results, err := NewReminderExtractor(time.UTC).Parse(content, jobs(3))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -54,6 +58,8 @@ func TestReminderParseMapsItemsToJobs(t *testing.T) {
 	if rem.Text != "Call the bank" || rem.RemindAt == nil {
 		t.Fatalf("job 2 reminder wrong: %+v", rem)
 	}
+	// "17:00+05:30" is the same instant as 11:30 UTC — offset must be
+	// honored, not the local clock.
 	if want := time.Date(2026, 9, 18, 11, 30, 0, 0, time.UTC); !rem.RemindAt.Equal(want) {
 		t.Fatalf("job 2 remind_at wrong: got %v want %v", rem.RemindAt, want)
 	}
@@ -63,7 +69,7 @@ func TestReminderParseMapsItemsToJobs(t *testing.T) {
 }
 
 func TestReminderParseAlwaysYieldsResultPerJob(t *testing.T) {
-	results, err := ReminderExtractor{}.Parse(`{"reminders":[]}`, jobs(2))
+	results, err := NewReminderExtractor(nil).Parse(`{"reminders":[]}`, jobs(2))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -78,7 +84,7 @@ func TestReminderParseAlwaysYieldsResultPerJob(t *testing.T) {
 }
 
 func TestReminderParseRejectsOutOfRangeItems(t *testing.T) {
-	re := ReminderExtractor{}
+	re := NewReminderExtractor(nil)
 	if _, err := re.Parse(`{"reminders":[{"item":4,"text":"x","remind_at":null}]}`, jobs(3)); err == nil {
 		t.Fatal("expected out-of-range item to fail")
 	}
@@ -88,13 +94,13 @@ func TestReminderParseRejectsOutOfRangeItems(t *testing.T) {
 }
 
 func TestReminderParseRejectsUnparseableRemindAt(t *testing.T) {
-	if _, err := (ReminderExtractor{}).Parse(`{"reminders":[{"item":1,"text":"x","remind_at":"tomorrow"}]}`, jobs(1)); err == nil {
+	if _, err := NewReminderExtractor(nil).Parse(`{"reminders":[{"item":1,"text":"x","remind_at":"tomorrow"}]}`, jobs(1)); err == nil {
 		t.Fatal("expected unparseable remind_at to fail")
 	}
 }
 
 func TestReminderParseRejectsMalformedJSON(t *testing.T) {
-	if _, err := (ReminderExtractor{}).Parse(`{"reminders": [oops`, jobs(1)); err == nil {
+	if _, err := NewReminderExtractor(nil).Parse(`{"reminders": [oops`, jobs(1)); err == nil {
 		t.Fatal("expected malformed json to fail")
 	}
 }

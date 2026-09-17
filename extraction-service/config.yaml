@@ -31,3 +31,6 @@ batch:
   # Soft cap on total transcript chars per LLM call; a claimed batch larger
   # than this is split into multiple calls before hitting Groq.
   max_batch_chars: 200000
+
+reminders:
+  timezone: Asia/Kolkata
