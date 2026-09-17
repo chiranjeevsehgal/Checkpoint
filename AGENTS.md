@@ -79,14 +79,6 @@ docker compose ps        # postgres + kafka should be healthy
 - Strict exactly-N: `batch.max_wait_seconds: 0` means a user with fewer than N items waits indefinitely. `GROQ_API_KEY` and `POSTGRES_DSN` must be set or the worker fails fast at startup.
 - New extraction types = implement `extractor.Extractor` + register + one migration; consumer/batcher/claim/retry are shared.
 
-## Extraction worker quirks
-
-- Kafka is only the trigger: the consumer validates `EXTRACTION_REQUESTED` (schema v2, same envelope transcription publishes), inserts a pending `extraction_jobs` row, commits. Poison → `extraction.jobs.v1.dlq` + commit.
-- Postgres is the batch queue: batcher claims `batch.size` (default 10) rows per user with `FOR UPDATE SKIP LOCKED` → one Groq call per batch (`openai/gpt-oss-120b`, `response_format: json_object`) → todos replaced per audio in one tx. Full design: `extraction-service/Explain.md`.
-- Job states `pending|processing|done|failed`; retryable failures release back to `pending` with attempts+1, `failed` after `batch.max_attempts` (requeue: `UPDATE ... SET status='pending', attempts=0`). Stuck `processing` rows are reclaimed after `batch.reclaim_after_seconds`.
-- Strict exactly-N: `batch.max_wait_seconds: 0` means a user with fewer than N items waits indefinitely. `GROQ_API_KEY` and `POSTGRES_DSN` must be set or the worker fails fast at startup.
-- New extraction types = implement `extractor.Extractor` + register + one migration; consumer/batcher/claim/retry are shared. See Explain.md "Extending".
-
 ## Test / verify
 
 Each Go service is its own module — run from the service dir:
