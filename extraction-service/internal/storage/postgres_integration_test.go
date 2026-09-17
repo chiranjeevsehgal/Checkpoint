@@ -127,3 +127,32 @@ func TestReadyUsersExcludesTombstonedUsers(t *testing.T) {
 		}
 	}
 }
+
+// TestCompleteBatchPersistsInsights guards the insight writer against
+// passing the model.Insight struct where pgx expects the text column.
+func TestCompleteBatchPersistsInsights(t *testing.T) {
+	store, pool := newTestStore(t)
+	ctx := context.Background()
+	userID := "3b8e1c2a-0000-4000-8000-0000000001a2"
+	audioID := "3b8e1c2a-0000-4000-8000-0000000001a3"
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM insights WHERE user_id = $1`, userID)
+	})
+
+	if err := store.CompleteBatch(ctx, []model.Result{{
+		UserID: userID, AudioID: audioID, ExtractionType: model.TypeInsight,
+		Insights: []model.Insight{{Text: "the vendor discount was already in the quote"}},
+	}}, "test-model"); err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM insights WHERE user_id = $1`, userID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 insight row, got %d", count)
+	}
+}

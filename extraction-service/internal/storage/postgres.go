@@ -266,12 +266,12 @@ func replaceInsights(ctx context.Context, tx pgx.Tx, r model.Result, llmModel st
 	if _, err := tx.Exec(ctx, `DELETE FROM insights WHERE user_id = $1 AND audio_id = $2`, r.UserID, r.AudioID); err != nil {
 		return fmt.Errorf("replacing insights for %s: %w", r.AudioID, err)
 	}
-	for _, text := range r.Insights {
+	for _, insight := range r.Insights {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO insights (user_id, audio_id, text, model)
 			VALUES ($1, $2, $3, $4)
 			ON CONFLICT (user_id, audio_id, text) DO NOTHING`,
-			r.UserID, r.AudioID, text, llmModel); err != nil {
+			r.UserID, r.AudioID, insight.Text, llmModel); err != nil {
 			return fmt.Errorf("inserting insight for %s: %w", r.AudioID, err)
 		}
 	}
