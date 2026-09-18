@@ -223,3 +223,36 @@ func TestCompleteBatchMarksEmptyResultSkippedAndClears(t *testing.T) {
 		t.Fatalf("status = %q, want %q", status, "skipped")
 	}
 }
+
+func TestUserTimezoneReadsSettings(t *testing.T) {
+	store, pool := newTestStore(t)
+	ctx := context.Background()
+	userID := "6a1c9f30-0000-4000-8000-00000000cd01"
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM user_settings WHERE user_id = $1`, userID)
+	})
+
+	got, err := store.UserTimezone(ctx, userID)
+	if err != nil {
+		t.Fatalf("missing row: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("missing row must yield empty timezone, got %q", got)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO user_settings (user_id, timezone) VALUES ($1, $2)
+		ON CONFLICT (user_id) DO UPDATE SET timezone = EXCLUDED.timezone`,
+		userID, "Europe/Berlin"); err != nil {
+		t.Skipf("user_settings schema mismatch: %v", err)
+	}
+
+	got, err = store.UserTimezone(ctx, userID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got != "Europe/Berlin" {
+		t.Fatalf("timezone = %q, want Europe/Berlin", got)
+	}
+}

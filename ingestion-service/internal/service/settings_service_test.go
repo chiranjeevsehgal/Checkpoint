@@ -9,9 +9,11 @@ import (
 )
 
 type fakeUserSettings struct {
-	languages []string
-	saved     []string
-	err       error
+	languages     []string
+	timezone      string
+	saved         []string
+	savedTimezone string
+	err           error
 }
 
 func (f *fakeUserSettings) GetLanguages(_ context.Context, _ string) ([]string, error) {
@@ -29,8 +31,23 @@ func (f *fakeUserSettings) SetLanguages(_ context.Context, _ string, languages [
 	return nil
 }
 
+func (f *fakeUserSettings) GetTimezone(_ context.Context, _ string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.timezone, nil
+}
+
+func (f *fakeUserSettings) SetTimezone(_ context.Context, _, timezone string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.savedTimezone = timezone
+	return nil
+}
+
 func TestSettingsGetReturnsCatalog(t *testing.T) {
-	repo := &fakeUserSettings{languages: []string{"eng"}}
+	repo := &fakeUserSettings{languages: []string{"eng"}, timezone: "Europe/Berlin"}
 	svc := NewSettingsService(repo)
 
 	got, err := svc.Get(context.Background(), "user-1")
@@ -39,6 +56,9 @@ func TestSettingsGetReturnsCatalog(t *testing.T) {
 	}
 	if len(got.Languages) != 1 || got.Languages[0] != "eng" {
 		t.Fatalf("languages: got %v, want [eng]", got.Languages)
+	}
+	if got.Timezone != "Europe/Berlin" {
+		t.Fatalf("timezone: got %q, want Europe/Berlin", got.Timezone)
 	}
 	if len(got.Available) != len(domain.SupportedLanguages) {
 		t.Fatalf("catalog size: got %d, want %d", len(got.Available), len(domain.SupportedLanguages))
@@ -79,5 +99,30 @@ func TestSettingsGetPropagatesRepositoryError(t *testing.T) {
 
 	if _, err := svc.Get(context.Background(), "user-1"); err == nil {
 		t.Fatal("expected repository error")
+	}
+}
+
+func TestSettingsSetTimezoneNormalizesAndPersists(t *testing.T) {
+	repo := &fakeUserSettings{}
+	svc := NewSettingsService(repo)
+
+	got, err := svc.SetTimezone(context.Background(), "user-1", " Europe/Berlin ")
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if got != "Europe/Berlin" || repo.savedTimezone != "Europe/Berlin" {
+		t.Fatalf("got %q persisted %q, want Europe/Berlin", got, repo.savedTimezone)
+	}
+}
+
+func TestSettingsSetTimezoneRejectsInvalid(t *testing.T) {
+	repo := &fakeUserSettings{}
+	svc := NewSettingsService(repo)
+
+	if _, err := svc.SetTimezone(context.Background(), "user-1", "Not/AZone"); !errors.Is(err, domain.ErrInvalidTimezone) {
+		t.Fatalf("want ErrInvalidTimezone, got %v", err)
+	}
+	if repo.savedTimezone != "" {
+		t.Fatalf("invalid timezone must not persist, saved %q", repo.savedTimezone)
 	}
 }

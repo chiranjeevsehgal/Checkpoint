@@ -15,17 +15,19 @@ import (
 )
 
 type fakeSettings struct {
-	languages []string
-	getErr    error
-	setErr    error
-	saved     []string
+	languages     []string
+	timezone      string
+	getErr        error
+	setErr        error
+	saved         []string
+	savedTimezone string
 }
 
 func (f *fakeSettings) Get(_ context.Context, _ string) (*service.Settings, error) {
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
-	return &service.Settings{Languages: f.languages, Available: domain.SupportedLanguages}, nil
+	return &service.Settings{Languages: f.languages, Timezone: f.timezone, Available: domain.SupportedLanguages}, nil
 }
 
 func (f *fakeSettings) SetLanguages(_ context.Context, _ string, codes []string) ([]string, error) {
@@ -37,6 +39,20 @@ func (f *fakeSettings) SetLanguages(_ context.Context, _ string, codes []string)
 		return nil, err
 	}
 	f.saved = normalized
+	f.languages = normalized
+	return normalized, nil
+}
+
+func (f *fakeSettings) SetTimezone(_ context.Context, _, timezone string) (string, error) {
+	if f.setErr != nil {
+		return "", f.setErr
+	}
+	normalized, err := domain.ValidateTimezone(timezone)
+	if err != nil {
+		return "", err
+	}
+	f.savedTimezone = normalized
+	f.timezone = normalized
 	return normalized, nil
 }
 
@@ -52,7 +68,7 @@ func settingsRouter(settings settingsService) http.Handler {
 }
 
 func TestGetSettingsReturnsSelectionAndCatalog(t *testing.T) {
-	r := settingsRouter(&fakeSettings{languages: []string{"eng"}})
+	r := settingsRouter(&fakeSettings{languages: []string{"eng"}, timezone: "Europe/Berlin"})
 
 	req := httptest.NewRequest("GET", "/v1/me/settings", nil)
 	authed(req)
@@ -68,6 +84,9 @@ func TestGetSettingsReturnsSelectionAndCatalog(t *testing.T) {
 	}
 	if len(resp.Languages) != 1 || resp.Languages[0] != "eng" {
 		t.Fatalf("languages: got %v, want [eng]", resp.Languages)
+	}
+	if resp.Timezone != "Europe/Berlin" {
+		t.Fatalf("timezone: got %q, want Europe/Berlin", resp.Timezone)
 	}
 	if len(resp.Available) != len(domain.SupportedLanguages) {
 		t.Fatalf("available: got %d, want %d", len(resp.Available), len(domain.SupportedLanguages))
@@ -95,6 +114,46 @@ func TestPutSettingsNormalizesAndPersists(t *testing.T) {
 	}
 	if len(fake.saved) != 2 || fake.saved[0] != "eng" {
 		t.Fatalf("persisted: got %v", fake.saved)
+	}
+}
+
+func TestPutSettingsPersistsTimezoneWithoutTouchingLanguages(t *testing.T) {
+	fake := &fakeSettings{languages: []string{"eng"}}
+	r := settingsRouter(fake)
+
+	req := httptest.NewRequest("PUT", "/v1/me/settings", strings.NewReader(`{"timezone":" Europe/Berlin "}`))
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp updateSettingsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Timezone != "Europe/Berlin" {
+		t.Fatalf("timezone: got %q, want Europe/Berlin", resp.Timezone)
+	}
+	if len(resp.Languages) != 1 || resp.Languages[0] != "eng" {
+		t.Fatalf("languages clobbered: got %v", resp.Languages)
+	}
+	if len(fake.saved) != 0 {
+		t.Fatalf("timezone PUT must not rewrite languages: %v", fake.saved)
+	}
+}
+
+func TestPutSettingsRejectsInvalidTimezone(t *testing.T) {
+	r := settingsRouter(&fakeSettings{})
+
+	req := httptest.NewRequest("PUT", "/v1/me/settings", strings.NewReader(`{"timezone":"Not/AZone"}`))
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400: %s", rec.Code, rec.Body.String())
 	}
 }
 

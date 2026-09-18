@@ -105,9 +105,9 @@ export function LanguagesScreen() {
     }
     setSaving(true);
     try {
-      const saved = await putUserSettings(token, selected);
-      setSelected(saved);
-      setBaseline(saved);
+      const saved = await putUserSettings(token, { languages: selected });
+      setSelected(saved.languages);
+      setBaseline(saved.languages);
       showToast('Languages saved.');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Could not save languages.');

@@ -10,6 +10,7 @@ import (
 // Settings is the per-user view returned to the API.
 type Settings struct {
 	Languages []string
+	Timezone  string
 	Available []domain.Language
 }
 
@@ -23,14 +24,19 @@ func NewSettingsService(settings repository.UserSettingsRepository) *SettingsSer
 	return &SettingsService{settings: settings}
 }
 
-// Get returns the user's languages plus the catalog the client selects from.
-// A missing row means the user has not chosen, so the default is no filtering.
+// Get returns the user's preferences plus the language catalog the client
+// selects from. A missing row means defaults: no language filtering and the
+// service-wide reminder timezone.
 func (s *SettingsService) Get(ctx context.Context, userID string) (*Settings, error) {
 	languageCodes, err := s.settings.GetLanguages(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	return &Settings{Languages: languageCodes, Available: domain.SupportedLanguages}, nil
+	timezone, err := s.settings.GetTimezone(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return &Settings{Languages: languageCodes, Timezone: timezone, Available: domain.SupportedLanguages}, nil
 }
 
 // SetLanguages validates and persists the selection; an empty set means no
@@ -42,6 +48,18 @@ func (s *SettingsService) SetLanguages(ctx context.Context, userID string, codes
 	}
 	if err := s.settings.SetLanguages(ctx, userID, normalized); err != nil {
 		return nil, err
+	}
+	return normalized, nil
+}
+
+// SetTimezone validates and persists the IANA zone, returning the stored value.
+func (s *SettingsService) SetTimezone(ctx context.Context, userID, timezone string) (string, error) {
+	normalized, err := domain.ValidateTimezone(timezone)
+	if err != nil {
+		return "", err
+	}
+	if err := s.settings.SetTimezone(ctx, userID, normalized); err != nil {
+		return "", err
 	}
 	return normalized, nil
 }

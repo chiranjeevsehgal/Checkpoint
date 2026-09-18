@@ -39,14 +39,15 @@ Output rules:
 - If an item yields nothing for a list, omit it from that list. An item that yields nothing at all appears in no list.
 - "item" must be the 1-based number of the item the entry came from.
 - "text" must be concise and self-contained. Todos and reminders are imperatives (e.g. "Send the Q3 report to Priya"); insights are statements (e.g. "Vendor quotes are 30% higher").
-- "remind_at" is the resolved due datetime as ISO 8601 in the user's timezone with its UTC offset (e.g. "2026-09-18T17:00:00+05:30"):
+- "remind_at" is the reminder's local wall-clock datetime with no UTC offset (e.g. "2026-09-18T17:00:00"), and "remind_at_zone" is the IANA timezone id it belongs to (e.g. "Asia/Kolkata", "Europe/Berlin"):
+  - use the user's timezone (given in the user message) unless the speaker names a different zone;
   - resolve relative expressions ("tonight", "tomorrow", "Friday") against the recorded date/time in the item's heading; use the current date/time only when an item has no recorded time;
   - a stated date without a time resolves to 09:00 on that date;
   - a stated time without a date resolves to the next occurrence after the anchor;
   - remind_at must be strictly in the future: if the stated moment has already passed, move it forward to the next day at the same clock time (a weekday moves to the next occurrence of that weekday);
-  - if the statement is time-bound but no concrete date or time can be determined, use null.
+  - if the statement is time-bound but no concrete date or time can be determined, set both "remind_at" and "remind_at_zone" to null.
 Return a JSON object and nothing else, exactly in this shape:
-{"todos":[{"item":<number>,"text":"<imperative>"}],"reminders":[{"item":<number>,"text":"<imperative>","remind_at":"<ISO 8601 with UTC offset>"}],"insights":[{"item":<number>,"text":"<statement>"}]}
+{"todos":[{"item":<number>,"text":"<imperative>"}],"reminders":[{"item":<number>,"text":"<imperative>","remind_at":"<local datetime, no offset>","remind_at_zone":"<IANA zone id or null>"}],"insights":[{"item":<number>,"text":"<statement>"}]}
 Never output anything outside the JSON object.`
 
 func (e Extractor) Messages(items []model.Job) []llm.Message {
@@ -54,7 +55,7 @@ func (e Extractor) Messages(items []model.Job) []llm.Message {
 	fmt.Fprintf(&b, "Current date/time for the user (%s): %s\n", e.loc, time.Now().In(e.loc).Format(time.RFC3339))
 	b.WriteString("\nExtract todos, reminders and insights from the following numbered transcripts.\n")
 	for i, it := range items {
-		fmt.Fprintf(&b, "\n--- item %d%s ---\n%s\n", i+1, recordedLabel(it.RecordedAt), strings.TrimSpace(it.Text))
+		fmt.Fprintf(&b, "\n--- item %d%s ---\n%s\n", i+1, e.recordedLabel(it.RecordedAt), strings.TrimSpace(it.Text))
 	}
 	return []llm.Message{
 		{Role: "system", Content: systemPrompt},
@@ -69,9 +70,10 @@ func (e Extractor) Parse(content string, items []model.Job) ([]model.Result, err
 			Text string `json:"text"`
 		} `json:"todos"`
 		Reminders []struct {
-			Item     int     `json:"item"`
-			Text     string  `json:"text"`
-			RemindAt *string `json:"remind_at"`
+			Item         int     `json:"item"`
+			Text         string  `json:"text"`
+			RemindAt     *string `json:"remind_at"`
+			RemindAtZone *string `json:"remind_at_zone"`
 		} `json:"reminders"`
 		Insights []struct {
 			Item int    `json:"item"`
@@ -104,7 +106,7 @@ func (e Extractor) Parse(content string, items []model.Job) ([]model.Result, err
 		}
 		reminder := model.Reminder{Text: text}
 		if rem.RemindAt != nil && strings.TrimSpace(*rem.RemindAt) != "" {
-			at, err := time.Parse(time.RFC3339, strings.TrimSpace(*rem.RemindAt))
+			at, err := e.parseReminderTime(strings.TrimSpace(*rem.RemindAt), rem.RemindAtZone)
 			if err != nil {
 				return nil, fmt.Errorf("llm returned unparseable remind_at %q: %w", *rem.RemindAt, err)
 			}
@@ -153,13 +155,46 @@ func itemIndex(item, n int, kind string) (int, error) {
 	return idx, nil
 }
 
-// recordedLabel renders " (recorded 2026-09-17 23:17:47+05:30)" when the item
+// recordedLabel renders " (recorded 2026-09-17 23:17:47 +05:30)" when the item
 // carries a recording time, and "" otherwise.
-func recordedLabel(recordedAt string) string {
-	if recorded := strings.TrimSpace(recordedAt); recorded != "" {
-		return " (recorded " + recorded + ")"
+func (e Extractor) recordedLabel(recordedAt string) string {
+	formatted := e.formatRecordedAt(recordedAt)
+	if formatted == "" {
+		return ""
 	}
-	return ""
+	return " (recorded " + formatted + ")"
+}
+
+// formatRecordedAt renders a UTC RFC3339 recording time in the user's zone,
+// with its offset, so the model reasons about the speaker's local wall clock.
+func (e Extractor) formatRecordedAt(recordedAt string) string {
+	recorded := strings.TrimSpace(recordedAt)
+	if recorded == "" {
+		return ""
+	}
+	at, err := time.Parse(time.RFC3339, recorded)
+	if err != nil {
+		return recorded
+	}
+	return at.In(e.loc).Format("2006-01-02 15:04:05 -07:00")
+}
+
+// parseReminderTime resolves a naive local datetime in the named IANA zone,
+// falling back to the user's zone. An offset in the value, if the model emits
+// one anyway, is honored as-is.
+func (e Extractor) parseReminderTime(raw string, zone *string) (time.Time, error) {
+	if at, err := time.Parse(time.RFC3339, raw); err == nil {
+		return at, nil
+	}
+	loc := e.loc
+	if zone != nil {
+		if named := strings.TrimSpace(*zone); named != "" {
+			if parsed, err := time.LoadLocation(named); err == nil {
+				loc = parsed
+			}
+		}
+	}
+	return time.ParseInLocation("2006-01-02T15:04:05", raw, loc)
 }
 
 // rollForwardPast moves at to the next future occurrence of its clock time

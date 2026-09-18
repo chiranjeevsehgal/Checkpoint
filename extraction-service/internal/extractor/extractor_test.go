@@ -45,7 +45,7 @@ func TestMessagesIncludeCurrentTimeAndItems(t *testing.T) {
 func TestParseMapsAllThreeLists(t *testing.T) {
 	content := `{
 		"todos":[{"item":1,"text":"Send the Q3 report to Priya"}],
-		"reminders":[{"item":2,"text":"Call the bank","remind_at":"2026-09-18T17:00:00+05:30"},{"item":1,"text":"Submit the report","remind_at":null}],
+		"reminders":[{"item":2,"text":"Call the bank","remind_at":"2099-09-18T17:00:00+05:30"},{"item":1,"text":"Submit the report","remind_at":null}],
 		"insights":[{"item":2,"text":"Vendor quotes are 30% higher"}]
 	}`
 	results, err := New(time.UTC).Parse(content, jobs(3))
@@ -66,7 +66,7 @@ func TestParseMapsAllThreeLists(t *testing.T) {
 	}
 	rem := results[1].Reminders[0]
 	// "17:00+05:30" is the same instant as 11:30 UTC — offset must be honored.
-	if want := time.Date(2026, 9, 18, 11, 30, 0, 0, time.UTC); rem.Text != "Call the bank" || rem.RemindAt == nil || !rem.RemindAt.Equal(want) {
+	if want := time.Date(2099, 9, 18, 11, 30, 0, 0, time.UTC); rem.Text != "Call the bank" || rem.RemindAt == nil || !rem.RemindAt.Equal(want) {
 		t.Fatalf("job 2 reminder wrong: %+v", rem)
 	}
 	if len(results[1].Insights) != 1 || results[1].Insights[0].Text != "Vendor quotes are 30% higher" {
@@ -145,13 +145,14 @@ func TestParsePreservesRecordedAt(t *testing.T) {
 }
 
 func TestMessagesIncludeRecordedAt(t *testing.T) {
+	loc := time.FixedZone("IST", 5*60*60+30*60)
 	items := []model.Job{
-		{ID: 1, Text: "a", RecordedAt: "2026-09-17 23:17:47+05:30"},
+		{ID: 1, Text: "a", RecordedAt: "2026-09-17T17:47:47Z"},
 		{ID: 2, Text: "b"},
 	}
-	content := New(time.UTC).Messages(items)[1].Content
-	if !strings.Contains(content, "--- item 1 (recorded 2026-09-17 23:17:47+05:30) ---") {
-		t.Fatalf("item 1 heading missing recorded time: %q", content)
+	content := New(loc).Messages(items)[1].Content
+	if !strings.Contains(content, "--- item 1 (recorded 2026-09-17 23:17:47 +05:30) ---") {
+		t.Fatalf("item 1 heading not rendered in the user zone: %q", content)
 	}
 	if !strings.Contains(content, "--- item 2 ---") {
 		t.Fatalf("item 2 heading wrong: %q", content)
@@ -234,5 +235,44 @@ func TestParseKeepsFutureRemindAt(t *testing.T) {
 	}
 	if got := results[0].Reminders[0].RemindAt; got == nil || !got.Equal(want) {
 		t.Fatalf("future remind_at changed: got %v want %v", got, want)
+	}
+}
+
+func TestParseResolvesNamedIANAZone(t *testing.T) {
+	content := `{"reminders":[{"item":1,"text":"Call Dad","remind_at":"2099-09-18T19:00:00","remind_at_zone":"Europe/Berlin"}]}`
+	results, err := New(time.UTC).Parse(content, jobs(1))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got := results[0].Reminders[0].RemindAt
+	// September in Berlin is CEST (UTC+2).
+	if want := time.Date(2099, 9, 18, 17, 0, 0, 0, time.UTC); got == nil || !got.Equal(want) {
+		t.Fatalf("remind_at = %v, want %v", got, want)
+	}
+}
+
+func TestParseUsesUserZoneWhenZoneAbsent(t *testing.T) {
+	loc := time.FixedZone("IST", 5*60*60+30*60)
+	content := `{"reminders":[{"item":1,"text":"Call Dad","remind_at":"2099-09-18T19:00:00","remind_at_zone":null}]}`
+	results, err := New(loc).Parse(content, jobs(1))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got := results[0].Reminders[0].RemindAt
+	if want := time.Date(2099, 9, 18, 13, 30, 0, 0, time.UTC); got == nil || !got.Equal(want) {
+		t.Fatalf("remind_at = %v, want %v", got, want)
+	}
+}
+
+func TestParseFallsBackToUserZoneOnUnknownZone(t *testing.T) {
+	loc := time.FixedZone("IST", 5*60*60+30*60)
+	content := `{"reminders":[{"item":1,"text":"Call Dad","remind_at":"2099-09-18T19:00:00","remind_at_zone":"Not/AZone"}]}`
+	results, err := New(loc).Parse(content, jobs(1))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got := results[0].Reminders[0].RemindAt
+	if want := time.Date(2099, 9, 18, 13, 30, 0, 0, time.UTC); got == nil || !got.Equal(want) {
+		t.Fatalf("remind_at = %v, want %v", got, want)
 	}
 }
