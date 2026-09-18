@@ -80,7 +80,8 @@
         }
       ],
       "onnxruntime-react-native",
-      "react-native-audio-api"
+      "react-native-audio-api",
+      "expo-localization"
     ],
     "experiments": {
       "typedRoutes": true,
