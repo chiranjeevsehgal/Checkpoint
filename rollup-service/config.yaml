@@ -1,0 +1,30 @@
+postgres:
+  dsn_env: POSTGRES_DSN
+
+groq:
+  api_key_env: GROQ_API_KEY
+  model: openai/gpt-oss-120b
+  base_url: https://api.groq.com/openai/v1
+  timeout_seconds: 120
+  max_completion_tokens: 2048
+  temperature: 0.4
+  top_p: 1
+  reasoning_effort: low
+
+summaries:
+  # Above this many input chars a period is summarized in chunks and merged.
+  max_input_chars: 24000
+  # Extra past days refreshed every run, for late-arriving recordings.
+  lookback_days: 0
+  # Fallback when user_settings.timezone is null (env SUMMARIES_TIMEZONE wins).
+  timezone: Asia/Kolkata
+  worker_concurrency: 3
+
+processing:
+  # Nightly window. The service sleeps outside it and produces one summary
+  # set per night. start > end wraps past midnight.
+  window_enabled: true
+  window_start: "02:00"
+  window_end: "04:00"
+  window_timezone: Asia/Kolkata
+  poll_interval_seconds: 60
