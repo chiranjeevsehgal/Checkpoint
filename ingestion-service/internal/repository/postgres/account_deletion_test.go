@@ -17,7 +17,7 @@ func TestPurgeDownstreamRemovesExtractionData(t *testing.T) {
 	audioID := uuid.NewString()
 
 	t.Cleanup(func() {
-		for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos", "reminders", "insights"} {
+		for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos", "reminders", "insights", "summaries"} {
 			_, _ = p.inner.Exec(ctx, `DELETE FROM `+table+` WHERE user_id = $1`, userID)
 		}
 	})
@@ -66,12 +66,20 @@ func TestPurgeDownstreamRemovesExtractionData(t *testing.T) {
 			t.Fatalf("seed insights: %v", err)
 		}
 	}
+	if hasTable(t, p, "summaries") {
+		if _, err := p.inner.Exec(ctx,
+			`INSERT INTO summaries (user_id, period, period_start, text, model)
+			 VALUES ($1, 'daily', CURRENT_DATE, 't', 'test')`,
+			userID); err != nil {
+			t.Fatalf("seed summaries: %v", err)
+		}
+	}
 
 	if err := p.PurgeDownstream(ctx, userID); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
 
-	for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos", "reminders", "insights"} {
+	for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos", "reminders", "insights", "summaries"} {
 		if !hasTable(t, p, table) {
 			continue
 		}
