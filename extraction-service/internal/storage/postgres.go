@@ -72,6 +72,28 @@ func (p *PostgresStore) missingTombstoneTable(err error) bool {
 	return true
 }
 
+// UserTimezone returns the user's IANA zone. A missing row, a null column or
+// a missing table (split deployment) all yield "" so the caller can fall back.
+func (p *PostgresStore) UserTimezone(ctx context.Context, userID string) (string, error) {
+	var timezone *string
+	err := p.pool.QueryRow(ctx,
+		`SELECT timezone FROM user_settings WHERE user_id = $1::uuid`, userID).Scan(&timezone)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+			return "", nil
+		}
+		return "", fmt.Errorf("querying user timezone: %w", err)
+	}
+	if timezone == nil {
+		return "", nil
+	}
+	return *timezone, nil
+}
+
 // EnqueueJob inserts the one pending row for (user, audio). Idempotent under
 // Kafka redelivery: a duplicate event is a no-op.
 func (p *PostgresStore) EnqueueJob(ctx context.Context, j model.Job) error {
@@ -158,7 +180,7 @@ func (p *PostgresStore) ClaimBatch(ctx context.Context, userID, extractionType s
 			LIMIT $3
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, user_id, audio_id, extraction_type, text, language, COALESCE(recorded_at::text, ''), attempts`,
+		RETURNING id, user_id, audio_id, extraction_type, text, language, recorded_at, attempts`,
 		userID, extractionType, n)
 	if err != nil {
 		return nil, fmt.Errorf("claiming batch for user %s: %w", userID, err)
@@ -168,8 +190,12 @@ func (p *PostgresStore) ClaimBatch(ctx context.Context, userID, extractionType s
 	var jobs []model.Job
 	for rows.Next() {
 		var j model.Job
-		if err := rows.Scan(&j.ID, &j.UserID, &j.AudioID, &j.ExtractionType, &j.Text, &j.Language, &j.RecordedAt, &j.Attempts); err != nil {
+		var recordedAt *time.Time
+		if err := rows.Scan(&j.ID, &j.UserID, &j.AudioID, &j.ExtractionType, &j.Text, &j.Language, &recordedAt, &j.Attempts); err != nil {
 			return nil, fmt.Errorf("scanning claimed job: %w", err)
+		}
+		if recordedAt != nil {
+			j.RecordedAt = recordedAt.UTC().Format(time.RFC3339)
 		}
 		jobs = append(jobs, j)
 	}

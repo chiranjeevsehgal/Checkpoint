@@ -63,8 +63,6 @@ func main() {
 		Timeout:             cfg.Groq.Timeout(),
 	})
 
-	ext := extractor.New(cfg.Reminders.Loc())
-
 	log.Printf("listening on kafka topic %q (group %q), model %s, batch=%d, writing todos+reminders+insights to postgres",
 		cfg.Kafka.ConsumeTopic, cfg.Kafka.ConsumerGroup, cfg.Groq.Model, cfg.Batch.Size)
 
@@ -80,7 +78,7 @@ func main() {
 	}()
 	go func() {
 		defer wg.Done()
-		runBatcher(ctx, store, client, cfg, ext)
+		runBatcher(ctx, store, client, cfg)
 	}()
 
 	<-ctx.Done()
@@ -191,7 +189,7 @@ func runReclaimer(ctx context.Context, store *storage.PostgresStore, cfg *config
 // runBatcher polls the queue for users with a full batch and runs each
 // batch on a bounded worker pool. One batch = one user; batches for different
 // users run in parallel, never mixed.
-func runBatcher(ctx context.Context, store *storage.PostgresStore, client *llm.Client, cfg *config.Config, ext extractor.Extractor) {
+func runBatcher(ctx context.Context, store *storage.PostgresStore, client *llm.Client, cfg *config.Config) {
 	sem := make(chan struct{}, cfg.Batch.WorkerConcurrency)
 	var wg sync.WaitGroup
 
@@ -219,7 +217,7 @@ func runBatcher(ctx context.Context, store *storage.PostgresStore, client *llm.C
 			go func(userID string) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				processBatch(ctx, store, client, ext, userID, cfg)
+				processBatch(ctx, store, client, userID, cfg)
 			}(u)
 		}
 	}
@@ -228,7 +226,7 @@ func runBatcher(ctx context.Context, store *storage.PostgresStore, client *llm.C
 // processBatch claims one user's rows and extracts them. A claimed batch
 // larger than max_batch_chars is split into multiple LLM calls; all groups
 // must succeed before their jobs are marked done.
-func processBatch(ctx context.Context, store *storage.PostgresStore, client *llm.Client, ext extractor.Extractor, userID string, cfg *config.Config) {
+func processBatch(ctx context.Context, store *storage.PostgresStore, client *llm.Client, userID string, cfg *config.Config) {
 	jobs, err := store.ClaimBatch(ctx, userID, model.TypeAll, cfg.Batch.Size)
 	if err != nil {
 		log.Printf("claim error user_id=%s: %v", userID, err)
@@ -237,6 +235,7 @@ func processBatch(ctx context.Context, store *storage.PostgresStore, client *llm
 	if len(jobs) == 0 {
 		return
 	}
+	ext := extractor.New(userLocation(ctx, store, userID, cfg))
 
 	for _, group := range splitByChars(jobs, cfg.Batch.MaxBatchChars) {
 		content, err := client.Chat(ctx, ext.Messages(group))
@@ -264,6 +263,25 @@ func processBatch(ctx context.Context, store *storage.PostgresStore, client *llm
 		log.Printf("extracted user_id=%s items=%d done=%d skipped=%d entries=%d",
 			userID, len(group), len(results)-skipped, skipped, entries)
 	}
+}
+
+// userLocation resolves the user's stored IANA zone, falling back to the
+// configured default when the user has none or it is unreadable.
+func userLocation(ctx context.Context, store *storage.PostgresStore, userID string, cfg *config.Config) *time.Location {
+	timezone, err := store.UserTimezone(ctx, userID)
+	if err != nil {
+		log.Printf("timezone lookup failed user_id=%s: %v", userID, err)
+		return cfg.Reminders.Loc()
+	}
+	if timezone == "" {
+		return cfg.Reminders.Loc()
+	}
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		log.Printf("invalid stored timezone %q user_id=%s; using default", timezone, userID)
+		return cfg.Reminders.Loc()
+	}
+	return loc
 }
 
 // handleBatchFailure splits the claimed rows: rows that still have attempts
