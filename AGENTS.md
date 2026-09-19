@@ -1,10 +1,11 @@
 # AGENTS.md — Checkpoint
 
-Monorepo with three separate Go modules plus firmware and a Python worker. No root module, no lint config, no Go CI.
+Monorepo with four separate Go modules plus firmware and a Python worker. No root module, no lint config, no Go CI.
 
 - `ingestion-service/` (module `checkpoint/ingestion`) — HTTP API `:8080`, in-process outbox dispatcher, upload cleanup, and account-deletion worker. Entrypoints: `cmd/api/main.go`, `cmd/migrate/main.go`, `cmd/device-admin/main.go`.
 - `transcription-service/` (module `transcription-service`) — Kafka worker. Entrypoint: `cmd/main.go`, `cmd/migrate/`.
 - `extraction-service/` (module `extraction-service`) — Kafka worker → LLM (Groq) combined todo/reminder/insight extractor. Entrypoints: `cmd/main.go`, `cmd/migrate/`.
+- `rollup-service/` (module `rollup-service`) — nightly Postgres summarizer writing English daily/weekly narrative recaps to `summaries`. No Kafka. Entrypoint: `cmd/main.go`, `cmd/migrate/`.
 - `embedding-service/` — Python Kafka worker, bge-m3 → pgvector. Entrypoint: `app/main.py`, `migrate.py`.
 - `firmware/checkpoint/` — PROD ESP32-S3 pendant (Arduino `.ino`). Pins/timings single source: `config.h`.
 - `firmware/tests/` — host-side pytest (grep/logic, no hardware). `firmware/host/checkpoint_client/` — Python BLE client.
@@ -81,6 +82,15 @@ docker compose ps        # postgres + kafka should be healthy
 - Reminder times use the user's `user_settings.timezone` (read per batch; fallback `reminders.timezone`). The model returns a naive local `remind_at` plus an IANA `remind_at_zone` that Go resolves through embedded tzdata; relative expressions resolve against each item's `recorded_at` (rendered in that zone), and a resolved time already in the past is rolled forward to the next day's same clock time, so `remind_at` is always actionable.
 - Batches flush once a user has `batch.size` pending rows or the oldest has waited `batch.max_wait_seconds` (default 300). `GROQ_API_KEY` and `POSTGRES_DSN` must be set or the worker fails fast at startup.
 - New output types = extend the prompt + `model.Result` + an output table + one migration; consumer/batcher/claim/retry are shared.
+
+## Rollup worker quirks
+
+- `rollup-service/` polls Postgres directly (no Kafka) and runs once per night inside the `processing` window (`window_enabled`, `window_start`/`window_end` "HH:MM" 24h with midnight wrap, `window_timezone` defaulting to `summaries.timezone`, `poll_interval_seconds`). With the window disabled it runs continuously once per day.
+- Each run takes every user with a transcript since `now - (lookback_days + 2)`, computes their previous local day from `user_settings.timezone` (fallback `summaries.timezone`), and upserts one English narrative per `(user_id, 'daily', period_start)` from that day's transcripts + todos/reminders/insights. `lookback_days` also refreshes recent days for late-arriving audio. On Monday the look-back widens to 9 days so the weekly run sees the whole previous week.
+- On the Monday run it backfills any missing daily recaps for the previous Mon-Sun week, then writes `period='weekly'` from those dailies. Tombstoned users are skipped.
+- A run advances its nightly gate only on success, so enumeration failures retry with capped backoff inside the window. Groq calls retry 429/5xx/network up to `groq.max_attempts` (default 3). Transient per-user failures are counted in the run's `failed=` log rather than aborting the whole run.
+- Inputs above `summaries.max_input_chars` are map-reduced (chunk recaps, then a merge call). Writes connect as `checkpoint_worker` and own `rollup_schema_version` / the `summaries` table; `GROQ_API_KEY` and `POSTGRES_DSN` must be set or it fails fast.
+- Deletion coupling: `summaries` is purged by ingestion's account-deletion worker.
 
 ## Test / verify
 

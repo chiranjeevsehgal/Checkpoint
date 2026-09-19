@@ -1,0 +1,191 @@
+package llm
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+)
+
+// Typed errors so the caller can distinguish retryable (429/5xx/network) from
+// terminal (4xx — bad request, auth) failures.
+var (
+	ErrRateLimited = errors.New("groq: rate limited")
+	ErrBadRequest  = errors.New("groq: bad request")
+	ErrServer      = errors.New("groq: server error")
+)
+
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// Options carries the client's connection settings and generation controls.
+type Options struct {
+	BaseURL             string
+	APIKey              string
+	Model               string
+	MaxCompletionTokens int
+	Temperature         float64
+	TopP                float64
+	ReasoningEffort     string
+	Timeout             time.Duration
+	MaxAttempts         int
+}
+
+type Client struct {
+	http                *http.Client
+	baseURL             string
+	apiKey              string
+	model               string
+	maxCompletionTokens int
+	temperature         float64
+	topP                float64
+	reasoningEffort     string
+	maxAttempts         int
+}
+
+func New(o Options) *Client {
+	if o.MaxAttempts < 1 {
+		o.MaxAttempts = 1
+	}
+	return &Client{
+		http:                &http.Client{Timeout: o.Timeout},
+		baseURL:             o.BaseURL,
+		apiKey:              o.APIKey,
+		model:               o.Model,
+		maxCompletionTokens: o.MaxCompletionTokens,
+		temperature:         o.Temperature,
+		topP:                o.TopP,
+		reasoningEffort:     o.ReasoningEffort,
+		maxAttempts:         o.MaxAttempts,
+	}
+}
+
+// Model returns the configured model name — recorded on persisted rows so
+// audits know what produced them.
+func (c *Client) Model() string { return c.model }
+
+// Chat calls POST {baseURL}/chat/completions and returns the assistant message
+// text (reasoning tokens, if any, stay server-side and are ignored). Transient
+// failures (429/5xx/network) are retried with exponential backoff.
+func (c *Client) Chat(ctx context.Context, messages []Message) (string, error) {
+	var lastErr error
+	for attempt := 1; attempt <= c.maxAttempts; attempt++ {
+		content, retryable, err := c.attempt(ctx, messages)
+		if err == nil {
+			return content, nil
+		}
+		lastErr = err
+		if !retryable || attempt == c.maxAttempts {
+			break
+		}
+		backoff := time.Duration(1<<(attempt-1)) * time.Second
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(backoff):
+		}
+	}
+	return "", lastErr
+}
+
+// attempt makes one request; retryable is false for client errors and cancellation.
+func (c *Client) attempt(ctx context.Context, messages []Message) (string, bool, error) {
+	payload := map[string]interface{}{
+		"model":                 c.model,
+		"messages":              messages,
+		"max_completion_tokens": c.maxCompletionTokens,
+	}
+	if c.temperature > 0 {
+		payload["temperature"] = c.temperature
+	}
+	if c.topP > 0 {
+		payload["top_p"] = c.topP
+	}
+	if c.reasoningEffort != "" {
+		payload["reasoning_effort"] = c.reasoningEffort
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", false, fmt.Errorf("marshalling chat request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", false, fmt.Errorf("building chat request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", false, ctx.Err()
+		}
+		return "", true, fmt.Errorf("groq request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		err := classifyError(resp)
+		return "", errors.Is(err, ErrRateLimited) || errors.Is(err, ErrServer), err
+	}
+
+	var out struct {
+		Choices []struct {
+			Message struct {
+				Content   string `json:"content"`
+				Reasoning string `json:"reasoning"`
+			} `json:"message"`
+		} `json:"choices"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&out); err != nil {
+		return "", false, fmt.Errorf("decoding groq response: %w", err)
+	}
+	if len(out.Choices) == 0 {
+		if out.Error != nil {
+			return "", true, fmt.Errorf("%w: %s", ErrServer, out.Error.Message)
+		}
+		return "", true, fmt.Errorf("%w: empty choices", ErrServer)
+	}
+	content := out.Choices[0].Message.Content
+	if content == "" {
+		// Reasoning models occasionally put the whole answer in reasoning on
+		// misconfigured requests; treat empty content as a server error.
+		return "", true, fmt.Errorf("%w: empty content", ErrServer)
+	}
+	return content, false, nil
+}
+
+func classifyError(resp *http.Response) error {
+	var body struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body)
+	msg := "no error body"
+	if body.Error != nil {
+		msg = body.Error.Message
+	}
+	switch {
+	case resp.StatusCode == http.StatusTooManyRequests:
+		return fmt.Errorf("%w (retry-after %s): %s", ErrRateLimited, resp.Header.Get("Retry-After"), msg)
+	case resp.StatusCode >= 500:
+		return fmt.Errorf("%w (status %d): %s", ErrServer, resp.StatusCode, msg)
+	default:
+		return fmt.Errorf("%w (status %d): %s", ErrBadRequest, resp.StatusCode, msg)
+	}
+}

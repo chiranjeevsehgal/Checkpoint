@@ -297,6 +297,38 @@ services:
       POSTGRES_DSN: postgres://checkpoint_worker:${CHECKPOINT_WORKER_PASSWORD:-checkpoint_worker_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable
     restart: unless-stopped
 
+  rollup-migrate:
+    build:
+      context: ./rollup-service
+      target: migrate
+    container_name: rollup-migrate
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+
+  rollup:
+    build:
+      context: ./rollup-service
+      target: worker
+    container_name: rollup
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rollup-migrate:
+        condition: service_completed_successfully
+    environment:
+      CONFIG_PATH: /app/config.yaml
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      SUMMARIES_TIMEZONE: ${SUMMARIES_TIMEZONE:-}
+      POSTGRES_DSN: postgres://checkpoint_worker:${CHECKPOINT_WORKER_PASSWORD:-checkpoint_worker_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    restart: unless-stopped
+
   mailpit:
     image: axllent/mailpit:latest
     container_name: mailpit
