@@ -17,10 +17,6 @@ class Embedder:
     def model_name(self) -> str:
         return self._model_name
 
-    @property
-    def tokenizer(self):
-        return self._model.tokenizer
-
     def embed(self, texts: list[str]) -> list[list[float]]:
         vectors = self._model.encode(
             texts,

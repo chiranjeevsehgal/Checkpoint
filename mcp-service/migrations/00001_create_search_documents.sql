@@ -32,8 +32,6 @@ CREATE TABLE search_documents (
 CREATE INDEX search_documents_user_time_idx ON search_documents (user_id, occurred_at DESC);
 CREATE INDEX search_documents_pending_idx
     ON search_documents (updated_at) WHERE embedding IS NULL AND indexed_at IS NULL;
-CREATE INDEX search_documents_hnsw_idx
-    ON search_documents USING hnsw (embedding vector_cosine_ops) WHERE embedding IS NOT NULL;
 
 ALTER TABLE search_documents ENABLE ROW LEVEL SECURITY;
 

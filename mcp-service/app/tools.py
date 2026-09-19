@@ -94,7 +94,7 @@ def register(mcp, store, index, embedder, fallback_timezone: str) -> None:
         start_at, end_at = timeutil.parse_range(start, end, zone)
         filters = semantic.build_filters(user_id, selected_types(types), start_at, end_at)
         vector = embedder.embed([query])[0]
-        results = index.search(vector, filters, clamp(limit))
+        results = semantic.scoped(index.search(vector, filters, clamp(limit)), user_id)
         return {"count": len(results), "results": [format_document(d, zone) for d in results]}
 
     @mcp.tool()
@@ -118,7 +118,8 @@ def register(mcp, store, index, embedder, fallback_timezone: str) -> None:
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
         rows = store.fetch(user_id, DocumentQuery(
-            source_types=selected_types(types), start=start_at, end=end_at, limit=clamp(limit)))
+            source_types=selected_types(types), start=start_at, end=end_at,
+            chunk_index=documents.WHOLE_DOCUMENT, limit=clamp(limit)))
         return {"count": len(rows), "items": [format_row(r, zone) for r in rows]}
 
     @mcp.tool()

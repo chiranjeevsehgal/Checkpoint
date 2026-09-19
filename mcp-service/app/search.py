@@ -59,6 +59,12 @@ def build_filters(
     return {"operator": "AND", "conditions": conditions}
 
 
+def scoped(results: list, user_id: str) -> list:
+    """Defense in depth: never return a document owned by another account,
+    even if the vector store misapplies its metadata filter."""
+    return [doc for doc in results if doc.meta.get("user_id") == user_id]
+
+
 class DocumentIndex:
     def __init__(self, dim: int, bit_width: int) -> None:
         self._store = TurboQuantDocumentStore(

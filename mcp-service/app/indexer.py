@@ -61,12 +61,15 @@ _INSERT = """
 
 # reminders/insights keep audio_id as TEXT (created after the tenant-id
 # hardening migration), so every branch casts to the canonical UUID type.
+# embeddings is included because chunks land after the transcript; without
+# it an audio synced before its embeddings would never get its chunk rows.
 _CHANGED_AUDIO = """
     SELECT DISTINCT audio_id FROM (
         SELECT audio_id::uuid AS audio_id, created_at FROM transcripts
         UNION ALL SELECT audio_id::uuid, created_at FROM todos
         UNION ALL SELECT audio_id::uuid, created_at FROM reminders
         UNION ALL SELECT audio_id::uuid, created_at FROM insights
+        UNION ALL SELECT audio_id::uuid, created_at FROM embeddings
     ) changed
     WHERE created_at > %s AND created_at <= %s AND audio_id IS NOT NULL
 """

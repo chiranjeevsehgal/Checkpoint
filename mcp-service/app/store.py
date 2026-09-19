@@ -4,6 +4,7 @@ Connects as the checkpoint_mcp role and sets app.user_id per transaction, so
 RLS guarantees a query can only ever see the authenticated account's rows.
 """
 
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -40,6 +41,7 @@ class ReadStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
         self._conn = None
+        self._lock = threading.Lock()
 
     def connect(self) -> None:
         if psycopg is None:
@@ -51,16 +53,13 @@ class ReadStore:
             self._conn.close()
             self._conn = None
 
-    def reset(self) -> None:
-        self.close()
-        self.connect()
-
     @contextmanager
     def _user_cursor(self, user_id: str):
-        with self._conn.transaction():
-            with self._conn.cursor(row_factory=dict_row) as cur:
-                cur.execute("SELECT set_config('app.user_id', %s, true)", (user_id,))
-                yield cur
+        with self._lock:
+            with self._conn.transaction():
+                with self._conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute("SELECT set_config('app.user_id', %s, true)", (user_id,))
+                    yield cur
 
     def get_timezone(self, user_id: str) -> str | None:
         with self._user_cursor(user_id) as cur:
