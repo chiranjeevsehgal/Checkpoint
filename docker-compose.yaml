@@ -53,10 +53,9 @@ services:
       CHECKPOINT_WORKER_PASSWORD: ${CHECKPOINT_WORKER_PASSWORD:-checkpoint_worker_password}
       CHECKPOINT_MCP_PASSWORD: ${CHECKPOINT_MCP_PASSWORD:-checkpoint_mcp_password}
       KRATOS_DB_PASSWORD: ${KRATOS_DB_PASSWORD:-kratos_db_password}
-      PGDATA: /var/lib/postgresql/data/pgdata
       TZ: Asia/Kolkata
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
       - ./infra/postgres/bootstrap.sh:/docker-entrypoint-initdb.d/10-bootstrap.sh:ro
     command: >
       /bin/bash -c "ln -sf Kolkata /usr/share/zoneinfo/Asia/Calcutta && exec docker-entrypoint.sh postgres -c timezone=Asia/Kolkata"
@@ -68,7 +67,7 @@ services:
       start_period: 10s
   
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     container_name: minio
     networks:
       - backend
@@ -89,7 +88,7 @@ services:
       start_period: 10s
 
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: minio-init
     networks:
       - backend
