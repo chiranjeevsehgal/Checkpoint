@@ -7,6 +7,8 @@ groq:
   base_url: https://api.groq.com/openai/v1
   timeout_seconds: 120
   max_completion_tokens: 2048
+  # Retries for transient Groq failures (429/5xx/network) with backoff.
+  max_attempts: 3
   temperature: 0.4
   top_p: 1
   reasoning_effort: low

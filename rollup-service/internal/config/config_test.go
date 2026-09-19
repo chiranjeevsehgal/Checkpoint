@@ -35,6 +35,9 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if cfg.Groq.Model != "openai/gpt-oss-120b" {
 		t.Fatalf("model default wrong: %s", cfg.Groq.Model)
 	}
+	if cfg.Groq.MaxAttempts != 3 {
+		t.Fatalf("max_attempts default = %d, want 3", cfg.Groq.MaxAttempts)
+	}
 	if cfg.Summaries.MaxInputChars != 24000 {
 		t.Fatalf("max_input_chars default = %d, want 24000", cfg.Summaries.MaxInputChars)
 	}
@@ -54,6 +57,29 @@ func TestLoadRequiresDSNAndAPIKey(t *testing.T) {
 	t.Setenv("GROQ_API_KEY", "")
 	if _, err := Load(writeConfig(t, "")); err == nil {
 		t.Fatal("expected load to fail without POSTGRES_DSN/GROQ_API_KEY")
+	}
+}
+
+func TestLoadAppliesGroqMaxAttemptsOverride(t *testing.T) {
+	t.Setenv("POSTGRES_DSN", "postgres://x")
+	t.Setenv("GROQ_API_KEY", "gsk_test")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := `
+postgres:
+  dsn_env: POSTGRES_DSN
+groq:
+  api_key_env: GROQ_API_KEY
+  max_attempts: 5
+`
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Groq.MaxAttempts != 5 {
+		t.Fatalf("max_attempts = %d, want 5", cfg.Groq.MaxAttempts)
 	}
 }
 

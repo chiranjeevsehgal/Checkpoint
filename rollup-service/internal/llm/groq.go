@@ -34,6 +34,7 @@ type Options struct {
 	TopP                float64
 	ReasoningEffort     string
 	Timeout             time.Duration
+	MaxAttempts         int
 }
 
 type Client struct {
@@ -45,9 +46,13 @@ type Client struct {
 	temperature         float64
 	topP                float64
 	reasoningEffort     string
+	maxAttempts         int
 }
 
 func New(o Options) *Client {
+	if o.MaxAttempts < 1 {
+		o.MaxAttempts = 1
+	}
 	return &Client{
 		http:                &http.Client{Timeout: o.Timeout},
 		baseURL:             o.BaseURL,
@@ -57,6 +62,7 @@ func New(o Options) *Client {
 		temperature:         o.Temperature,
 		topP:                o.TopP,
 		reasoningEffort:     o.ReasoningEffort,
+		maxAttempts:         o.MaxAttempts,
 	}
 }
 
@@ -65,8 +71,34 @@ func New(o Options) *Client {
 func (c *Client) Model() string { return c.model }
 
 // Chat calls POST {baseURL}/chat/completions and returns the assistant message
-// text (reasoning tokens, if any, stay server-side and are ignored).
+// text (reasoning tokens, if any, stay server-side and are ignored). Transient
+// failures (429/5xx/network) are retried with exponential backoff.
 func (c *Client) Chat(ctx context.Context, messages []Message) (string, error) {
+	var lastErr error
+	for attempt := 1; attempt <= c.maxAttempts; attempt++ {
+		content, retryable, err := c.attempt(ctx, messages)
+		if err == nil {
+			return content, nil
+		}
+		lastErr = err
+		if !retryable || attempt == c.maxAttempts {
+			break
+		}
+		backoff := time.Duration(1<<(attempt-1)) * time.Second
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(backoff):
+		}
+	}
+	return "", lastErr
+}
+
+// attempt makes one request; retryable is false for client errors and cancellation.
+func (c *Client) attempt(ctx context.Context, messages []Message) (string, bool, error) {
 	payload := map[string]interface{}{
 		"model":                 c.model,
 		"messages":              messages,
@@ -84,24 +116,28 @@ func (c *Client) Chat(ctx context.Context, messages []Message) (string, error) {
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("marshalling chat request: %w", err)
+		return "", false, fmt.Errorf("marshalling chat request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("building chat request: %w", err)
+		return "", false, fmt.Errorf("building chat request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("groq request: %w", err)
+		if ctx.Err() != nil {
+			return "", false, ctx.Err()
+		}
+		return "", true, fmt.Errorf("groq request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", classifyError(resp)
+		err := classifyError(resp)
+		return "", errors.Is(err, ErrRateLimited) || errors.Is(err, ErrServer), err
 	}
 
 	var out struct {
@@ -116,21 +152,21 @@ func (c *Client) Chat(ctx context.Context, messages []Message) (string, error) {
 		} `json:"error"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&out); err != nil {
-		return "", fmt.Errorf("decoding groq response: %w", err)
+		return "", false, fmt.Errorf("decoding groq response: %w", err)
 	}
 	if len(out.Choices) == 0 {
 		if out.Error != nil {
-			return "", fmt.Errorf("%w: %s", ErrServer, out.Error.Message)
+			return "", true, fmt.Errorf("%w: %s", ErrServer, out.Error.Message)
 		}
-		return "", fmt.Errorf("%w: empty choices", ErrServer)
+		return "", true, fmt.Errorf("%w: empty choices", ErrServer)
 	}
 	content := out.Choices[0].Message.Content
 	if content == "" {
 		// Reasoning models occasionally put the whole answer in reasoning on
 		// misconfigured requests; treat empty content as a server error.
-		return "", fmt.Errorf("%w: empty content", ErrServer)
+		return "", true, fmt.Errorf("%w: empty content", ErrServer)
 	}
-	return content, nil
+	return content, false, nil
 }
 
 func classifyError(resp *http.Response) error {

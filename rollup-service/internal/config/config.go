@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	defaultGroqModel      = "openai/gpt-oss-120b"
-	defaultGroqBaseURL    = "https://api.groq.com/openai/v1"
-	defaultMaxInputChars  = 24000
-	defaultWorkerParallel = 3
-	defaultPollSeconds    = 60
+	defaultGroqModel       = "openai/gpt-oss-120b"
+	defaultGroqBaseURL     = "https://api.groq.com/openai/v1"
+	defaultMaxInputChars   = 24000
+	defaultWorkerParallel  = 3
+	defaultPollSeconds     = 60
+	defaultGroqMaxAttempts = 3
 )
 
 // Config is the full rollup-service configuration, loaded from config.yaml with
@@ -44,6 +45,7 @@ type GroqConfig struct {
 	Temperature         float64 `yaml:"temperature"`
 	TopP                float64 `yaml:"top_p"`
 	ReasoningEffort     string  `yaml:"reasoning_effort"`
+	MaxAttempts         int     `yaml:"max_attempts"`
 	apiKey              string
 }
 
@@ -140,6 +142,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Groq.MaxCompletionTokens <= 0 {
 		cfg.Groq.MaxCompletionTokens = 2048
+	}
+	if cfg.Groq.MaxAttempts <= 0 {
+		cfg.Groq.MaxAttempts = defaultGroqMaxAttempts
 	}
 
 	if cfg.Summaries.MaxInputChars <= 0 {

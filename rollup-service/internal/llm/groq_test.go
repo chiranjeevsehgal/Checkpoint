@@ -107,3 +107,70 @@ func TestChatSendsModelAndTuning(t *testing.T) {
 		t.Fatalf("narrative summaries must not force json_object: %+v", payload)
 	}
 }
+
+func TestChatRetriesRateLimitThenSucceeds(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error":{"message":"slow down"}}`))
+			return
+		}
+		w.Write([]byte(`{"choices":[{"message":{"content":"recovered"}}]}`))
+	}))
+	defer srv.Close()
+
+	client := New(Options{
+		BaseURL: srv.URL, APIKey: "gsk_test", Model: "openai/gpt-oss-120b",
+		MaxCompletionTokens: 2048, MaxAttempts: 3, Timeout: 5 * time.Second,
+	})
+	content, err := client.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if content != "recovered" {
+		t.Fatalf("content = %q, want recovered", content)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
+func TestChatDoesNotRetryBadRequest(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":{"message":"context length exceeded"}}`))
+	}))
+	defer srv.Close()
+
+	client := New(Options{
+		BaseURL: srv.URL, APIKey: "gsk_test", Model: "openai/gpt-oss-120b",
+		MaxCompletionTokens: 2048, MaxAttempts: 3, Timeout: 5 * time.Second,
+	})
+	if _, err := client.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}); !errors.Is(err, ErrBadRequest) {
+		t.Fatalf("want ErrBadRequest, got %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1 (must not retry)", calls)
+	}
+}
+
+func TestChatCanceledContextIsTerminal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client := New(Options{
+		BaseURL: srv.URL, APIKey: "gsk_test", Model: "openai/gpt-oss-120b",
+		MaxCompletionTokens: 2048, MaxAttempts: 3, Timeout: 5 * time.Second,
+	})
+	if _, err := client.Chat(ctx, []Message{{Role: "user", Content: "hi"}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v", err)
+	}
+}
