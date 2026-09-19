@@ -53,6 +53,9 @@ Notes:
 EXPO_PUBLIC_API_URL=http://<HOST_LAN_IP>:8080
 EXPO_PUBLIC_KRATOS_URL=http://<HOST_LAN_IP>:4433
 EXPO_PUBLIC_ENV=development
+# Optional: full MCP endpoint shown in the app's key snippets.
+# Defaults to http://<api host>:1417/mcp.
+EXPO_PUBLIC_MCP_URL=http://<HOST_LAN_IP>:1417/mcp
 ```
 
 These `EXPO_PUBLIC_*` values are inlined into the JS bundle at build time, so
@@ -195,6 +198,18 @@ docker compose exec postgres psql -U <POSTGRES_USER> -d <POSTGRES_DB> \
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
   --topic transcription.jobs.v1 --bootstrap-server kafka:9092 --from-beginning --max-messages 1
 ```
+
+## MCP access keys (in the app)
+
+The app mints, lists and revokes MCP access keys under **Settings → MCP access**
+(`/mcp-keys`). Creating a key shows the secret, the Claude Code command and an
+`mcp.json` block once; copy them before leaving the screen. Revoking a key stops
+any connected MCP client immediately.
+
+The snippet endpoint is `EXPO_PUBLIC_MCP_URL` when set, otherwise
+`http://<api host>:1417/mcp` — the same host the API resolves to, on the MCP
+port. `EXPO_PUBLIC_*` values are inlined at build time, so rebuild after changing
+it (same as the other `EXPO_PUBLIC_*` values).
 
 ## Tests
 
