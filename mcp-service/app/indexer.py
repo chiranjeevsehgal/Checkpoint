@@ -24,6 +24,16 @@ from . import documents, search
 
 log = logging.getLogger(__name__)
 
+
+def _plain_embedding(value):
+    """pgvector may hand back a Vector, ndarray or list; normalise to a list."""
+    if value is None or isinstance(value, list):
+        return value
+    if hasattr(value, "to_list"):
+        return value.to_list()
+    return list(value)
+
+
 SOURCE_WATERMARK = "sources"
 SUMMARY_WATERMARK = "summaries"
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -39,7 +49,7 @@ _INSERT = """
         occurred_at, recorded_at, reminded_at, is_done, important, period, period_start,
         model, content_hash, embedding, indexed_at
     ) VALUES (
-        %(user_id)s, %(source_type)s, %(source_id)s, %(audio_id)s, %(chunk_index)s, %(content)s, %(language)s,
+        %(user_id)s::uuid, %(source_type)s, %(source_id)s, %(audio_id)s::uuid, %(chunk_index)s, %(content)s, %(language)s,
         %(occurred_at)s, %(recorded_at)s, %(reminded_at)s, %(is_done)s, %(important)s, %(period)s, %(period_start)s,
         %(model)s, %(content_hash)s, %(embedding)s, %(indexed_at)s
     )
@@ -49,12 +59,14 @@ _INSERT = """
     RETURNING id
 """
 
+# reminders/insights keep audio_id as TEXT (created after the tenant-id
+# hardening migration), so every branch casts to the canonical UUID type.
 _CHANGED_AUDIO = """
     SELECT DISTINCT audio_id FROM (
-        SELECT audio_id, created_at FROM transcripts
-        UNION ALL SELECT audio_id, created_at FROM todos
-        UNION ALL SELECT audio_id, created_at FROM reminders
-        UNION ALL SELECT audio_id, created_at FROM insights
+        SELECT audio_id::uuid AS audio_id, created_at FROM transcripts
+        UNION ALL SELECT audio_id::uuid, created_at FROM todos
+        UNION ALL SELECT audio_id::uuid, created_at FROM reminders
+        UNION ALL SELECT audio_id::uuid, created_at FROM insights
     ) changed
     WHERE created_at > %s AND created_at <= %s AND audio_id IS NOT NULL
 """
@@ -89,7 +101,7 @@ class Indexer:
                 f"SELECT {_ROW_COLUMNS}, embedding FROM search_documents WHERE embedding IS NOT NULL"
             )
             rows = cur.fetchall()
-        self._index.rebuild([search.row_to_document(row, row.get("embedding")) for row in rows])
+        self._index.rebuild([search.row_to_document(row, _plain_embedding(row.get("embedding"))) for row in rows])
 
     def run_once(self) -> None:
         cycle_now = self._now()
@@ -143,12 +155,12 @@ class Indexer:
                         row["user_id"], audio_id, row["id"], row["text"], row["recorded_at"],
                         row["created_at"], row["is_done"]), None, False, to_index)
                 for row in self._all(cur, "SELECT id, user_id, text, remind_at, created_at, important "
-                                          "FROM reminders WHERE audio_id = %s", audio_id):
+                                          "FROM reminders WHERE audio_id::uuid = %s", audio_id):
                     self._insert(cur, documents.reminder(
                         row["user_id"], audio_id, row["id"], row["text"], row["remind_at"],
                         row["created_at"], row["important"]), None, False, to_index)
                 for row in self._all(cur, "SELECT id, user_id, text, created_at "
-                                          "FROM insights WHERE audio_id = %s", audio_id):
+                                          "FROM insights WHERE audio_id::uuid = %s", audio_id):
                     self._insert(cur, documents.insight(
                         row["user_id"], audio_id, row["id"], row["text"], row["created_at"]),
                         None, False, to_index)
@@ -211,12 +223,12 @@ class Indexer:
 
     def _insert(self, cur, doc: dict, embedding, indexed_now: bool, to_index: list) -> None:
         params = dict(doc)
-        params["embedding"] = Vector(embedding) if embedding is not None else None
+        params["embedding"] = Vector(_plain_embedding(embedding)) if embedding is not None else None
         params["indexed_at"] = self._now() if indexed_now else None
         cur.execute(_INSERT, params)
         row_id = cur.fetchone()["id"]
         if indexed_now and embedding is not None:
-            to_index.append(search.row_to_document({**doc, "id": row_id}, embedding))
+            to_index.append(search.row_to_document({**doc, "id": row_id}, _plain_embedding(embedding)))
 
     def _watermark(self, name: str) -> datetime:
         with self._conn.cursor(row_factory=dict_row) as cur:

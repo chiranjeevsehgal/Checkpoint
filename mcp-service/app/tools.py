@@ -7,7 +7,8 @@ user's local zone) so the model never has to guess a timezone.
 
 from datetime import datetime, timezone
 
-from . import documents, search, timeutil
+from . import documents, timeutil
+from . import search as semantic
 from .auth import current_user_id
 from .store import DocumentQuery
 
@@ -91,7 +92,7 @@ def register(mcp, store, index, embedder, fallback_timezone: str) -> None:
             return {"error": "query must not be empty"}
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
-        filters = search.build_filters(user_id, selected_types(types), start_at, end_at)
+        filters = semantic.build_filters(user_id, selected_types(types), start_at, end_at)
         vector = embedder.embed([query])[0]
         results = index.search(vector, filters, clamp(limit))
         return {"count": len(results), "results": [format_document(d, zone) for d in results]}
