@@ -43,6 +43,7 @@ function defaultKratosUrl(): string {
 export const env = {
   apiUrl: defaultApiUrl(),
   kratosUrl: defaultKratosUrl(),
+  mcpUrl: (process.env.EXPO_PUBLIC_MCP_URL ?? '').trim() || null,
   appEnv: process.env.EXPO_PUBLIC_ENV ?? 'development',
   devBuild: process.env.EXPO_PUBLIC_DEV_BUILD === '1',
 } as const;

@@ -1,4 +1,4 @@
-import { apiUrlForHost, kratosUrlForHost, normalizeHost } from './server-urls';
+import { apiUrlForHost, kratosUrlForHost, mcpUrlForHost, normalizeHost } from './server-urls';
 
 import { env } from '@/lib/env';
 import { storage } from '@/lib/storage';
@@ -44,4 +44,12 @@ export function resolveApiUrl(): string {
 
 export function resolveKratosUrl(): string {
   return devHost ? kratosUrlForHost(devHost) : env.kratosUrl;
+}
+
+/** MCP endpoint: the in-app dev host wins, then an explicit override, then the
+ * host the API already resolves to (same machine, port 1417). */
+export function resolveMcpUrl(): string {
+  if (devHost) return mcpUrlForHost(devHost);
+  if (env.mcpUrl) return env.mcpUrl;
+  return mcpUrlForHost(normalizeHost(env.apiUrl) ?? 'localhost');
 }

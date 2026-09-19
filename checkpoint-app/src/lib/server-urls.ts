@@ -1,5 +1,6 @@
 export const API_PORT = 8080;
 export const KRATOS_PORT = 4433;
+export const MCP_PORT = 1417;
 
 const SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
 const PORT_PATTERN = /:\d+$/;
@@ -18,4 +19,9 @@ export function apiUrlForHost(host: string): string {
 
 export function kratosUrlForHost(host: string): string {
   return `http://${host}:${KRATOS_PORT}`;
+}
+
+/** Full MCP endpoint as pasted into an MCP client. */
+export function mcpUrlForHost(host: string): string {
+  return `http://${host}:${MCP_PORT}/mcp`;
 }
