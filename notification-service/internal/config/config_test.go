@@ -43,6 +43,9 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if cfg.Ntfy.Advance() != 15*time.Minute {
 		t.Fatalf("advance default = %s, want 15m", cfg.Ntfy.Advance())
 	}
+	if cfg.Ntfy.AdvanceMaxSeconds != defaultAdvanceMaxSeconds {
+		t.Fatalf("advance_max default = %d, want %d", cfg.Ntfy.AdvanceMaxSeconds, defaultAdvanceMaxSeconds)
+	}
 	if cfg.Delivery.PollInterval() != 15*time.Second {
 		t.Fatalf("poll default = %s, want 15s", cfg.Delivery.PollInterval())
 	}

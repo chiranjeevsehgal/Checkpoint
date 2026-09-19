@@ -83,7 +83,7 @@ func processDue(ctx context.Context, store *storage.PostgresStore, client *ntfy.
 	var candidates []model.Candidate
 	for _, kind := range []string{model.KindAdvance, model.KindDue} {
 		list, err := store.DueCandidates(ctx, kind,
-			cfg.Ntfy.Advance(), cfg.Delivery.AdvanceGrace(), cfg.Delivery.MaxLateness(), cfg.Delivery.BatchSize)
+			cfg.Ntfy.Advance(), cfg.Delivery.AdvanceGrace(), cfg.Delivery.MaxLateness(), cfg.Ntfy.AdvanceMax(), cfg.Delivery.BatchSize)
 		if err != nil {
 			log.Printf("candidate query failed kind=%s: %v", kind, err)
 			continue

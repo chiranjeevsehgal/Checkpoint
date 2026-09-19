@@ -55,11 +55,12 @@ func (p *PostgresStore) isMissingTable(err error) bool {
 }
 
 // DueCandidates returns reminders whose advance or due fire time has arrived,
-// joined to the owner's enabled channel. Tombstoned users are skipped.
-func (p *PostgresStore) DueCandidates(ctx context.Context, kind string, lead, grace, maxLateness time.Duration, limit int) ([]model.Candidate, error) {
-	candidates, err := p.dueCandidates(ctx, true, kind, lead, grace, maxLateness, limit)
+// joined to the owner's enabled channel. Tombstoned users are skipped. Only
+// important reminders produce advance candidates; the due push is ungated.
+func (p *PostgresStore) DueCandidates(ctx context.Context, kind string, lead, grace, maxLateness, maxAdvance time.Duration, limit int) ([]model.Candidate, error) {
+	candidates, err := p.dueCandidates(ctx, true, kind, lead, grace, maxLateness, maxAdvance, limit)
 	if err != nil && p.isMissingTable(err) {
-		candidates, err = p.dueCandidates(ctx, false, kind, lead, grace, maxLateness, limit)
+		candidates, err = p.dueCandidates(ctx, false, kind, lead, grace, maxLateness, maxAdvance, limit)
 	}
 	if err != nil {
 		if p.isMissingTable(err) {
@@ -72,16 +73,18 @@ func (p *PostgresStore) DueCandidates(ctx context.Context, kind string, lead, gr
 
 // dueCandidates runs DueCandidates' query; withTombstone joins account_deletions
 // to skip deleted accounts.
-func (p *PostgresStore) dueCandidates(ctx context.Context, withTombstone bool, kind string, lead, grace, maxLateness time.Duration, limit int) ([]model.Candidate, error) {
+func (p *PostgresStore) dueCandidates(ctx context.Context, withTombstone bool, kind string, lead, grace, maxLateness, maxAdvance time.Duration, limit int) ([]model.Candidate, error) {
 	var fireExpr, window string
 	var args []interface{}
 	switch kind {
 	case model.KindAdvance:
-		fireExpr = `r.remind_at - make_interval(secs => $1)`
+		fireExpr = `r.remind_at - make_interval(secs => COALESCE(s.advance_seconds, $1))`
 		window = `r.remind_at > now()
-		  AND r.remind_at <= now() + make_interval(secs => $1)
-		  AND r.remind_at >= now() + make_interval(secs => $1 - $2)`
-		args = []interface{}{int(lead.Seconds()), int(grace.Seconds())}
+		  AND r.remind_at <= now() + make_interval(secs => $3)
+		  AND ` + fireExpr + ` <= now()
+		  AND ` + fireExpr + ` >= now() - make_interval(secs => $2)
+		  AND r.important`
+		args = []interface{}{int(lead.Seconds()), int(grace.Seconds()), int(maxAdvance.Seconds())}
 	case model.KindDue:
 		fireExpr = `r.remind_at`
 		window = `r.remind_at <= now()

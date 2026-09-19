@@ -9,18 +9,19 @@ import (
 )
 
 const (
-	defaultNtfyURL          = "http://ntfy:80"
-	defaultTimeoutSeconds   = 10
-	defaultAdvanceSeconds   = 900
-	defaultMaxMessageBytes  = 4096
-	defaultPollSeconds      = 15
-	defaultBatchSize        = 200
-	defaultWorkerParallel   = 5
-	defaultMaxAttempts      = 5
-	defaultReclaimSeconds   = 120
-	defaultAdvanceGraceSecs = 120
-	defaultMaxLatenessSecs  = 3600
-	defaultRetentionDays    = 30
+	defaultNtfyURL           = "http://ntfy:80"
+	defaultTimeoutSeconds    = 10
+	defaultAdvanceSeconds    = 900
+	defaultAdvanceMaxSeconds = 1800
+	defaultMaxMessageBytes   = 4096
+	defaultPollSeconds       = 15
+	defaultBatchSize         = 200
+	defaultWorkerParallel    = 5
+	defaultMaxAttempts       = 5
+	defaultReclaimSeconds    = 120
+	defaultAdvanceGraceSecs  = 120
+	defaultMaxLatenessSecs   = 3600
+	defaultRetentionDays     = 30
 )
 
 // Config is the full notification-service configuration, loaded from
@@ -40,19 +41,24 @@ func (p *PostgresConfig) DSN() string { return p.dsn }
 
 // NtfyConfig carries the self-hosted ntfy endpoint and message controls.
 type NtfyConfig struct {
-	URL             string `yaml:"url"`
-	TokenEnv        string `yaml:"token_env"`
-	TimeoutSeconds  int    `yaml:"timeout_seconds"`
-	AdvanceSeconds  int    `yaml:"advance_seconds"`
-	MaxMessageBytes int    `yaml:"max_message_bytes"`
-	DuePriority     string `yaml:"due_priority"`
-	AdvancePriority string `yaml:"advance_priority"`
-	token           string
+	URL            string `yaml:"url"`
+	TokenEnv       string `yaml:"token_env"`
+	TimeoutSeconds int    `yaml:"timeout_seconds"`
+	AdvanceSeconds int    `yaml:"advance_seconds"`
+	// AdvanceMaxSeconds bounds the per-user advance lead (sargable upper bound).
+	AdvanceMaxSeconds int    `yaml:"advance_max_seconds"`
+	MaxMessageBytes   int    `yaml:"max_message_bytes"`
+	DuePriority       string `yaml:"due_priority"`
+	AdvancePriority   string `yaml:"advance_priority"`
+	token             string
 }
 
 func (n *NtfyConfig) Token() string          { return n.token }
 func (n *NtfyConfig) Timeout() time.Duration { return time.Duration(n.TimeoutSeconds) * time.Second }
 func (n *NtfyConfig) Advance() time.Duration { return time.Duration(n.AdvanceSeconds) * time.Second }
+func (n *NtfyConfig) AdvanceMax() time.Duration {
+	return time.Duration(n.AdvanceMaxSeconds) * time.Second
+}
 
 // DeliveryConfig controls how often and how many reminders are delivered.
 type DeliveryConfig struct {
@@ -113,6 +119,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Ntfy.AdvanceSeconds <= 0 {
 		cfg.Ntfy.AdvanceSeconds = defaultAdvanceSeconds
+	}
+	if cfg.Ntfy.AdvanceMaxSeconds < cfg.Ntfy.AdvanceSeconds {
+		cfg.Ntfy.AdvanceMaxSeconds = defaultAdvanceMaxSeconds
 	}
 	if cfg.Ntfy.MaxMessageBytes <= 0 {
 		cfg.Ntfy.MaxMessageBytes = defaultMaxMessageBytes

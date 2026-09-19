@@ -8,6 +8,8 @@ ntfy:
   timeout_seconds: 10
   # Fire the advance notification this long before remind_at.
   advance_seconds: 900
+  # Upper bound for the per-user advance lead (app allows up to 30 minutes).
+  advance_max_seconds: 1800
   # ntfy treats bodies over 4 KiB as attachments; keep them as messages.
   max_message_bytes: 4096
   due_priority: high
