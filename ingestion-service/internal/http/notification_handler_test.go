@@ -1,0 +1,185 @@
+package http
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"checkpoint/ingestion/internal/domain"
+	"checkpoint/ingestion/internal/metrics"
+	"checkpoint/ingestion/internal/repository"
+	"checkpoint/ingestion/internal/service"
+)
+
+type fakeNotifications struct {
+	channel *service.NotificationChannel
+	err     error
+}
+
+func (f *fakeNotifications) Get(_ context.Context, _ string) (*service.NotificationChannel, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.channel == nil {
+		return &service.NotificationChannel{}, nil
+	}
+	return f.channel, nil
+}
+
+func (f *fakeNotifications) Enable(_ context.Context, _ string) (*service.NotificationChannel, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.channel = &service.NotificationChannel{Enabled: true, Topic: "cp-testtopic", Token: "tk-testtoken"}
+	return f.channel, nil
+}
+
+func (f *fakeNotifications) Disable(_ context.Context, _ string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.channel = nil
+	return nil
+}
+
+func (f *fakeNotifications) SetAdvance(_ context.Context, _ string, minutes int) (*service.NotificationChannel, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if _, err := domain.ValidateAdvanceMinutes(minutes); err != nil {
+		return nil, err
+	}
+	if f.channel == nil {
+		f.channel = &service.NotificationChannel{}
+	}
+	f.channel.AdvanceMinutes = minutes
+	return f.channel, nil
+}
+
+func notificationRouter(notifications notificationService) http.Handler {
+	return NewRouter(RouterDeps{
+		Auth:          fakeAuthenticator{},
+		Uploads:       &fakeService{},
+		Devices:       &fakeDevices{owned: map[string]bool{}},
+		Notifications: notifications,
+		NTFPPublicURL: "http://ntfy.test:8085",
+		Idem:          &fakeIdem{rows: map[string]repository.IdempotencyRecord{}},
+		Metrics:       metrics.NewRegistry(),
+	})
+}
+
+func TestGetNotificationsDefaultsToDisabled(t *testing.T) {
+	r := notificationRouter(&fakeNotifications{})
+
+	req := httptest.NewRequest("GET", "/v1/me/notifications", nil)
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp notificationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Enabled || resp.Topic != "" {
+		t.Fatalf("expected disabled with no topic, got %+v", resp)
+	}
+	if resp.NtfyURL != "http://ntfy.test:8085" {
+		t.Fatalf("ntfy_url: got %q", resp.NtfyURL)
+	}
+}
+
+func TestEnableNotificationsReturnsTopic(t *testing.T) {
+	r := notificationRouter(&fakeNotifications{})
+
+	req := httptest.NewRequest("POST", "/v1/me/notifications", strings.NewReader(`{}`))
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp notificationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Enabled || resp.Topic != "cp-testtopic" || resp.Token != "tk-testtoken" {
+		t.Fatalf("enable: got %+v", resp)
+	}
+}
+
+func TestDisableNotificationsClears(t *testing.T) {
+	r := notificationRouter(&fakeNotifications{channel: &service.NotificationChannel{Enabled: true, Topic: "cp-testtopic"}})
+
+	req := httptest.NewRequest("DELETE", "/v1/me/notifications", nil)
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp notificationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Enabled || resp.Topic != "" {
+		t.Fatalf("disable: got %+v", resp)
+	}
+}
+
+func TestPutNotificationsSetsAdvance(t *testing.T) {
+	r := notificationRouter(&fakeNotifications{})
+
+	req := httptest.NewRequest("PUT", "/v1/me/notifications", strings.NewReader(`{"advance_minutes":30}`))
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp notificationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.AdvanceMinutes != 30 {
+		t.Fatalf("advance_minutes = %d, want 30", resp.AdvanceMinutes)
+	}
+}
+
+func TestPutNotificationsRejectsUnknownAdvance(t *testing.T) {
+	r := notificationRouter(&fakeNotifications{})
+
+	req := httptest.NewRequest("PUT", "/v1/me/notifications", strings.NewReader(`{"advance_minutes":7}`))
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestNotificationsRequireAuth(t *testing.T) {
+	r := notificationRouter(&fakeNotifications{})
+	for _, tc := range []struct{ method, target string }{
+		{"GET", "/v1/me/notifications"},
+		{"POST", "/v1/me/notifications"},
+		{"PUT", "/v1/me/notifications"},
+		{"DELETE", "/v1/me/notifications"},
+	} {
+		req := httptest.NewRequest(tc.method, tc.target, strings.NewReader(`{}`))
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s: got %d, want 401", tc.method, tc.target, rec.Code)
+		}
+	}
+}

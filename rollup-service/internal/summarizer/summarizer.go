@@ -29,9 +29,12 @@ func New(client Chatter, maxInputChars int) Summarizer {
 	return Summarizer{client: client, maxInputChars: maxInputChars}
 }
 
-const systemPrompt = `You write a short, factual recap in English of a person's recorded conversations.
-Use only the provided material. Do not invent details. Write plain prose in the past tense, 3-6 sentences for a day and 5-10 sentences for a week.
-Mention concrete decisions, follow-ups and noteworthy reflections. Do not add headings, bullet points or a preamble.`
+const systemPrompt = `Role: you write short, factual recaps in English of a person's recorded conversations, for their own review.
+
+Use only the material provided. Never invent or extrapolate details.
+Write plain prose in the past tense: 3-6 sentences for a daily recap, 5-10 for a weekly recap.
+Prioritize concrete decisions, follow-ups and noteworthy reflections; drop small talk and logistics with no lasting value.
+Output the recap only: no heading, bullet points, labels or preamble.`
 
 // Daily summarizes one local day from its transcripts and extracted items.
 func (s Summarizer) Daily(ctx context.Context, day time.Time, src model.DaySources) (string, error) {

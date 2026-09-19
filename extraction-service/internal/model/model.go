@@ -45,7 +45,7 @@ type SpeakerSegment struct {
 	Start      float64 `json:"start"`
 	End        float64 `json:"end"`
 	Confidence float64 `json:"confidence"`
-	Text       string `json:"text"`
+	Text       string  `json:"text"`
 }
 
 // ExtractionFailedEvent is the DLQ envelope for poison messages. Same shape
@@ -132,10 +132,12 @@ func (r Result) IsEmpty() bool {
 // Reminder is a time-bound commitment: the LLM resolves the stated date
 // and/or time against the current time sent in the prompt. A nil RemindAt
 // means the statement was clearly time-bound but no concrete time could
-// be resolved.
+// be resolved. Important reminders also get an advance push; the due push is
+// unconditional.
 type Reminder struct {
-	Text     string
-	RemindAt *time.Time
+	Text      string
+	RemindAt  *time.Time
+	Important bool
 }
 
 // Insight is a reflection, realization, idea, or conclusion worth remembering — deliberately not an action item.

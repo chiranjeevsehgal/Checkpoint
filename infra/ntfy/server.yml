@@ -1,0 +1,24 @@
+# Self-hosted ntfy for reminder push notifications.
+#
+# Anonymous access is denied (auth-default-access: deny-all). Each Checkpoint
+# user gets a dedicated ntfy user with read-only access to exactly their own
+# topic; ingestion-service provisions that via the admin API using the
+# checkpoint-admin token below. Publishing uses the separate checkpoint-publisher
+# token, which is write-only on cp-* topics.
+#
+# The tokens below are development defaults shared with docker-compose. Rotate
+# both for production:
+#   docker compose exec ntfy ntfy token generate
+base-url: "http://localhost:8085"
+listen-http: ":80"
+cache-file: "/var/lib/ntfy/cache.db"
+auth-file: "/var/lib/ntfy/user.db"
+auth-default-access: "deny-all"
+auth-users:
+  - "checkpoint-admin:$2a$10$YLiO8U21sX1uhZamTLJXHuxgVC0Z/GKISibrKCLohPgtG7yIxSk4C:admin"
+  - "checkpoint-publisher:$2a$10$YLiO8U21sX1uhZamTLJXHuxgVC0Z/GKISibrKCLohPgtG7yIxSk4C:user"
+auth-access:
+  - "checkpoint-publisher:cp-*:write-only"
+auth-tokens:
+  - "checkpoint-admin:tk_checkpointdevadmintoken000001:admin"
+  - "checkpoint-publisher:tk_checkpointdevpublishtoken0001:publisher"

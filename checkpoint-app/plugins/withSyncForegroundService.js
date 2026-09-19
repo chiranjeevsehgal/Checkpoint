@@ -16,7 +16,7 @@ module.exports = function withSyncForegroundService(config) {
     const attributes = {
       'android:name': SERVICE_NAME,
       'android:exported': 'false',
-      'android:foregroundServiceType': 'connectedDevice',
+      'android:foregroundServiceType': 'connectedDevice|dataSync',
       'tools:replace': 'android:foregroundServiceType',
     };
     const services = application.service ?? [];

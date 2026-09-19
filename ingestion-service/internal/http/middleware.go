@@ -98,6 +98,9 @@ func normalizeRoute(path string) string {
 		if len(parts) == 3 && parts[2] == "settings" {
 			return "/v1/me/settings"
 		}
+		if len(parts) == 3 && parts[2] == "notifications" {
+			return "/v1/me/notifications"
+		}
 		return "/v1/me"
 	}
 	return "other"

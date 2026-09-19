@@ -18,43 +18,48 @@ type Pinger interface {
 
 // Router wires health and upload routes with middleware.
 type Router struct {
-	handler  *Handler
-	devices  *DeviceHandler
-	account  *AccountHandler
-	sessions *SessionHandler
-	settings *SettingsHandler
-	db       Pinger
-	storage  Pinger
-	reg      *metrics.Registry
+	handler       *Handler
+	devices       *DeviceHandler
+	account       *AccountHandler
+	sessions      *SessionHandler
+	settings      *SettingsHandler
+	notifications *NotificationHandler
+	db            Pinger
+	storage       Pinger
+	reg           *metrics.Registry
 }
 
 // RouterDeps carries the router's collaborators.
 type RouterDeps struct {
-	Auth     Authenticator
-	Accounts AccountGuard
-	Uploads  uploadService
-	Devices  deviceService
-	Account  accountService
-	Sessions sessionRevoker
-	Settings settingsService
-	Idem     repository.IdempotencyRepository
-	DB       Pinger
-	Storage  Pinger
-	Metrics  *metrics.Registry
+	Auth          Authenticator
+	Accounts      AccountGuard
+	Uploads       uploadService
+	Devices       deviceService
+	Account       accountService
+	Sessions      sessionRevoker
+	Settings      settingsService
+	Notifications notificationService
+	// NTFPPublicURL is returned to clients so they can reach the ntfy server.
+	NTFPPublicURL string
+	Idem          repository.IdempotencyRepository
+	DB            Pinger
+	Storage       Pinger
+	Metrics       *metrics.Registry
 }
 
 // NewRouter builds the full route tree. Health and metrics endpoints
 // stay outside Auth; everything under /v1 requires it.
 func NewRouter(deps RouterDeps) http.Handler {
 	r := &Router{
-		handler:  NewHandler(deps.Uploads, deps.Devices, deps.Idem, deps.Metrics),
-		devices:  NewDeviceHandler(deps.Devices, deps.Metrics),
-		account:  NewAccountHandler(deps.Account, deps.Metrics),
-		sessions: NewSessionHandler(deps.Sessions),
-		settings: NewSettingsHandler(deps.Settings),
-		db:       deps.DB,
-		storage:  deps.Storage,
-		reg:      deps.Metrics,
+		handler:       NewHandler(deps.Uploads, deps.Devices, deps.Idem, deps.Metrics),
+		devices:       NewDeviceHandler(deps.Devices, deps.Metrics),
+		account:       NewAccountHandler(deps.Account, deps.Metrics),
+		sessions:      NewSessionHandler(deps.Sessions),
+		settings:      NewSettingsHandler(deps.Settings),
+		notifications: NewNotificationHandler(deps.Notifications, deps.NTFPPublicURL),
+		db:            deps.DB,
+		storage:       deps.Storage,
+		reg:           deps.Metrics,
 	}
 
 	mux := http.NewServeMux()
@@ -74,6 +79,10 @@ func NewRouter(deps RouterDeps) http.Handler {
 	mux.Handle("DELETE /v1/me", protected(r.account.Delete))
 	mux.Handle("GET /v1/me/settings", protected(r.settings.Get))
 	mux.Handle("PUT /v1/me/settings", protected(r.settings.Put))
+	mux.Handle("GET /v1/me/notifications", protected(r.notifications.Get))
+	mux.Handle("POST /v1/me/notifications", protected(r.notifications.Enable))
+	mux.Handle("PUT /v1/me/notifications", protected(r.notifications.Put))
+	mux.Handle("DELETE /v1/me/notifications", protected(r.notifications.Disable))
 	mux.Handle("DELETE /v1/me/sessions", protected(r.sessions.Delete))
 	return mux
 }

@@ -277,10 +277,10 @@ func replaceReminders(ctx context.Context, tx pgx.Tx, r model.Result, llmModel s
 	}
 	for _, rem := range r.Reminders {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO reminders (user_id, audio_id, text, remind_at, model)
-			VALUES ($1, $2, $3, $4, $5)
+			INSERT INTO reminders (user_id, audio_id, text, remind_at, model, important)
+			VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT (user_id, audio_id, text) DO NOTHING`,
-			r.UserID, r.AudioID, rem.Text, rem.RemindAt, llmModel); err != nil {
+			r.UserID, r.AudioID, rem.Text, rem.RemindAt, llmModel, rem.Important); err != nil {
 			return fmt.Errorf("inserting reminder for %s: %w", r.AudioID, err)
 		}
 	}

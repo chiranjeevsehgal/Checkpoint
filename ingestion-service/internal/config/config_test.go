@@ -35,6 +35,7 @@ func TestLoadProductionRequiresExplicit(t *testing.T) {
 	setEnv(t, "MINIO_ACCESS_KEY", "ak")
 	setEnv(t, "MINIO_SECRET_KEY", "sk")
 	setEnv(t, "KAFKA_BROKERS", "kafka:9092")
+	setEnv(t, "NTFY_PUBLIC_URL", "https://ntfy.example.com")
 	setEnv(t, "KAFKA_TOPIC_TRANSCRIPTION", canonical)
 	setEnv(t, "PORT", "8080")
 	if _, err := Load(); err != nil {
@@ -64,6 +65,12 @@ func TestLoadProductionRequiresExplicit(t *testing.T) {
 		t.Fatal("missing KAFKA_BROKERS in prod must fail")
 	}
 	setEnv(t, "KAFKA_BROKERS", "kafka:9092")
+
+	setEnv(t, "NTFY_PUBLIC_URL", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("missing NTFY_PUBLIC_URL in prod must fail")
+	}
+	setEnv(t, "NTFY_PUBLIC_URL", "https://ntfy.example.com")
 
 	// Unset topic in prod is fine: canonical config.yaml supplies it.
 	setEnv(t, "KAFKA_TOPIC_TRANSCRIPTION", "")

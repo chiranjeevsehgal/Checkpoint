@@ -21,6 +21,7 @@ const (
 type PurgeRepository interface {
 	ClaimDeletions(ctx context.Context, batch int, now time.Time) ([]repository.AccountDeletionJob, error)
 	ListUploadObjects(ctx context.Context, userID string) ([]repository.UploadObject, error)
+	GetNotificationChannel(ctx context.Context, userID string) (*repository.NotificationChannel, error)
 	PurgeIngestion(ctx context.Context, userID string) error
 	QuarantineDevice(ctx context.Context, userID string) error
 	PurgeDownstream(ctx context.Context, userID string) error
@@ -33,23 +34,30 @@ type ObjectDeleter interface {
 	DeleteObject(ctx context.Context, bucket, objectKey string) error
 }
 
+// NtfyUserDeleter removes a provisioned ntfy user during account deletion.
+type NtfyUserDeleter interface {
+	DeleteUser(ctx context.Context, username string) error
+}
+
 // Worker drains due tombstones and purges user data.
 type Worker struct {
 	deletions  PurgeRepository
 	objects    ObjectDeleter
 	identities auth.IdentityDeleter
+	ntfyUsers  NtfyUserDeleter
 	logger     *slog.Logger
 	interval   time.Duration
 	now        func() time.Time
 }
 
-// NewWorker wires the deletion worker. identities may be nil when the
-// private admin API is not configured.
-func NewWorker(deletions PurgeRepository, objects ObjectDeleter, identities auth.IdentityDeleter, logger *slog.Logger) *Worker {
+// NewWorker wires the deletion worker. identities and ntfyUsers may be nil when
+// their backing services are not configured.
+func NewWorker(deletions PurgeRepository, objects ObjectDeleter, identities auth.IdentityDeleter, ntfyUsers NtfyUserDeleter, logger *slog.Logger) *Worker {
 	return &Worker{
 		deletions:  deletions,
 		objects:    objects,
 		identities: identities,
+		ntfyUsers:  ntfyUsers,
 		logger:     logger,
 		interval:   defaultInterval,
 		now:        func() time.Time { return time.Now().UTC() },
@@ -89,6 +97,7 @@ func (w *Worker) process(ctx context.Context, job repository.AccountDeletionJob)
 		w.retry(ctx, job, err)
 		return
 	}
+	w.purgeNtfyUser(ctx, job.UserID)
 	if err := w.deletions.PurgeIngestion(ctx, job.UserID); err != nil {
 		w.retry(ctx, job, err)
 		return
@@ -112,6 +121,26 @@ func (w *Worker) process(ctx context.Context, job repository.AccountDeletionJob)
 		return
 	}
 	w.logger.Info("account_deletion_completed", "user_id", job.UserID)
+}
+
+// purgeNtfyUser removes the user's provisioned ntfy account. Best-effort: a
+// failure leaves an orphan that a later enable or deletion attempt can clean up
+// and must never block the local purge.
+func (w *Worker) purgeNtfyUser(ctx context.Context, userID string) {
+	if w.ntfyUsers == nil {
+		return
+	}
+	channel, err := w.deletions.GetNotificationChannel(ctx, userID)
+	if err != nil {
+		w.logger.Warn("account_deletion_notification_lookup_failed", "user_id", userID, "error", err)
+		return
+	}
+	if channel == nil || channel.Username == "" {
+		return
+	}
+	if err := w.ntfyUsers.DeleteUser(ctx, channel.Username); err != nil {
+		w.logger.Warn("account_deletion_ntfy_cleanup_failed", "user_id", userID, "error", err)
+	}
 }
 
 func (w *Worker) purgeObjects(ctx context.Context, userID string) error {
