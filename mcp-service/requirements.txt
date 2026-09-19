@@ -1,7 +1,6 @@
 mcp==2.2.0
 turbovec[haystack]==1.0.0
 haystack-ai==3.1.1
-sentence-transformers-haystack==0.1.1
 sentence-transformers==5.7.0
 psycopg[binary]==3.3.5
 pgvector==0.5.0
