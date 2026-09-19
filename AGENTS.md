@@ -110,6 +110,8 @@ docker compose ps        # postgres + kafka should be healthy
 - `search_documents` is a **derived read model** rebuilt from `transcripts`/`embeddings`/`todos`/`reminders`/`insights`/`summaries`; source tables stay authoritative. Transcript chunk vectors are copied from `embeddings`; structured text is newly embedded with bge-m3. Full transcript text is stored with no embedding and served by `get_transcript`.
 - Access keys: `cp_mcp_<base32>`, SHA-256 at rest in `mcp_access_keys` (ingestion, RLS). Mint/list/revoke via `GET/POST /v1/me/mcp-keys` and `DELETE /v1/me/mcp-keys/{id}` behind Kratos auth; the secret is returned only on create. `last_used_at` is updated by the resolve function.
 - Index lifecycle: one global in-process TurboVec index (4-bit, cosine), built from `search_documents` at startup and refreshed on a ~30 s poll (`MCP_POLL_SECONDS`) that rebuilds any changed audio wholesale and embeds pending rows. TurboVec is single-process: **run exactly one replica/worker**.
+- The index watches `embeddings.created_at` too, so chunks that land after the transcript are picked up. Out-of-band `search_documents` deletes (account deletion) are only reflected on restart/rebuild — there is no live reconciliation.
+- In-place `embeddings` re-embeds (`ON CONFLICT` updates) keep their original `created_at`, so they do not trigger an index rebuild.
 - Timestamps are returned twice (UTC and the user's IANA zone, from `user_settings.timezone` falling back to `MCP_FALLBACK_TIMEZONE`); `occurred_at = coalesce(recorded_at, created_at)` and `recorded_at` is exposed separately (nullable = pendant clock unsynced).
 - Deletion coupling: `search_documents` and `mcp_access_keys` are purged by ingestion's account-deletion worker.
 - Auth is static bearer keys today; OAuth can replace `KeyTokenVerifier`/`build_server` later. The MCP port is currently published on all interfaces — keep it behind TLS/firewall.
@@ -126,6 +128,7 @@ go test ./internal/config/ -run TestTopicSingleSourceOfTruth -v   # after any to
 TEST_DATABASE_URL=postgres://... go test ./internal/repository/postgres/ -v   # integration
 TEST_MINIO_ENDPOINT=... TEST_MINIO_ACCESS_KEY=... TEST_MINIO_SECRET_KEY=... TEST_MINIO_BUCKET=... go test ./internal/storage/minio/ -v
 TEST_DATABASE_URL=postgres://... go test ./internal/storage/ -v   # notification-service integration
+TEST_DATABASE_URL=postgres://... TEST_MCP_DATABASE_URL=postgres://checkpoint_mcp:... python -m unittest discover -s tests -v   # mcp-service integration (from mcp-service/)
 ```
 
 - k6: `k6 run loadtest/ingestion-service/smoke.js` (`BASE_URL` env, default `http://localhost:8080`).
