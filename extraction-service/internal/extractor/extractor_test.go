@@ -77,6 +77,29 @@ func TestParseMapsAllThreeLists(t *testing.T) {
 	}
 }
 
+func TestParseReminderImportanceDefaultsToTrue(t *testing.T) {
+	content := `{
+		"reminders":[
+			{"item":1,"text":"Meeting with Priya","remind_at":"2099-09-18T17:00:00","important":true},
+			{"item":2,"text":"Water the plants","remind_at":"2099-09-18T18:00:00","important":false},
+			{"item":3,"text":"Call the bank","remind_at":"2099-09-18T19:00:00"}
+		]
+	}`
+	results, err := New(time.UTC).Parse(content, jobs(3))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !results[0].Reminders[0].Important {
+		t.Fatalf("explicit true not honoured: %+v", results[0].Reminders[0])
+	}
+	if results[1].Reminders[0].Important {
+		t.Fatalf("explicit false not honoured: %+v", results[1].Reminders[0])
+	}
+	if !results[2].Reminders[0].Important {
+		t.Fatalf("missing important must default to true: %+v", results[2].Reminders[0])
+	}
+}
+
 func TestParseDropsTodoShadowedByReminder(t *testing.T) {
 	content := `{
 		"todos":[{"item":1,"text":"  Call  the Bank. "},{"item":1,"text":"Book the venue"}],

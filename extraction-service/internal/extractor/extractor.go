@@ -46,8 +46,9 @@ Output rules:
   - a stated time without a date resolves to the next occurrence after the anchor;
   - remind_at must be strictly in the future: if the stated moment has already passed, move it forward to the next day at the same clock time (a weekday moves to the next occurrence of that weekday);
   - if the statement is time-bound but no concrete date or time can be determined, set both "remind_at" and "remind_at_zone" to null.
+- "important" is true only for meetings, appointments, scheduled calls, deadlines and time-bound commitments the user must act on; it is false for casual, optional or low-stakes items. When unsure, set it to true.
 Return a JSON object and nothing else, exactly in this shape:
-{"todos":[{"item":<number>,"text":"<imperative>"}],"reminders":[{"item":<number>,"text":"<imperative>","remind_at":"<local datetime, no offset>","remind_at_zone":"<IANA zone id or null>"}],"insights":[{"item":<number>,"text":"<statement>"}]}
+{"todos":[{"item":<number>,"text":"<imperative>"}],"reminders":[{"item":<number>,"text":"<imperative>","remind_at":"<local datetime, no offset>","remind_at_zone":"<IANA zone id or null>","important":<boolean>}],"insights":[{"item":<number>,"text":"<statement>"}]}
 Never output anything outside the JSON object.`
 
 func (e Extractor) Messages(items []model.Job) []llm.Message {
@@ -74,6 +75,7 @@ func (e Extractor) Parse(content string, items []model.Job) ([]model.Result, err
 			Text         string  `json:"text"`
 			RemindAt     *string `json:"remind_at"`
 			RemindAtZone *string `json:"remind_at_zone"`
+			Important    *bool   `json:"important"`
 		} `json:"reminders"`
 		Insights []struct {
 			Item int    `json:"item"`
@@ -104,7 +106,11 @@ func (e Extractor) Parse(content string, items []model.Job) ([]model.Result, err
 		if text == "" {
 			continue
 		}
-		reminder := model.Reminder{Text: text}
+		important := true
+		if rem.Important != nil {
+			important = *rem.Important
+		}
+		reminder := model.Reminder{Text: text, Important: important}
 		if rem.RemindAt != nil && strings.TrimSpace(*rem.RemindAt) != "" {
 			at, err := e.parseReminderTime(strings.TrimSpace(*rem.RemindAt), rem.RemindAtZone)
 			if err != nil {
