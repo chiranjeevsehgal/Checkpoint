@@ -168,6 +168,30 @@ function TransferSection({
   );
 }
 
+function ReminderSection({
+  enabled,
+  onChange,
+}: {
+  enabled: boolean;
+  onChange: (enabled: boolean) => void;
+}) {
+  return (
+    <Section title="Reminders">
+      <Card>
+        <Toggle
+          label="Reminder notifications"
+          description="Get a push 15 minutes before and at each reminder time."
+          value={enabled}
+          onChange={onChange}
+        />
+        <Text variant="muted" className="text-[11px]">
+          Keeps a background connection to your notification server.
+        </Text>
+      </Card>
+    </Section>
+  );
+}
+
 function BackendSection({
   settings,
   onSave,
@@ -289,8 +313,16 @@ function AppearanceSection() {
 }
 
 export function CheckpointSettingsScreen() {
-  const { settings, updateSettings, testConnection, logs, transfers, deviceId, enrolled } =
-    useCheckpoint();
+  const {
+    settings,
+    updateSettings,
+    setRemindersEnabled,
+    testConnection,
+    logs,
+    transfers,
+    deviceId,
+    enrolled,
+  } = useCheckpoint();
   const bluetooth = useBluetoothState();
   const router = useRouter();
   const [probe, setProbe] = useState<{ ok: boolean; latencyMs: number; at: number } | null>(null);
@@ -357,6 +389,10 @@ export function CheckpointSettingsScreen() {
           onOpenLanguages={() => router.push('/languages')}
         />
         <TransferSection settings={settings} apply={apply} applySilent={applySilent} />
+        <ReminderSection
+          enabled={settings.remindersEnabled}
+          onChange={(next) => void setRemindersEnabled(next)}
+        />
         <BackendSection
           settings={settings}
           onSave={onSaveServer}

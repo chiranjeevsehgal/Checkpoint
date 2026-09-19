@@ -5,6 +5,13 @@ import { useAuth } from '@/features/auth/hooks/useAuth';
 import { stopSyncService } from '@/features/checkpoint/backgroundService';
 import { getDevice } from '@/features/checkpoint/device';
 import { useCheckpoint } from '@/features/checkpoint/hooks/useCheckpoint';
+import {
+  clearReminderSubscription,
+  configureReminders,
+  loadReminderSubscription,
+  startReminders,
+  stopReminders,
+} from '@/features/checkpoint/reminderSubscriber';
 import { syncEngine } from '@/features/checkpoint/syncEngine';
 import { putUserSettings } from '@/lib/api/settings-api';
 import { getDeviceTimeZone } from '@/lib/device-timezone';
@@ -78,6 +85,30 @@ export function AuthSyncBridge({ children }: PropsWithChildren) {
       cancelled = true;
     };
   }, [status, settings.serverUrl]);
+
+  useEffect(() => {
+    if (status === 'loading') return;
+    if (status !== 'authenticated') {
+      stopReminders();
+      if (status === 'anonymous' || status === 'deleting') {
+        configureReminders(null);
+        void clearReminderSubscription();
+      }
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      const subscription = await loadReminderSubscription();
+      if (cancelled || !subscription) return;
+      configureReminders(subscription);
+      startReminders();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [status]);
 
   return <>{children}</>;
 }

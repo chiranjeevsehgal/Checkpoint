@@ -19,6 +19,7 @@ export interface CheckpointSettings {
   ingestEnabled: boolean;
   vadEnabled: boolean;
   autoSyncEnabled: boolean;
+  remindersEnabled: boolean;
   retentionHours: number;
   developerMode: boolean;
 }
@@ -31,6 +32,7 @@ const KEYS = {
   ingestEnabled: settingsKey('ingestEnabled'),
   vadEnabled: settingsKey('vadEnabled'),
   autoSyncEnabled: settingsKey('autoSyncEnabled'),
+  remindersEnabled: settingsKey('remindersEnabled'),
   retentionHours: settingsKey('retentionHours'),
   developerMode: settingsKey('developerMode'),
 } as const;
@@ -44,6 +46,7 @@ export function defaultSettings(): CheckpointSettings {
     ingestEnabled: true,
     vadEnabled: true,
     autoSyncEnabled: true,
+    remindersEnabled: false,
     retentionHours: TRANSFER_RETENTION_HOURS,
     developerMode: env.devBuild,
   };
@@ -66,6 +69,7 @@ export async function loadSettings(): Promise<CheckpointSettings> {
     ingestEnabled,
     vadEnabled,
     autoSyncEnabled,
+    remindersEnabled,
     retentionHours,
     developerMode,
   ] = await Promise.all([
@@ -76,6 +80,7 @@ export async function loadSettings(): Promise<CheckpointSettings> {
     storage.get(KEYS.ingestEnabled),
     storage.get(KEYS.vadEnabled),
     storage.get(KEYS.autoSyncEnabled),
+    storage.get(KEYS.remindersEnabled),
     storage.get(KEYS.retentionHours),
     storage.get(KEYS.developerMode),
   ]);
@@ -91,6 +96,7 @@ export async function loadSettings(): Promise<CheckpointSettings> {
     ingestEnabled: ingestEnabled !== '0',
     vadEnabled: vadEnabled !== '0',
     autoSyncEnabled: autoSyncEnabled !== '0',
+    remindersEnabled: remindersEnabled === '1',
     retentionHours: toNumber(retentionHours, defaults.retentionHours),
     developerMode: resolveDeveloperMode(developerMode, env.devBuild),
   };
@@ -105,6 +111,7 @@ export async function saveSettings(settings: CheckpointSettings): Promise<void> 
     storage.set(KEYS.ingestEnabled, settings.ingestEnabled ? '1' : '0'),
     storage.set(KEYS.vadEnabled, settings.vadEnabled ? '1' : '0'),
     storage.set(KEYS.autoSyncEnabled, settings.autoSyncEnabled ? '1' : '0'),
+    storage.set(KEYS.remindersEnabled, settings.remindersEnabled ? '1' : '0'),
     storage.set(KEYS.retentionHours, String(settings.retentionHours)),
     storage.set(KEYS.developerMode, settings.developerMode ? '1' : '0'),
   ]);

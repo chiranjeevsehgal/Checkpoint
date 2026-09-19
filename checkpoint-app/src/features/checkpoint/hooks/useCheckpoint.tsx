@@ -18,6 +18,13 @@ import { networkMonitor } from '../networkMonitor.ts';
 import type { HealthProbe } from '../networkStatus.ts';
 import { ctrlStatusText, formatBytes } from '../parsers.ts';
 import {
+  clearReminderSubscription,
+  configureReminders,
+  saveReminderSubscription,
+  startReminders,
+  stopReminders,
+} from '../reminderSubscriber.ts';
+import {
   defaultSettings,
   loadSettings,
   saveSettings,
@@ -28,7 +35,9 @@ import type { TransferRecord } from '../transferStore.ts';
 import type { DeviceFileList, DeviceStatus, LogEntry, StorageInfo } from '../types.ts';
 
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
+import { disableNotifications, enableNotifications } from '@/lib/api/notifications-api';
 import { resolveApiUrl, subscribeServerConfig } from '@/lib/server-config';
+import { getSessionToken } from '@/lib/session';
 import { useToast } from '@/providers/toast-provider';
 
 type DialogState =
@@ -81,6 +90,7 @@ interface CheckpointContextValue {
   requestRelease: () => void;
   previewStorageFile: (path: string) => Promise<number | null>;
   updateSettings: (settings: CheckpointSettings, options?: { silent?: boolean }) => Promise<void>;
+  setRemindersEnabled: (enabled: boolean) => Promise<void>;
   shareBench: () => Promise<void>;
   clearLogs: () => void;
   needsSettings: boolean;
@@ -144,6 +154,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     const shouldRun = shouldRunSyncService({
       connected: snapshot.connected,
       autoSyncEnabled: settings.autoSyncEnabled,
+      remindersEnabled: settings.remindersEnabled,
     });
     if (!shouldRun) {
       void stopSyncService();
@@ -152,8 +163,15 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     void startSyncService({
       connected: snapshot.connected,
       recording: snapshot.status?.recording ?? false,
+      reminders: settings.remindersEnabled,
     });
-  }, [settingsLoaded, settings.autoSyncEnabled, snapshot.connected, snapshot.status?.recording]);
+  }, [
+    settingsLoaded,
+    settings.autoSyncEnabled,
+    settings.remindersEnabled,
+    snapshot.connected,
+    snapshot.status?.recording,
+  ]);
 
   const connect = useCallback(async () => {
     syncEngine.configure(settings);
@@ -224,6 +242,40 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       if (!options?.silent) showToast('Saved.');
     },
     [settings.autoSyncEnabled, showToast],
+  );
+
+  const setRemindersEnabled = useCallback(
+    async (enabled: boolean) => {
+      const token = getSessionToken();
+      if (!token) {
+        showToast('Sign in to enable reminders.');
+        return;
+      }
+      try {
+        if (enabled) {
+          const channel = await enableNotifications(token);
+          if (!channel.topic) throw new Error('server returned no topic');
+          await saveReminderSubscription({ ntfyUrl: channel.ntfy_url, topic: channel.topic });
+          configureReminders({ ntfyUrl: channel.ntfy_url, topic: channel.topic });
+          startReminders();
+        } else {
+          await disableNotifications(token);
+          await clearReminderSubscription();
+          configureReminders(null);
+          stopReminders();
+        }
+        const next = { ...settings, remindersEnabled: enabled };
+        await saveSettings(next);
+        setSettings(next);
+        showToast(enabled ? 'Reminders on.' : 'Reminders off.');
+      } catch (error) {
+        console.warn(
+          `[ui] reminders toggle failed: ${error instanceof Error ? error.message : 'unknown'}`,
+        );
+        showToast('Could not update reminders.');
+      }
+    },
+    [settings, showToast],
   );
 
   useServerConfigSync(settings, updateSettings);
@@ -317,6 +369,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       requestRelease,
       previewStorageFile,
       updateSettings,
+      setRemindersEnabled,
       shareBench: syncEngine.shareBench,
       clearLogs: syncEngine.clearLogs,
       needsSettings: snapshot.needsSettings,
@@ -337,6 +390,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
       requestForget,
       requestRelease,
       setDeviceName,
+      setRemindersEnabled,
       settings,
       snapshot,
       testConnection,

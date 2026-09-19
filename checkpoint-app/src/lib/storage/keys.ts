@@ -33,3 +33,7 @@ export function credentialKey(identityId: string, deviceIdHex: string): string {
 export function enrolledDeviceKey(identityId: string): string {
   return `checkpoint.${identityId}.enrolledDeviceId`;
 }
+
+export function notificationSubscriptionKey(): string {
+  return 'checkpoint.notifications.subscription';
+}

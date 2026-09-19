@@ -3,6 +3,11 @@ import { PermissionsAndroid, Platform } from 'react-native';
 
 import { networkMonitor } from './networkMonitor.ts';
 import { hasBlePermissions } from './permissions.ts';
+import {
+  configureReminders,
+  loadReminderSubscription,
+  startReminders,
+} from './reminderSubscriber.ts';
 import { loadSettings } from './settings.ts';
 import { syncEngine } from './syncEngine.ts';
 
@@ -16,11 +21,13 @@ let serviceActive = false;
 export interface SyncStatus {
   connected: boolean;
   recording: boolean;
+  reminders: boolean;
 }
 
-function syncBody({ connected, recording }: SyncStatus): string {
-  if (!connected) return 'Not Connected';
-  return recording ? "I'm all ears" : 'Pendant Mic is off';
+function syncBody({ connected, recording, reminders }: SyncStatus): string {
+  if (connected) return recording ? "I'm all ears" : 'Pendant Mic is off';
+  if (reminders) return 'Reminders on';
+  return 'Not Connected';
 }
 
 if (Platform.OS === 'android') {
@@ -43,6 +50,11 @@ async function bootBackgroundSync(): Promise<void> {
   networkMonitor.configure(settings.serverUrl);
   void networkMonitor.start();
   void syncEngine.start();
+  const subscription = await loadReminderSubscription();
+  if (subscription) {
+    configureReminders(subscription);
+    startReminders();
+  }
   console.debug('[bg] engine booted');
 }
 
@@ -58,8 +70,9 @@ async function requestNotificationPermission(): Promise<void> {
 export async function startSyncService(status: SyncStatus): Promise<void> {
   if (Platform.OS !== 'android') return;
   // A `connectedDevice` foreground service needs a granted Bluetooth runtime
-  // permission. Starting it before the user grants one crashes the process.
-  if (!(await hasBlePermissions())) {
+  // permission, but the reminders data-sync service does not.
+  const bleGranted = await hasBlePermissions();
+  if (!bleGranted && !status.reminders) {
     console.debug('[bg] service deferred: Bluetooth permission not granted');
     return;
   }
@@ -74,6 +87,12 @@ export async function startSyncService(status: SyncStatus): Promise<void> {
       });
       serviceActive = true;
     }
+    const foregroundServiceTypes = [AndroidForegroundServiceType.FOREGROUND_SERVICE_TYPE_DATA_SYNC];
+    if (bleGranted) {
+      foregroundServiceTypes.push(
+        AndroidForegroundServiceType.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+      );
+    }
     await notifee.displayNotification({
       id: NOTIFICATION_ID,
       title: 'Checkpoint',
@@ -82,9 +101,7 @@ export async function startSyncService(status: SyncStatus): Promise<void> {
         channelId: CHANNEL_ID,
         asForegroundService: true,
         ongoing: true,
-        foregroundServiceTypes: [
-          AndroidForegroundServiceType.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-        ],
+        foregroundServiceTypes,
         pressAction: { id: 'default' },
       },
     });
