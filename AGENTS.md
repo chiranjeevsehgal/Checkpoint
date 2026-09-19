@@ -1,18 +1,19 @@
 # AGENTS.md — Checkpoint
 
-Monorepo with four separate Go modules plus firmware and a Python worker. No root module, no lint config, no Go CI.
+Monorepo with five separate Go modules plus firmware and a Python worker. No root module, no lint config, no Go CI.
 
 - `ingestion-service/` (module `checkpoint/ingestion`) — HTTP API `:8080`, in-process outbox dispatcher, upload cleanup, and account-deletion worker. Entrypoints: `cmd/api/main.go`, `cmd/migrate/main.go`, `cmd/device-admin/main.go`.
 - `transcription-service/` (module `transcription-service`) — Kafka worker. Entrypoint: `cmd/main.go`, `cmd/migrate/`.
 - `extraction-service/` (module `extraction-service`) — Kafka worker → LLM (Groq) combined todo/reminder/insight extractor. Entrypoints: `cmd/main.go`, `cmd/migrate/`.
 - `rollup-service/` (module `rollup-service`) — nightly Postgres summarizer writing English daily/weekly narrative recaps to `summaries`. No Kafka. Entrypoint: `cmd/main.go`, `cmd/migrate/`.
+- `notification-service/` (module `notification-service`) — polls Postgres for due reminders and publishes push notifications to self-hosted ntfy. No Kafka. Entrypoint: `cmd/main.go`, `cmd/migrate/`.
 - `embedding-service/` — Python Kafka worker, bge-m3 → pgvector. Entrypoint: `app/main.py`, `migrate.py`.
 - `firmware/checkpoint/` — PROD ESP32-S3 pendant (Arduino `.ino`). Pins/timings single source: `config.h`.
 - `firmware/tests/` — host-side pytest (grep/logic, no hardware). `firmware/host/checkpoint_client/` — Python BLE client.
 - `vad-service/` — empty placeholder (`.gitkeep` only). Ignore.
 - `loadtest/ingestion-service/` — k6 scripts (`smoke.js`, `spike.js`, `sustained.js`, `arrival-rate.js`).
 - `admin-console/` — local-only admin UI. Angular 21 in `web/`, Fastify+TS agent in `server/`. Binds `127.0.0.1:4300`, not in Compose. Details: `admin-console/README.md`.
-- Infra: root `docker-compose.yaml` (postgres, kafka KRaft, minio, Kratos + mailpit, `*-migrate`, `kafka-init`, services). Kratos config: `infra/kratos/`; Postgres roles/DB bootstrap: `infra/postgres/bootstrap.sh`. Docs: `docs/SETUP.md`.
+- Infra: root `docker-compose.yaml` (postgres, kafka KRaft, minio, Kratos + mailpit, ntfy, `*-migrate`, `kafka-init`, services). Kratos config: `infra/kratos/`; ntfy config: `infra/ntfy/server.yml`; Postgres roles/DB bootstrap: `infra/postgres/bootstrap.sh`. Docs: `docs/SETUP.md`.
 - CI: `.github/workflows/firmware-build.yml`, `.github/workflows/checkpoint-app-build.yml`, and `.github/workflows/admin-console-build.yml` (three workflows).
 
 ## Setup / run
@@ -24,7 +25,7 @@ docker compose ps        # postgres + kafka should be healthy
 ```
 
 - Local dev (from `ingestion-service/`): `make infra-up` → `make migrate` (needs `DATABASE_URL`) → `make run` (API on `:8080`).
-- Compose runs `ingestion-migrate` / `transcription-migrate` / `embedding-migrate` / `extraction-migrate` to `service_completed_successfully` before starting their workers. Migrations are goose (`make migrate`, `make status`).
+- Compose runs `ingestion-migrate` / `transcription-migrate` / `embedding-migrate` / `extraction-migrate` / `rollup-migrate` / `notification-migrate` to `service_completed_successfully` before starting their workers. Migrations are goose (`make migrate`, `make status`).
 - Postgres init (`infra/postgres/bootstrap.sh`, first volume only) creates role `checkpoint_request` (`NOBYPASSRLS`), `checkpoint_worker` (`BYPASSRLS`) and the separate `kratos` database. Changing those passwords in `.env` later is ignored; wipe with `make infra-reset`.
 - Migrations `00007`–`00009` add `uploads.device_id NOT NULL` and device-aware idempotency, so an old dev volume must be reset (data is disposable).
 - Kratos public API is `http://localhost:4433`; the admin API is bridge-only (never published). Mailpit UI is `http://localhost:8025`.
@@ -92,6 +93,15 @@ docker compose ps        # postgres + kafka should be healthy
 - Inputs above `summaries.max_input_chars` are map-reduced (chunk recaps, then a merge call). Writes connect as `checkpoint_worker` and own `rollup_schema_version` / the `summaries` table; `GROQ_API_KEY` and `POSTGRES_DSN` must be set or it fails fast.
 - Deletion coupling: `summaries` is purged by ingestion's account-deletion worker.
 
+## Notification worker quirks
+
+- `notification-service/` polls Postgres directly (no Kafka) for reminders whose advance fire time (`remind_at - ntfy.advance_seconds`, default 900s) or due time (`remind_at`) has arrived, and POSTs one ntfy message per fire time. `NTFY_TOKEN` and `POSTGRES_DSN` must be set or it fails fast.
+- Delivery is claimed in `notification_deliveries`, keyed by `(user_id, audio_id, reminder_text, fire_at, kind)`. Because extraction replaces reminder rows on every batch, the ledger — not the reminder id — is the dedup key; `fire_at` is part of it so a rescheduled reminder becomes a new delivery. Sending is driven from `reminders`, so a deleted reminder never fires.
+- Per-user isolation is the ntfy capability model: `GET/POST /v1/me/notifications` mints a server-side random `cp-<base32>` topic stored in `user_notification_settings` (RLS + `app.user_id`), and only `GET`/`POST`/`DELETE /v1/me/notifications` expose it to its owner. `DELETE` clears (rotates) it. Ingestion returns `NTFY_PUBLIC_URL`; `infra/ntfy/server.yml` gives anonymous clients read-only access and the `checkpoint-publisher` token write-only on `cp-*`.
+- Catch-up policy: an advance fire time older than `delivery.advance_grace_seconds` is skipped (the due one still fires); a due fire time older than `delivery.max_lateness_seconds` is ignored. Retries use `delivery.max_attempts` with a `reclaim_after_seconds` gate on stale `processing` rows. Rows older than `retention_days` are pruned hourly.
+- The Android app subscribes to `wss://<ntfy-host>/<topic>/ws` from its foreground service and shows local notifications via Notifee; it registers/clears the channel through `AuthSyncBridge`. Self-hosted ntfy does not use FCM, so background delivery requires that foreground service.
+- Deletion coupling: `user_notification_settings` and `notification_deliveries` are purged by ingestion's account-deletion worker.
+
 ## Test / verify
 
 Each Go service is its own module — run from the service dir:
@@ -103,6 +113,7 @@ go build ./...
 go test ./internal/config/ -run TestTopicSingleSourceOfTruth -v   # after any topic/config change
 TEST_DATABASE_URL=postgres://... go test ./internal/repository/postgres/ -v   # integration
 TEST_MINIO_ENDPOINT=... TEST_MINIO_ACCESS_KEY=... TEST_MINIO_SECRET_KEY=... TEST_MINIO_BUCKET=... go test ./internal/storage/minio/ -v
+TEST_DATABASE_URL=postgres://... go test ./internal/storage/ -v   # notification-service integration
 ```
 
 - k6: `k6 run loadtest/ingestion-service/smoke.js` (`BASE_URL` env, default `http://localhost:8080`).

@@ -70,18 +70,21 @@ func main() {
 	devices := service.NewDeviceService(requestPool)
 	accounts := service.NewAccountService(requestPool)
 	settings := service.NewSettingsService(requestPool)
+	notifications := service.NewNotificationService(requestPool)
 	reg := metrics.NewRegistry()
 	deps := apihttp.RouterDeps{
-		Auth:     authenticator,
-		Accounts: requestPool,
-		Uploads:  uploads,
-		Devices:  devices,
-		Account:  accounts,
-		Settings: settings,
-		Idem:     requestPool,
-		DB:       requestPool,
-		Storage:  objectStorage,
-		Metrics:  reg,
+		Auth:          authenticator,
+		Accounts:      requestPool,
+		Uploads:       uploads,
+		Devices:       devices,
+		Account:       accounts,
+		Settings:      settings,
+		Notifications: notifications,
+		NTFPPublicURL: cfg.NTFPPublicURL,
+		Idem:          requestPool,
+		DB:            requestPool,
+		Storage:       objectStorage,
+		Metrics:       reg,
 	}
 	if kratosAdmin != nil {
 		deps.Sessions = kratosAdmin

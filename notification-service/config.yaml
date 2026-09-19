@@ -1,0 +1,26 @@
+postgres:
+  dsn_env: POSTGRES_DSN
+
+ntfy:
+  # Internal URL the worker publishes to (Docker service name).
+  url: http://ntfy:80
+  token_env: NTFY_TOKEN
+  timeout_seconds: 10
+  # Fire the advance notification this long before remind_at.
+  advance_seconds: 900
+  # ntfy treats bodies over 4 KiB as attachments; keep them as messages.
+  max_message_bytes: 4096
+  due_priority: high
+  advance_priority: default
+
+delivery:
+  poll_interval_seconds: 15
+  batch_size: 200
+  worker_concurrency: 5
+  max_attempts: 5
+  reclaim_after_seconds: 120
+  # An advance fire time older than this is skipped; the due one still fires.
+  advance_grace_seconds: 120
+  # A due fire time older than this is ignored after an outage.
+  max_lateness_seconds: 3600
+  retention_days: 30

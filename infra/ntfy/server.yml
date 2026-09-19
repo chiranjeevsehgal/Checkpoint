@@ -1,0 +1,21 @@
+# Self-hosted ntfy for reminder push notifications.
+#
+# Anonymous clients may READ any topic they can name, but topic names are
+# server-generated 160-bit capabilities (cp-...), so this is the classic ntfy
+# bearer-capability model. Only the checkpoint-publisher user may WRITE, and
+# only to cp-* topics.
+#
+# The token below is a development default shared with docker-compose. Rotate
+# both values together for production (see docs/SETUP.md / AGENTS.md):
+#   docker compose exec ntfy ntfy token generate
+base-url: "http://localhost:8085"
+listen-http: ":80"
+cache-file: "/var/lib/ntfy/cache.db"
+auth-file: "/var/lib/ntfy/user.db"
+auth-default-access: "read-only"
+auth-users:
+  - "checkpoint-publisher:$2a$10$YLiO8U21sX1uhZamTLJXHuxgVC0Z/GKISibrKCLohPgtG7yIxSk4C:user"
+auth-access:
+  - "checkpoint-publisher:cp-*:write-only"
+auth-tokens:
+  - "checkpoint-publisher:tk_checkpointdevpublishtoken0001:publisher"

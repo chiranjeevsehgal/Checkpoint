@@ -9,6 +9,8 @@ volumes:
     driver: local
   minio-data:
     driver: local
+  ntfy-data:
+    driver: local
 
 services:
   kafka:
@@ -155,6 +157,7 @@ services:
       KAFKA_CLIENT_ID: ingestion-api
       IDENTITY_TTL_HOURS: ${IDENTITY_TTL_HOURS:-1}
       IDENTITY_CLEANUP_INTERVAL_MINUTES: ${IDENTITY_CLEANUP_INTERVAL_MINUTES:-15}
+      NTFY_PUBLIC_URL: ${NTFY_PUBLIC_URL:-http://localhost:8085}
     restart: unless-stopped
 
   kafka-init:
@@ -327,6 +330,57 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY}
       SUMMARIES_TIMEZONE: ${SUMMARIES_TIMEZONE:-}
       POSTGRES_DSN: postgres://checkpoint_worker:${CHECKPOINT_WORKER_PASSWORD:-checkpoint_worker_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    restart: unless-stopped
+
+  notification-migrate:
+    build:
+      context: ./notification-service
+      target: migrate
+    container_name: notification-migrate
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+
+  notification-service:
+    build:
+      context: ./notification-service
+      target: worker
+    container_name: notification-service
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ingestion-migrate:
+        condition: service_completed_successfully
+      notification-migrate:
+        condition: service_completed_successfully
+      ntfy:
+        condition: service_started
+    environment:
+      CONFIG_PATH: /app/config.yaml
+      POSTGRES_DSN: postgres://checkpoint_worker:${CHECKPOINT_WORKER_PASSWORD:-checkpoint_worker_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      NTFY_TOKEN: ${NTFY_TOKEN:-tk_checkpointdevpublishtoken0001}
+    restart: unless-stopped
+
+  ntfy:
+    image: binwiederhier/ntfy
+    container_name: ntfy
+    networks:
+      - backend
+    ports:
+      - "8085:80"
+    volumes:
+      - ntfy-data:/var/lib/ntfy
+      - ./infra/ntfy/server.yml:/etc/ntfy/server.yml:ro
+    environment:
+      # Must match the client-facing host; override with the LAN IP for phones.
+      NTFY_BASE_URL: ${NTFY_BASE_URL:-http://localhost:8085}
+    command: serve
     restart: unless-stopped
 
   mailpit:
