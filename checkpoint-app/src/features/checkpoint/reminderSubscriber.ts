@@ -9,6 +9,7 @@ import { notificationSubscriptionKey } from '@/lib/storage/keys';
 export interface ReminderSubscription {
   ntfyUrl: string;
   topic: string;
+  token?: string;
 }
 
 const CHANNEL_ID = 'checkpoint-reminders';
@@ -84,7 +85,7 @@ async function ensureChannel(): Promise<void> {
 
 function openSocket(): void {
   if (!running || !subscription) return;
-  const url = buildWebSocketUrl(subscription.ntfyUrl, subscription.topic);
+  const url = buildWebSocketUrl(subscription.ntfyUrl, subscription.topic, subscription.token);
 
   let ws: WebSocket;
   try {

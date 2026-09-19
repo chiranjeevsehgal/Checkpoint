@@ -255,8 +255,13 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
         if (enabled) {
           const channel = await enableNotifications(token);
           if (!channel.topic) throw new Error('server returned no topic');
-          await saveReminderSubscription({ ntfyUrl: channel.ntfy_url, topic: channel.topic });
-          configureReminders({ ntfyUrl: channel.ntfy_url, topic: channel.topic });
+          const subscription = {
+            ntfyUrl: channel.ntfy_url,
+            topic: channel.topic,
+            token: channel.token,
+          };
+          await saveReminderSubscription(subscription);
+          configureReminders(subscription);
           startReminders();
         } else {
           await disableNotifications(token);

@@ -14,6 +14,13 @@ describe('buildWebSocketUrl', () => {
       'wss://ntfy.example.com/cp-abc/ws',
     );
   });
+
+  it('appends the per-user read token via ?auth=', () => {
+    assert.equal(
+      buildWebSocketUrl('http://192.168.1.5:8085', 'cp-abc', 'tk_read'),
+      'ws://192.168.1.5:8085/cp-abc/ws?auth=QmVhcmVyIHRrX3JlYWQ',
+    );
+  });
 });
 
 describe('parseReminderPush', () => {

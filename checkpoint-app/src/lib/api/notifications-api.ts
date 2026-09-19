@@ -4,6 +4,7 @@ export interface NotificationChannel {
   enabled: boolean;
   ntfy_url: string;
   topic?: string;
+  token?: string;
 }
 
 export async function getNotificationSettings(token: string): Promise<NotificationChannel> {

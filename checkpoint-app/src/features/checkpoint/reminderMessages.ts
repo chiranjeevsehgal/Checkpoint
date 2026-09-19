@@ -1,3 +1,5 @@
+import { base64Encode } from './base64.ts';
+
 export interface ReminderPush {
   id: string;
   title: string;
@@ -8,14 +10,24 @@ export interface ReminderPush {
 /**
  * Builds the ntfy WebSocket subscribe URL from the server-provided base so a
  * LAN IP, hostname or path-prefixed base all work. http -> ws, https -> wss.
+ * A per-user read token is passed via ntfy's ?auth= query parameter.
  */
-export function buildWebSocketUrl(ntfyUrl: string, topic: string): string {
+export function buildWebSocketUrl(ntfyUrl: string, topic: string, token?: string): string {
   const base = ntfyUrl
     .trim()
     .replace(/\/+$/, '')
     .replace(/^http:/i, 'ws:')
     .replace(/^https:/i, 'wss:');
-  return `${base}/${topic}/ws`;
+  const url = `${base}/${topic}/ws`;
+  return token ? `${url}?auth=${authParam(token)}` : url;
+}
+
+/** ntfy wants raw base64 of the Authorization header, padding stripped. */
+function authParam(token: string): string {
+  const header = `Bearer ${token}`;
+  const bytes = new Uint8Array(header.length);
+  for (let i = 0; i < header.length; i++) bytes[i] = header.charCodeAt(i) & 0xff;
+  return base64Encode(bytes).replace(/=+$/, '');
 }
 
 /**
