@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
 import { CheckpointScreen } from '../components/checkpoint-screen.tsx';
@@ -22,8 +22,11 @@ import { Input } from '@/components/ui/input';
 import { RangeSlider } from '@/components/ui/slider';
 import { Text } from '@/components/ui/text';
 import { env } from '@/lib/env';
+import { getNotificationSettings, updateNotificationAdvance } from '@/lib/api/notifications-api';
+import { getSessionToken } from '@/lib/session';
 import { cn } from '@/lib/utils';
 import { useAppTheme } from '@/providers/theme-provider';
+import { useToast } from '@/providers/toast-provider';
 
 type Apply = (patch: Partial<CheckpointSettings>) => void;
 
@@ -175,14 +178,58 @@ function ReminderSection({
   enabled: boolean;
   onChange: (enabled: boolean) => void;
 }) {
+  const { showToast } = useToast();
+  const [advanceMinutes, setAdvanceMinutes] = useState(15);
+
+  useEffect(() => {
+    const token = getSessionToken();
+    if (!token) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const channel = await getNotificationSettings(token);
+        if (!cancelled && channel.advance_minutes) setAdvanceMinutes(channel.advance_minutes);
+      } catch {
+        // Keep the default; the control still saves once the server is reachable.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const changeAdvance = useCallback(
+    async (minutes: number) => {
+      const token = getSessionToken();
+      if (!token) return;
+      setAdvanceMinutes(minutes);
+      try {
+        await updateNotificationAdvance(token, minutes);
+      } catch {
+        showToast('Could not save reminder timing.');
+      }
+    },
+    [showToast],
+  );
+
   return (
     <Section title="Reminders">
       <Card>
         <Toggle
           label="Reminder notifications"
-          description="Get a push 15 minutes before and at each reminder time."
+          description="Get a push at each reminder time, plus an early heads-up for important ones."
           value={enabled}
           onChange={onChange}
+        />
+        <ValueSlider
+          label="Remind me early"
+          format={(value) => `${Math.round(value)} min`}
+          min={5}
+          max={30}
+          step={5}
+          value={advanceMinutes}
+          hint="Advance notice is sent only for important reminders."
+          onChange={(value) => void changeAdvance(Math.round(value))}
         />
         <Text variant="muted" className="text-[11px]">
           Keeps a background connection to your notification server.
