@@ -86,8 +86,9 @@ docker compose ps        # postgres + kafka should be healthy
 ## Rollup worker quirks
 
 - `rollup-service/` polls Postgres directly (no Kafka) and runs once per night inside the `processing` window (`window_enabled`, `window_start`/`window_end` "HH:MM" 24h with midnight wrap, `window_timezone` defaulting to `summaries.timezone`, `poll_interval_seconds`). With the window disabled it runs continuously once per day.
-- Each run takes every user with a transcript since `now - (lookback_days + 2)`, computes their previous local day from `user_settings.timezone` (fallback `summaries.timezone`), and upserts one English narrative per `(user_id, 'daily', period_start)` from that day's transcripts + todos/reminders/insights. `lookback_days` also refreshes recent days for late-arriving audio.
+- Each run takes every user with a transcript since `now - (lookback_days + 2)`, computes their previous local day from `user_settings.timezone` (fallback `summaries.timezone`), and upserts one English narrative per `(user_id, 'daily', period_start)` from that day's transcripts + todos/reminders/insights. `lookback_days` also refreshes recent days for late-arriving audio. On Monday the look-back widens to 9 days so the weekly run sees the whole previous week.
 - On the Monday run it backfills any missing daily recaps for the previous Mon-Sun week, then writes `period='weekly'` from those dailies. Tombstoned users are skipped.
+- A run advances its nightly gate only on success, so enumeration failures retry with capped backoff inside the window. Groq calls retry 429/5xx/network up to `groq.max_attempts` (default 3). Transient per-user failures are counted in the run's `failed=` log rather than aborting the whole run.
 - Inputs above `summaries.max_input_chars` are map-reduced (chunk recaps, then a merge call). Writes connect as `checkpoint_worker` and own `rollup_schema_version` / the `summaries` table; `GROQ_API_KEY` and `POSTGRES_DSN` must be set or it fails fast.
 - Deletion coupling: `summaries` is purged by ingestion's account-deletion worker.
 

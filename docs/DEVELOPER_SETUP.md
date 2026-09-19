@@ -11,7 +11,7 @@ reach `localhost`.
 ## 0. Prerequisites
 
 - Docker Desktop (Compose v2) with ~8 GB RAM
-- Go 1.25+ (two modules: `ingestion-service`, `transcription-service`)
+- Go 1.25+ (four modules: `ingestion-service`, `transcription-service`, `extraction-service`, `rollup-service`)
 - Node 20+ and npm
 - Python 3.11+ (embedding worker, firmware host tests)
 - `arduino-cli` with the `esp32` core `3.3.11` (firmware)
