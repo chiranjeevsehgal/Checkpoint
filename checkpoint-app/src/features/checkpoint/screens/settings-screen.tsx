@@ -453,6 +453,9 @@ export function CheckpointSettingsScreen() {
             <Button variant="outline" onPress={() => router.push('/account')}>
               <Text>Account & security</Text>
             </Button>
+            <Button variant="outline" onPress={() => router.push('/mcp-keys')}>
+              <Text>MCP access</Text>
+            </Button>
           </Card>
         </Section>
         <Section title="Danger zone">

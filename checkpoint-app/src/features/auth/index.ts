@@ -1,4 +1,5 @@
 export * from '@/features/auth/screens/account-screen';
+export * from '@/features/auth/screens/mcp-keys-screen';
 export * from '@/features/auth/screens/recovery-screen';
 export * from '@/features/auth/screens/sign-in-screen';
 export * from '@/features/auth/screens/sign-up-screen';
