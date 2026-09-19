@@ -20,6 +20,7 @@ import (
 	apihttp "checkpoint/ingestion/internal/http"
 	"checkpoint/ingestion/internal/identitycleanup"
 	"checkpoint/ingestion/internal/metrics"
+	"checkpoint/ingestion/internal/ntfy"
 	"checkpoint/ingestion/internal/outbox"
 	"checkpoint/ingestion/internal/queue"
 	"checkpoint/ingestion/internal/repository/postgres"
@@ -70,7 +71,8 @@ func main() {
 	devices := service.NewDeviceService(requestPool)
 	accounts := service.NewAccountService(requestPool)
 	settings := service.NewSettingsService(requestPool)
-	notifications := service.NewNotificationService(requestPool)
+	ntfyAdmin := newNtfyAdmin(cfg)
+	notifications := service.NewNotificationService(requestPool, notificationProvisioner(ntfyAdmin))
 	reg := metrics.NewRegistry()
 	deps := apihttp.RouterDeps{
 		Auth:          authenticator,
@@ -128,7 +130,7 @@ func main() {
 	go func() { defer wg.Done(); dispatcher.Run(runCtx) }()
 	cleaner := cleanup.NewCleaner(workerPool, objectStorage, cfg.UploadExpiry, cfg.CleanupInterval, logger)
 	go func() { defer wg.Done(); cleaner.Run(runCtx) }()
-	deletionWorker := deletion.NewWorker(workerPool, objectStorage, identityDeleter, logger)
+	deletionWorker := deletion.NewWorker(workerPool, objectStorage, identityDeleter, ntfyUserDeleter(ntfyAdmin), logger)
 	go func() { defer wg.Done(); deletionWorker.Run(runCtx) }()
 	if kratosAdmin != nil {
 		reaper := identitycleanup.NewWorker(kratosAdmin, kratosAdmin, cfg.IdentityTTL, cfg.IdentityCleanupInterval, logger)
@@ -168,4 +170,34 @@ func instanceID() string {
 		host = "unknown"
 	}
 	return fmt.Sprintf("%s-%d", host, os.Getpid())
+}
+
+// newNtfyAdmin returns a provisioner client, or nil when per-user ntfy auth is
+// not configured (the anonymous read-only fallback).
+func newNtfyAdmin(cfg config.Config) *ntfy.AdminClient {
+	if cfg.NTFYAdminToken == "" {
+		return nil
+	}
+	return ntfy.NewAdmin(ntfy.AdminOptions{
+		BaseURL: cfg.NTFYAdminURL,
+		Token:   cfg.NTFYAdminToken,
+		Timeout: cfg.NTFYTimeout,
+	})
+}
+
+// notificationProvisioner collapses a nil admin client to a nil interface so
+// the service's fallback check works.
+func notificationProvisioner(admin *ntfy.AdminClient) service.NotificationProvisioner {
+	if admin == nil {
+		return nil
+	}
+	return admin
+}
+
+// ntfyUserDeleter does the same for the account-deletion worker.
+func ntfyUserDeleter(admin *ntfy.AdminClient) deletion.NtfyUserDeleter {
+	if admin == nil {
+		return nil
+	}
+	return admin
 }

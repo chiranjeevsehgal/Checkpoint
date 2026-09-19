@@ -158,6 +158,8 @@ services:
       IDENTITY_TTL_HOURS: ${IDENTITY_TTL_HOURS:-1}
       IDENTITY_CLEANUP_INTERVAL_MINUTES: ${IDENTITY_CLEANUP_INTERVAL_MINUTES:-15}
       NTFY_PUBLIC_URL: ${NTFY_PUBLIC_URL:-http://localhost:8085}
+      NTFY_ADMIN_URL: ${NTFY_ADMIN_URL:-http://ntfy:80}
+      NTFY_ADMIN_TOKEN: ${NTFY_ADMIN_TOKEN:-}
     restart: unless-stopped
 
   kafka-init:
@@ -381,7 +383,7 @@ services:
     restart: unless-stopped
 
   ntfy:
-    image: binwiederhier/ntfy
+    image: binwiederhier/ntfy:v2.28.0
     container_name: ntfy
     networks:
       - backend

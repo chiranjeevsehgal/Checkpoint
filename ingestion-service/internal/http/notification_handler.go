@@ -29,6 +29,7 @@ type notificationResponse struct {
 	Enabled bool   `json:"enabled"`
 	NtfyURL string `json:"ntfy_url"`
 	Topic   string `json:"topic,omitempty"`
+	Token   string `json:"token,omitempty"`
 }
 
 // Get handles GET /v1/me/notifications.
@@ -80,5 +81,6 @@ func (h *NotificationHandler) response(channel *service.NotificationChannel) not
 		Enabled: channel.Enabled,
 		NtfyURL: h.ntfyURL,
 		Topic:   channel.Topic,
+		Token:   channel.Token,
 	}
 }

@@ -17,11 +17,12 @@ func (p *Pool) GetNotificationChannel(ctx context.Context, userID string) (*repo
 	defer cancel()
 
 	var enabled bool
-	var topic *string
+	var topic, username, token *string
 	err := p.WithUserTx(ctx, userID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx,
-			`SELECT enabled, ntfy_topic FROM user_notification_settings WHERE user_id = $1`,
-			userID).Scan(&enabled, &topic)
+		return tx.QueryRow(ctx, `
+			SELECT enabled, ntfy_topic, ntfy_username, ntfy_token
+			FROM user_notification_settings WHERE user_id = $1`, userID).
+			Scan(&enabled, &topic, &username, &token)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -29,27 +30,37 @@ func (p *Pool) GetNotificationChannel(ctx context.Context, userID string) (*repo
 	if err != nil {
 		return nil, err
 	}
-	channel := &repository.NotificationChannel{Enabled: enabled}
+	channel := &repository.NotificationChannel{UserID: userID, Enabled: enabled}
 	if topic != nil {
 		channel.Topic = *topic
+	}
+	if username != nil {
+		channel.Username = *username
+	}
+	if token != nil {
+		channel.Token = *token
 	}
 	return channel, nil
 }
 
-// SetNotificationChannel upserts the channel. The last write wins; an empty
-// topic is stored as NULL so a disabled user exposes no capability.
-func (p *Pool) SetNotificationChannel(ctx context.Context, userID, topic string, enabled bool) error {
+// SetNotificationChannel upserts the channel. The last write wins; empty
+// fields are stored as NULL so a disabled user exposes no capability.
+func (p *Pool) SetNotificationChannel(ctx context.Context, channel *repository.NotificationChannel) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	return p.WithUserTx(ctx, userID, func(tx pgx.Tx) error {
+	return p.WithUserTx(ctx, channel.UserID, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO user_notification_settings (user_id, ntfy_topic, enabled, updated_at)
-			VALUES ($1, NULLIF($2, ''), $3, NOW())
+			INSERT INTO user_notification_settings
+				(user_id, ntfy_topic, ntfy_username, ntfy_token, enabled, updated_at)
+			VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), $5, NOW())
 			ON CONFLICT (user_id) DO UPDATE
 			SET ntfy_topic = EXCLUDED.ntfy_topic,
+			    ntfy_username = EXCLUDED.ntfy_username,
+			    ntfy_token = EXCLUDED.ntfy_token,
 			    enabled = EXCLUDED.enabled,
-			    updated_at = NOW()`, userID, topic, enabled)
+			    updated_at = NOW()`,
+			channel.UserID, channel.Topic, channel.Username, channel.Token, channel.Enabled)
 		return err
 	})
 }

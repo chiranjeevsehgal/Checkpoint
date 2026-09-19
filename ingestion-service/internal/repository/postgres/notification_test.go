@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"checkpoint/ingestion/internal/repository"
 )
 
 func TestNotificationChannelRoundTrip(t *testing.T) {
@@ -24,26 +26,28 @@ func TestNotificationChannelRoundTrip(t *testing.T) {
 		t.Fatalf("missing row must yield nil, got %+v", got)
 	}
 
-	if err := p.SetNotificationChannel(ctx, userID, "cp-abc", true); err != nil {
+	if err := p.SetNotificationChannel(ctx, &repository.NotificationChannel{
+		UserID: userID, Topic: "cp-abc", Username: "cp_user", Token: "tk_read", Enabled: true,
+	}); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	got, err = p.GetNotificationChannel(ctx, userID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got == nil || !got.Enabled || got.Topic != "cp-abc" {
-		t.Fatalf("got %+v, want enabled cp-abc", got)
+	if got == nil || !got.Enabled || got.Topic != "cp-abc" || got.Username != "cp_user" || got.Token != "tk_read" {
+		t.Fatalf("got %+v, want enabled cp-abc with credentials", got)
 	}
 
-	if err := p.SetNotificationChannel(ctx, userID, "", false); err != nil {
+	if err := p.SetNotificationChannel(ctx, &repository.NotificationChannel{UserID: userID}); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
 	got, err = p.GetNotificationChannel(ctx, userID)
 	if err != nil {
 		t.Fatalf("get disabled: %v", err)
 	}
-	if got == nil || got.Enabled || got.Topic != "" {
-		t.Fatalf("disable must clear topic, got %+v", got)
+	if got == nil || got.Enabled || got.Topic != "" || got.Username != "" || got.Token != "" {
+		t.Fatalf("disable must clear channel, got %+v", got)
 	}
 }
 
@@ -57,7 +61,9 @@ func TestNotificationChannelIsolatedPerUser(t *testing.T) {
 		_, _ = p.inner.Exec(context.Background(), `DELETE FROM user_notification_settings WHERE user_id = ANY($1::uuid[])`, []string{owner, other})
 	})
 
-	if err := p.SetNotificationChannel(ctx, owner, "cp-owner", true); err != nil {
+	if err := p.SetNotificationChannel(ctx, &repository.NotificationChannel{
+		UserID: owner, Topic: "cp-owner", Enabled: true,
+	}); err != nil {
 		t.Fatalf("owner set: %v", err)
 	}
 	got, err := p.GetNotificationChannel(ctx, other)

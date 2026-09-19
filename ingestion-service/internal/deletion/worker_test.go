@@ -29,6 +29,10 @@ func (f *fakePurge) ListUploadObjects(context.Context, string) ([]repository.Upl
 	return f.objects, nil
 }
 
+func (f *fakePurge) GetNotificationChannel(context.Context, string) (*repository.NotificationChannel, error) {
+	return nil, nil
+}
+
 func (f *fakePurge) PurgeIngestion(context.Context, string) error {
 	f.ingestion++
 	return nil
@@ -91,7 +95,7 @@ func TestSweepPurgesUser(t *testing.T) {
 	objects := &fakeObjects{}
 	identities := &fakeIdentities{}
 
-	NewWorker(purge, objects, identities, testLogger()).Sweep(context.Background())
+	NewWorker(purge, objects, identities, nil, testLogger()).Sweep(context.Background())
 
 	if len(objects.deleted) != 2 {
 		t.Fatalf("deleted %d objects, want 2", len(objects.deleted))
@@ -114,7 +118,7 @@ func TestSweepRetriesOnObjectFailure(t *testing.T) {
 	}
 	objects := &fakeObjects{failOn: "user-1/a"}
 
-	NewWorker(purge, objects, nil, testLogger()).Sweep(context.Background())
+	NewWorker(purge, objects, nil, nil, testLogger()).Sweep(context.Background())
 
 	if purge.retried != 1 || purge.completed != 0 {
 		t.Fatalf("completed=%d retried=%d, want 0/1", purge.completed, purge.retried)

@@ -32,7 +32,7 @@ func (f *fakeNotifications) Enable(_ context.Context, _ string) (*service.Notifi
 	if f.err != nil {
 		return nil, f.err
 	}
-	f.channel = &service.NotificationChannel{Enabled: true, Topic: "cp-testtopic"}
+	f.channel = &service.NotificationChannel{Enabled: true, Topic: "cp-testtopic", Token: "tk-testtoken"}
 	return f.channel, nil
 }
 
@@ -94,7 +94,7 @@ func TestEnableNotificationsReturnsTopic(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !resp.Enabled || resp.Topic != "cp-testtopic" {
+	if !resp.Enabled || resp.Topic != "cp-testtopic" || resp.Token != "tk-testtoken" {
 		t.Fatalf("enable: got %+v", resp)
 	}
 }

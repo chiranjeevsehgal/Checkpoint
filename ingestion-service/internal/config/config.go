@@ -70,6 +70,11 @@ type Config struct {
 	// NTFPPublicURL is the base URL clients use to subscribe to ntfy, returned
 	// by GET/POST /v1/me/notifications. It must be reachable from the phone.
 	NTFPPublicURL string
+	// NTFYAdminURL/NTFYAdminToken enable per-user ntfy read authorization via
+	// the ntfy admin API. An empty token keeps the anonymous read-only fallback.
+	NTFYAdminURL   string
+	NTFYAdminToken string
+	NTFYTimeout    time.Duration
 
 	// HTTP timeouts, see LLD section 22.
 	ReadHeaderTimeout time.Duration
@@ -117,6 +122,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	ntfySeconds, err := parsePositiveIntStrict("NTFY_TIMEOUT_SECONDS", 10)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		Port:                    envOr("PORT", defaultPort),
 		Env:                     envOr("ENV", defaultEnv),
@@ -140,6 +149,9 @@ func Load() (Config, error) {
 		IdentityTTL:             time.Duration(identityHours) * time.Hour,
 		IdentityCleanupInterval: time.Duration(identityCleanupMinutes) * time.Minute,
 		NTFPPublicURL:           strings.TrimRight(envOr("NTFY_PUBLIC_URL", "http://localhost:8085"), "/"),
+		NTFYAdminURL:            strings.TrimRight(envOr("NTFY_ADMIN_URL", "http://ntfy:80"), "/"),
+		NTFYAdminToken:          strings.TrimSpace(os.Getenv("NTFY_ADMIN_TOKEN")),
+		NTFYTimeout:             time.Duration(ntfySeconds) * time.Second,
 		ReadHeaderTimeout:       5 * time.Second,
 		ReadTimeout:             15 * time.Second,
 		WriteTimeout:            15 * time.Second,
