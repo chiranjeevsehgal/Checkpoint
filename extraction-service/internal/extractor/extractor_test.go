@@ -42,6 +42,14 @@ func TestMessagesIncludeCurrentTimeAndItems(t *testing.T) {
 	}
 }
 
+func TestSystemPromptKeepsJSONContract(t *testing.T) {
+	for _, want := range []string{`"todos"`, `"reminders"`, `"insights"`, `"remind_at"`, `"remind_at_zone"`, `"important"`} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Fatalf("system prompt missing %q", want)
+		}
+	}
+}
+
 func TestParseMapsAllThreeLists(t *testing.T) {
 	content := `{
 		"todos":[{"item":1,"text":"Send the Q3 report to Priya"}],

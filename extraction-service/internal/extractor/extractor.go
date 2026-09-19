@@ -28,28 +28,31 @@ func New(loc *time.Location) Extractor {
 	return Extractor{loc: loc}
 }
 
-const systemPrompt = `You are a precise extraction engine for personal audio transcripts (meetings, voice notes, calls).
-You are given numbered items, each one a separate transcript. For each item extract exactly three kinds of output:
-- todos: an action item - something a speaker said they (or someone) must do, schedule, follow up on, or deliver.
-- reminders: a time-bound commitment - an action item with a specific date and/or time.
+const systemPrompt = `Role: you are an extraction engine for personal audio transcripts (meetings, voice notes, calls). Each numbered item is a separate transcript.
+
+For every item, extract up to three kinds of output:
+- todos: an action item the speaker must do, schedule, follow up on, or deliver.
+- reminders: an action item with a concrete date and/or time.
 - insights: a reflection, realization, conclusion, idea, decision, or opinion worth remembering.
-Output rules:
-- Assign every extracted entry to exactly one list. If it has a concrete date and/or time it is a reminder, never a todo. Never repeat an entry in more than one list.
-- Extract only what was explicitly said. Do not invent entries, do not extract vague intentions or topics that were merely discussed, and do not produce an entry for an item that contains nothing relevant.
-- If an item yields nothing for a list, omit it from that list. An item that yields nothing at all appears in no list.
-- "item" must be the 1-based number of the item the entry came from.
-- "text" must be concise and self-contained. Todos and reminders are imperatives (e.g. "Send the Q3 report to Priya"); insights are statements (e.g. "Vendor quotes are 30% higher").
-- "remind_at" is the reminder's local wall-clock datetime with no UTC offset (e.g. "2026-09-18T17:00:00"), and "remind_at_zone" is the IANA timezone id it belongs to (e.g. "Asia/Kolkata", "Europe/Berlin"):
-  - use the user's timezone (given in the user message) unless the speaker names a different zone;
-  - resolve relative expressions ("tonight", "tomorrow", "Friday") against the recorded date/time in the item's heading; use the current date/time only when an item has no recorded time;
-  - a stated date without a time resolves to 09:00 on that date;
-  - a stated time without a date resolves to the next occurrence after the anchor;
-  - remind_at must be strictly in the future: if the stated moment has already passed, move it forward to the next day at the same clock time (a weekday moves to the next occurrence of that weekday);
-  - if the statement is time-bound but no concrete date or time can be determined, set both "remind_at" and "remind_at_zone" to null.
-- "important" is true only for meetings, appointments, scheduled calls, deadlines and time-bound commitments the user must act on; it is false for casual, optional or low-stakes items. When unsure, set it to true.
-Return a JSON object and nothing else, exactly in this shape:
+
+Assignment rules:
+- Put each entry in exactly one list. If it has a concrete date or time it is a reminder, never a todo, and never repeat an entry in another list.
+- Extract only what was explicitly said. Do not invent entries, do not extract vague intentions or topics that were merely discussed, and emit nothing for an item that contains nothing relevant.
+- "item" is the 1-based number of the transcript the entry came from.
+- "text" is concise and self-contained. Todos and reminders are imperatives (e.g. "Send the Q3 report to Priya"); insights are statements (e.g. "Vendor quotes are 30% higher").
+- "important" is true only for meetings, appointments, scheduled calls, deadlines, and time-bound commitments the user must act on; it is false for casual, optional, or low-stakes items. When unsure, set it to true.
+
+Reminder time rules:
+- "remind_at" is the local wall-clock datetime with no UTC offset (e.g. "2026-09-18T17:00:00"), and "remind_at_zone" is the IANA zone id it belongs to (e.g. "Asia/Kolkata").
+- Use the user's timezone (given in the user message) unless the speaker names a different zone.
+- Resolve relative expressions ("tonight", "tomorrow", "Friday") against the recorded date/time in the item's heading; use the current date/time only when an item has no recorded time.
+- A stated date without a time resolves to 09:00 on that date; a stated time without a date resolves to the next occurrence after the anchor.
+- "remind_at" must be strictly in the future. If the stated moment has already passed, move it forward to the next day at the same clock time; a weekday moves to its next occurrence.
+- If the statement is time-bound but no concrete date or time can be determined, set both "remind_at" and "remind_at_zone" to null.
+
+Return one JSON object and nothing else, exactly in this shape:
 {"todos":[{"item":<number>,"text":"<imperative>"}],"reminders":[{"item":<number>,"text":"<imperative>","remind_at":"<local datetime, no offset>","remind_at_zone":"<IANA zone id or null>","important":<boolean>}],"insights":[{"item":<number>,"text":"<statement>"}]}
-Never output anything outside the JSON object.`
+If nothing was extracted at all, return every list empty. Never output anything outside the JSON object.`
 
 func (e Extractor) Messages(items []model.Job) []llm.Message {
 	var b strings.Builder
