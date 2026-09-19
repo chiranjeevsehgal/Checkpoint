@@ -13,7 +13,7 @@ reach `localhost`.
 - Docker Desktop (Compose v2) with ~8 GB RAM
 - Go 1.25+ (four modules: `ingestion-service`, `transcription-service`, `extraction-service`, `rollup-service`)
 - Node 20+ and npm
-- Python 3.11+ (embedding worker, firmware host tests)
+- Python 3.11+ (embedding worker, mcp-service, firmware host tests)
 - `arduino-cli` with the `esp32` core `3.3.11` (firmware)
 - Android platform-tools (`adb`) and a device/emulator
 - JDK 17 + Android SDK/NDK 27 (Android app build)
@@ -29,8 +29,10 @@ copy .env.example .env     # Windows; cp on Linux/macOS
 Fill in:
 
 - `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`
-- `CHECKPOINT_REQUEST_PASSWORD`, `CHECKPOINT_WORKER_PASSWORD`, `KRATOS_DB_PASSWORD`
-  (create the RLS request role, the trusted worker role, and the Kratos database)
+- `CHECKPOINT_REQUEST_PASSWORD`, `CHECKPOINT_WORKER_PASSWORD`,
+  `CHECKPOINT_MCP_PASSWORD`, `KRATOS_DB_PASSWORD` (create the RLS request role,
+  the trusted worker role, the read-only MCP role, and the Kratos database)
+- `MCP_PUBLIC_URL` (advertised to MCP clients; the LAN IP or public HTTPS URL)
 - `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`
 - `ELEVENLABS_API_KEY` and/or `DEEPGRAM_API_KEY`
 - `MINIO_PUBLIC_ENDPOINT=<HOST_LAN_IP>:9000` (phones fetch presigned URLs here)
@@ -186,6 +188,8 @@ docker compose exec postgres psql -U <POSTGRES_USER> -d <POSTGRES_DB> \
   -c "SELECT audio_id,user_id,language,left(text,60) FROM transcripts ORDER BY created_at DESC LIMIT 3;"
 docker compose exec postgres psql -U <POSTGRES_USER> -d <POSTGRES_DB> \
   -c "SELECT user_id,audio_id,count(*) FROM embeddings GROUP BY 1,2;"
+docker compose exec postgres psql -U <POSTGRES_USER> -d <POSTGRES_DB> \
+  -c "SELECT source_type,count(*) FROM search_documents GROUP BY 1;"   # MCP read model
 
 # Kafka job
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
@@ -201,6 +205,9 @@ cd transcription-service && go test ./... && go vet ./... && go build ./...
 
 # embedding (TEST_DATABASE_URL enables the DB integration test)
 cd embedding-service && python -m unittest discover -s tests -v
+
+# mcp-service (TEST_DATABASE_URL enables the DB integration test)
+cd mcp-service && python -m unittest discover -s tests -v
 
 # firmware host tests
 pytest firmware/tests -v
@@ -219,7 +226,7 @@ TEST_DATABASE_URL="postgres://<POSTGRES_USER>:<POSTGRES_PASSWORD>@localhost:5432
 ## Everyday commands
 
 ```bash
-docker compose logs -f ingestion-api transcription embedding kratos
+docker compose logs -f ingestion-api transcription embedding mcp-service kratos
 docker compose restart kratos              # after editing infra/kratos/kratos.yml
 docker compose down                        # stop
 docker compose down -v                     # DESTRUCTIVE: wipe postgres/kafka/minio

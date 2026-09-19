@@ -1,6 +1,6 @@
 # AGENTS.md — Checkpoint
 
-Monorepo with five separate Go modules plus firmware and a Python worker. No root module, no lint config, no Go CI.
+Monorepo with five separate Go modules plus firmware and Python services. No root module, no lint config, no Go CI.
 
 - `ingestion-service/` (module `checkpoint/ingestion`) — HTTP API `:8080`, in-process outbox dispatcher, upload cleanup, and account-deletion worker. Entrypoints: `cmd/api/main.go`, `cmd/migrate/main.go`, `cmd/device-admin/main.go`.
 - `transcription-service/` (module `transcription-service`) — Kafka worker. Entrypoint: `cmd/main.go`, `cmd/migrate/`.
@@ -8,6 +8,7 @@ Monorepo with five separate Go modules plus firmware and a Python worker. No roo
 - `rollup-service/` (module `rollup-service`) — nightly Postgres summarizer writing English daily/weekly narrative recaps to `summaries`. No Kafka. Entrypoint: `cmd/main.go`, `cmd/migrate/`.
 - `notification-service/` (module `notification-service`) — polls Postgres for due reminders and publishes push notifications to self-hosted ntfy. No Kafka. Entrypoint: `cmd/main.go`, `cmd/migrate/`.
 - `embedding-service/` — Python Kafka worker, bge-m3 → pgvector. Entrypoint: `app/main.py`, `migrate.py`.
+- `mcp-service/` — Python MCP server (official `mcp` SDK + Haystack/TurboVec) over the derived `search_documents` read model; per-account `cp_mcp_` access keys. Entrypoints: `app/main.py`, `migrate.py`. Single worker only (in-process index).
 - `firmware/checkpoint/` — PROD ESP32-S3 pendant (Arduino `.ino`). Pins/timings single source: `config.h`.
 - `firmware/tests/` — host-side pytest (grep/logic, no hardware). `firmware/host/checkpoint_client/` — Python BLE client.
 - `vad-service/` — empty placeholder (`.gitkeep` only). Ignore.
@@ -25,8 +26,8 @@ docker compose ps        # postgres + kafka should be healthy
 ```
 
 - Local dev (from `ingestion-service/`): `make infra-up` → `make migrate` (needs `DATABASE_URL`) → `make run` (API on `:8080`).
-- Compose runs `ingestion-migrate` / `transcription-migrate` / `embedding-migrate` / `extraction-migrate` / `rollup-migrate` / `notification-migrate` to `service_completed_successfully` before starting their workers. Migrations are goose (`make migrate`, `make status`).
-- Postgres init (`infra/postgres/bootstrap.sh`, first volume only) creates role `checkpoint_request` (`NOBYPASSRLS`), `checkpoint_worker` (`BYPASSRLS`) and the separate `kratos` database. Changing those passwords in `.env` later is ignored; wipe with `make infra-reset`.
+- Compose runs `ingestion-migrate` / `transcription-migrate` / `embedding-migrate` / `extraction-migrate` / `rollup-migrate` / `notification-migrate` / `mcp-migrate` to `service_completed_successfully` before starting their workers. `mcp-migrate` creates the `checkpoint_mcp` role idempotently (existing volumes included) and then applies the `search_documents` schema. Migrations are goose (`make migrate`, `make status`).
+- Postgres init (`infra/postgres/bootstrap.sh`, first volume only) creates roles `checkpoint_request` (`NOBYPASSRLS`), `checkpoint_worker` (`BYPASSRLS`), `checkpoint_mcp` (`NOBYPASSRLS`, read-only MCP) and the separate `kratos` database. Changing those passwords in `.env` later is ignored; wipe with `make infra-reset`.
 - Migrations `00007`–`00009` add `uploads.device_id NOT NULL` and device-aware idempotency, so an old dev volume must be reset (data is disposable).
 - Kratos public API is `http://localhost:4433`; the admin API is bridge-only (never published). Mailpit UI is `http://localhost:8025`.
 - `POSTGRES_PASSWORD` applies only on first volume init; changing `.env` later is ignored and the TCP-auth healthcheck goes `unhealthy`. Rotate via `make db-rotate-password NEW_PASSWORD=...` or wipe: `make infra-reset` (destructive).
@@ -102,6 +103,17 @@ docker compose ps        # postgres + kafka should be healthy
 - The Android app subscribes to `wss://<ntfy-host>/<topic>/ws` from its foreground service and shows local notifications via Notifee; it registers/clears the channel through `AuthSyncBridge`. Self-hosted ntfy does not use FCM, so background delivery requires that foreground service.
 - Deletion coupling: `user_notification_settings` and `notification_deliveries` are purged by ingestion's account-deletion worker.
 
+## MCP service quirks
+
+- `mcp-service/` exposes retrieval tools over Streamable HTTP on `:1417` (`search`, `timeline`, `list_todos`, `list_reminders`, `get_summaries`, `get_transcript`, `whoami`) for ChatGPT/Claude Code/Cursor. Built on the official `mcp` SDK with a `TokenVerifier`, not `hayhooks mcp run` (that endpoint cannot be auth-wrapped).
+- It reads only RLS-protected tables: `search_documents` + `user_settings` as `checkpoint_mcp`, and resolves keys via `mcp_resolve_key()` (SECURITY DEFINER). The indexer writes as `checkpoint_worker` (BYPASSRLS). Every query sets `app.user_id` per transaction, so a key can never read another account's rows.
+- `search_documents` is a **derived read model** rebuilt from `transcripts`/`embeddings`/`todos`/`reminders`/`insights`/`summaries`; source tables stay authoritative. Transcript chunk vectors are copied from `embeddings`; structured text is newly embedded with bge-m3. Full transcript text is stored with no embedding and served by `get_transcript`.
+- Access keys: `cp_mcp_<base32>`, SHA-256 at rest in `mcp_access_keys` (ingestion, RLS). Mint/list/revoke via `GET/POST /v1/me/mcp-keys` and `DELETE /v1/me/mcp-keys/{id}` behind Kratos auth; the secret is returned only on create. `last_used_at` is updated by the resolve function.
+- Index lifecycle: one global in-process TurboVec index (4-bit, cosine), built from `search_documents` at startup and refreshed on a ~30 s poll (`MCP_POLL_SECONDS`) that rebuilds any changed audio wholesale and embeds pending rows. TurboVec is single-process: **run exactly one replica/worker**.
+- Timestamps are returned twice (UTC and the user's IANA zone, from `user_settings.timezone` falling back to `MCP_FALLBACK_TIMEZONE`); `occurred_at = coalesce(recorded_at, created_at)` and `recorded_at` is exposed separately (nullable = pendant clock unsynced).
+- Deletion coupling: `search_documents` and `mcp_access_keys` are purged by ingestion's account-deletion worker.
+- Auth is static bearer keys today; OAuth can replace `KeyTokenVerifier`/`build_server` later. The MCP port is currently published on all interfaces — keep it behind TLS/firewall.
+
 ## Test / verify
 
 Each Go service is its own module — run from the service dir:
@@ -119,6 +131,7 @@ TEST_DATABASE_URL=postgres://... go test ./internal/storage/ -v   # notification
 - k6: `k6 run loadtest/ingestion-service/smoke.js` (`BASE_URL` env, default `http://localhost:8080`).
 - Firmware host tests: `pytest firmware/tests -v`. BLE client: `pip install bleak cryptography && python -m client_app --cli --session-token <kratos> --device-id <32hex>` (from `firmware/host/checkpoint_client`).
 - Embedding: `cd embedding-service && python -m unittest discover -s tests -v`.
+- MCP service: `cd mcp-service && python -m unittest discover -s tests -v` (pure tests run without ML deps; DB tests skip without `TEST_DATABASE_URL`). MCP end-to-end needs the stack up: mint a key via `POST /v1/me/mcp-keys`, then `claude mcp add --transport http checkpoint http://localhost:1417/mcp --header "Authorization: Bearer cp_mcp_..."`.
 - Device provisioning CLI: `DATABASE_URL=... go run ./cmd/device-admin provision -device <32hex> -claim-hash <64hex>` (also `status`, `unquarantine`, `list`, `deletions`, `delete-account`). The pendant emits the hash over USB with `auth provision`.
 - App: `cd checkpoint-app && npm run check && npm test`.
 - Admin console: `cd admin-console && npm --prefix server test && npm --prefix web test`; dev `npm run dev` (Angular :4200 + agent :4300), build `npm run build`, run `npm start`.

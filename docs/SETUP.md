@@ -239,7 +239,49 @@ docker-compose exec postgres psql -U <POSTGRES_USER> -d <POSTGRES_DB> -c \
 
 ---
 
-## 8. Native app (Expo)
+## 8. MCP service
+
+`mcp-service` makes your recordings queryable from any MCP client (Claude Code,
+Cursor, ChatGPT). It builds an in-process [TurboVec](https://github.com/RyanCodrai/turbovec)
+index over a derived `search_documents` read model covering transcript chunks,
+todos, reminders, insights and summaries, and exposes seven tools: `search`,
+`timeline`, `list_todos`, `list_reminders`, `get_summaries`, `get_transcript`
+and `whoami`.
+
+Auth is a per-account access key. Mint one from the API (needs a Kratos session)
+— the secret is returned only once:
+
+```bash
+curl -X POST http://localhost:8080/v1/me/mcp-keys \
+  -H "Authorization: Bearer <kratos session token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"claude-code"}'
+# -> {"id":1,"name":"claude-code","prefix":"cp_mcp_abc123","key":"cp_mcp_..."}
+```
+
+Point a client at the MCP endpoint with that key:
+
+```bash
+claude mcp add --transport http checkpoint http://localhost:1417/mcp \
+  --header "Authorization: Bearer cp_mcp_..."
+```
+
+Every request is scoped to the key's account (`checkpoint_mcp` role plus RLS on
+`search_documents`), so one key can never read another account's rows. Run a
+single `mcp-service` replica: the TurboVec index lives in-process.
+
+The port is published on all interfaces; put it behind TLS and a firewall before
+exposing it beyond your machine. Verify indexing after an upload flows through
+extraction:
+
+```bash
+docker-compose exec postgres psql -U <POSTGRES_USER> -d <POSTGRES_DB> -c \
+  "SELECT source_type, count(*) FROM search_documents GROUP BY 1;"
+```
+
+---
+
+## 9. Native app (Expo)
 
 The app authenticates against Kratos directly (no SDK). Point it at the Kratos
 public API with `EXPO_PUBLIC_KRATOS_URL` (defaults to `http://localhost:4433`,
@@ -282,7 +324,7 @@ npm test
 
 ---
 
-## 9. Stop containers
+## 10. Stop containers
 
 Stop and remove containers:
 
