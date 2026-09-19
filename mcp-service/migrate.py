@@ -69,18 +69,22 @@ def current_version(cur) -> int | None:
 
 
 def bootstrap_role(conn) -> None:
-    """Create the MCP role if missing. Requires CHECKPOINT_MCP_PASSWORD."""
-    password = os.getenv("CHECKPOINT_MCP_PASSWORD")
-    if not password:
-        return
+    """Create the MCP role if missing; fail fast when it cannot be created."""
     with conn.cursor() as cur:
         cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (MCP_ROLE,))
-        if cur.fetchone() is None:
-            cur.execute(
-                sql.SQL("CREATE ROLE {} LOGIN PASSWORD {} NOBYPASSRLS").format(
-                    sql.Identifier(MCP_ROLE), sql.Literal(password)
-                )
+        if cur.fetchone() is not None:
+            return
+    password = os.getenv("CHECKPOINT_MCP_PASSWORD")
+    if not password:
+        raise RuntimeError(
+            f"role {MCP_ROLE} does not exist and CHECKPOINT_MCP_PASSWORD is not set"
+        )
+    with conn.cursor() as cur:
+        cur.execute(
+            sql.SQL("CREATE ROLE {} LOGIN PASSWORD {} NOBYPASSRLS").format(
+                sql.Identifier(MCP_ROLE), sql.Literal(password)
             )
+        )
     conn.commit()
 
 
