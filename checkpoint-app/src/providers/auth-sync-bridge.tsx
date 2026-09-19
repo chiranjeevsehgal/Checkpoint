@@ -8,11 +8,12 @@ import { useCheckpoint } from '@/features/checkpoint/hooks/useCheckpoint';
 import {
   clearReminderSubscription,
   configureReminders,
-  loadReminderSubscription,
+  saveReminderSubscription,
   startReminders,
   stopReminders,
 } from '@/features/checkpoint/reminderSubscriber';
 import { syncEngine } from '@/features/checkpoint/syncEngine';
+import { enableNotifications, getNotificationSettings } from '@/lib/api/notifications-api';
 import { putUserSettings } from '@/lib/api/settings-api';
 import { getDeviceTimeZone } from '@/lib/device-timezone';
 import { getSessionToken } from '@/lib/session';
@@ -99,10 +100,30 @@ export function AuthSyncBridge({ children }: PropsWithChildren) {
 
     let cancelled = false;
     void (async () => {
-      const subscription = await loadReminderSubscription();
-      if (cancelled || !subscription) return;
-      configureReminders(subscription);
-      startReminders();
+      const token = getSessionToken();
+      if (!token) return;
+      try {
+        const channel = await getNotificationSettings(token);
+        if (!channel.enabled || !channel.topic) {
+          if (cancelled) return;
+          stopReminders();
+          configureReminders(null);
+          await clearReminderSubscription();
+          return;
+        }
+        // A channel that predates per-user auth has no token; enabling again
+        // provisions the dedicated ntfy user and returns its read token.
+        const readToken = channel.token ?? (await enableNotifications(token)).token;
+        if (cancelled) return;
+        const subscription = { ntfyUrl: channel.ntfy_url, topic: channel.topic, token: readToken };
+        await saveReminderSubscription(subscription);
+        if (cancelled) return;
+        configureReminders(subscription);
+        startReminders();
+      } catch {
+        // Offline or server error: keep the persisted subscription and retry on
+        // the next auth change or foreground.
+      }
     })();
 
     return () => {
