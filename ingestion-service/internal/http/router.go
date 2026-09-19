@@ -24,6 +24,7 @@ type Router struct {
 	sessions      *SessionHandler
 	settings      *SettingsHandler
 	notifications *NotificationHandler
+	mcpKeys       *McpKeyHandler
 	db            Pinger
 	storage       Pinger
 	reg           *metrics.Registry
@@ -39,6 +40,7 @@ type RouterDeps struct {
 	Sessions      sessionRevoker
 	Settings      settingsService
 	Notifications notificationService
+	McpKeys       mcpKeyService
 	// NTFPPublicURL is returned to clients so they can reach the ntfy server.
 	NTFPPublicURL string
 	Idem          repository.IdempotencyRepository
@@ -57,6 +59,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 		sessions:      NewSessionHandler(deps.Sessions),
 		settings:      NewSettingsHandler(deps.Settings),
 		notifications: NewNotificationHandler(deps.Notifications, deps.NTFPPublicURL),
+		mcpKeys:       NewMcpKeyHandler(deps.McpKeys),
 		db:            deps.DB,
 		storage:       deps.Storage,
 		reg:           deps.Metrics,
@@ -83,6 +86,9 @@ func NewRouter(deps RouterDeps) http.Handler {
 	mux.Handle("POST /v1/me/notifications", protected(r.notifications.Enable))
 	mux.Handle("PUT /v1/me/notifications", protected(r.notifications.Put))
 	mux.Handle("DELETE /v1/me/notifications", protected(r.notifications.Disable))
+	mux.Handle("GET /v1/me/mcp-keys", protected(r.mcpKeys.List))
+	mux.Handle("POST /v1/me/mcp-keys", protected(r.mcpKeys.Create))
+	mux.Handle("DELETE /v1/me/mcp-keys/{id}", protected(r.mcpKeys.Revoke))
 	mux.Handle("DELETE /v1/me/sessions", protected(r.sessions.Delete))
 	return mux
 }

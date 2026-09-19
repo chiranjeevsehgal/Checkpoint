@@ -101,6 +101,12 @@ func normalizeRoute(path string) string {
 		if len(parts) == 3 && parts[2] == "notifications" {
 			return "/v1/me/notifications"
 		}
+		if len(parts) == 3 && parts[2] == "mcp-keys" {
+			return "/v1/me/mcp-keys"
+		}
+		if len(parts) == 4 && parts[2] == "mcp-keys" {
+			return "/v1/me/mcp-keys/{id}"
+		}
 		return "/v1/me"
 	}
 	return "other"

@@ -134,6 +134,7 @@ func (p *Pool) PurgeIngestion(ctx context.Context, userID string) error {
 		`DELETE FROM outbox_events WHERE aggregate_id IN (SELECT id FROM uploads WHERE user_id = $1)`,
 		`DELETE FROM idempotency_keys WHERE user_id = $1`,
 		`DELETE FROM user_notification_settings WHERE user_id = $1`,
+		`DELETE FROM mcp_access_keys WHERE user_id = $1`,
 		`DELETE FROM user_settings WHERE user_id = $1`,
 		`DELETE FROM uploads WHERE user_id = $1`,
 	}
@@ -170,7 +171,7 @@ func (p *Pool) PurgeDownstream(ctx context.Context, userID string) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos", "reminders", "insights", "summaries", "notification_deliveries"} {
+	for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos", "reminders", "insights", "summaries", "notification_deliveries", "search_documents"} {
 		exists, err := tableExists(ctx, tx, table)
 		if err != nil {
 			return err
