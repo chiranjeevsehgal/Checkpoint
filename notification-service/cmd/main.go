@@ -147,10 +147,16 @@ func deliver(ctx context.Context, store *storage.PostgresStore, client *ntfy.Cli
 	log.Printf("reminder notified kind=%s user_id=%s attempts=%d", c.Kind, c.UserID, attempts)
 }
 
-// message renders the advance and due notification wording.
-func message(c model.Candidate, advance time.Duration) (string, string) {
+// message renders the advance and due notification wording. The advance uses
+// the lead the delivery was scheduled with, falling back to the configured
+// default when it is not set.
+func message(c model.Candidate, defaultAdvance time.Duration) (string, string) {
 	if c.Kind == model.KindAdvance {
-		return "Upcoming reminder", fmt.Sprintf("%s in %d minutes", c.ReminderText, int(advance.Minutes()))
+		minutes := int(defaultAdvance.Minutes())
+		if c.AdvanceSeconds > 0 {
+			minutes = c.AdvanceSeconds / 60
+		}
+		return "Upcoming reminder", fmt.Sprintf("%s in %d minutes", c.ReminderText, minutes)
 	}
 	return "Reminder", c.ReminderText
 }

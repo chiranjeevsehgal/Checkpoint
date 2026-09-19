@@ -54,6 +54,15 @@ func advanceHasUser(candidates []model.Candidate, userID string) bool {
 	return false
 }
 
+func advanceLead(candidates []model.Candidate, userID string) int {
+	for _, c := range candidates {
+		if c.UserID == userID {
+			return c.AdvanceSeconds
+		}
+	}
+	return -1
+}
+
 func TestDueCandidatesAndClaim(t *testing.T) {
 	store, pool := newTestStore(t)
 	ctx := context.Background()
@@ -117,6 +126,12 @@ func TestDueCandidatesAndClaim(t *testing.T) {
 		if c.UserID == userID && c.ReminderText == "quiet" {
 			t.Fatal("unimportant reminder must not produce an advance candidate")
 		}
+	}
+	if got := advanceLead(advance, userID); got != 900 {
+		t.Fatalf("default lead = %d seconds, want 900", got)
+	}
+	if got := advanceLead(advance, shortID); got != 300 {
+		t.Fatalf("short lead = %d seconds, want 300", got)
 	}
 
 	due, err := store.DueCandidates(ctx, model.KindDue, 15*time.Minute, 2*time.Minute, time.Hour, 30*time.Minute, 20)

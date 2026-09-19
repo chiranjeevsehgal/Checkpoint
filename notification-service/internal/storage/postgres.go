@@ -74,11 +74,12 @@ func (p *PostgresStore) DueCandidates(ctx context.Context, kind string, lead, gr
 // dueCandidates runs DueCandidates' query; withTombstone joins account_deletions
 // to skip deleted accounts.
 func (p *PostgresStore) dueCandidates(ctx context.Context, withTombstone bool, kind string, lead, grace, maxLateness, maxAdvance time.Duration, limit int) ([]model.Candidate, error) {
-	var fireExpr, window string
+	var fireExpr, leadExpr, window string
 	var args []interface{}
 	switch kind {
 	case model.KindAdvance:
 		fireExpr = `r.remind_at - make_interval(secs => COALESCE(s.advance_seconds, $1))`
+		leadExpr = `COALESCE(s.advance_seconds, $1)`
 		window = `r.remind_at > now()
 		  AND r.remind_at <= now() + make_interval(secs => $3)
 		  AND ` + fireExpr + ` <= now()
@@ -87,6 +88,7 @@ func (p *PostgresStore) dueCandidates(ctx context.Context, withTombstone bool, k
 		args = []interface{}{int(lead.Seconds()), int(grace.Seconds()), int(maxAdvance.Seconds())}
 	case model.KindDue:
 		fireExpr = `r.remind_at`
+		leadExpr = `0`
 		window = `r.remind_at <= now()
 		  AND r.remind_at >= now() - make_interval(secs => $1)`
 		args = []interface{}{int(maxLateness.Seconds())}
@@ -97,12 +99,12 @@ func (p *PostgresStore) dueCandidates(ctx context.Context, withTombstone bool, k
 	args = append(args, limit)
 
 	query := fmt.Sprintf(`
-		SELECT r.user_id::text, r.audio_id::text, r.text, s.ntfy_topic, %s
+		SELECT r.user_id::text, r.audio_id::text, r.text, s.ntfy_topic, %s, %s
 		FROM reminders r
 		JOIN user_notification_settings s
 		  ON s.user_id = r.user_id::uuid AND s.enabled AND s.ntfy_topic IS NOT NULL
 		WHERE r.remind_at IS NOT NULL
-		  AND %s`, fireExpr, window)
+		  AND %s`, fireExpr, leadExpr, window)
 	if withTombstone {
 		query += `
 		  AND NOT EXISTS (SELECT 1 FROM account_deletions d WHERE d.user_id = r.user_id::uuid)`
@@ -120,7 +122,7 @@ func (p *PostgresStore) dueCandidates(ctx context.Context, withTombstone bool, k
 	var candidates []model.Candidate
 	for rows.Next() {
 		var c model.Candidate
-		if err := rows.Scan(&c.UserID, &c.AudioID, &c.ReminderText, &c.Topic, &c.FireAt); err != nil {
+		if err := rows.Scan(&c.UserID, &c.AudioID, &c.ReminderText, &c.Topic, &c.FireAt, &c.AdvanceSeconds); err != nil {
 			return nil, err
 		}
 		c.Kind = kind
