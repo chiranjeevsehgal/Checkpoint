@@ -81,6 +81,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 	mux.Handle("PUT /v1/me/settings", protected(r.settings.Put))
 	mux.Handle("GET /v1/me/notifications", protected(r.notifications.Get))
 	mux.Handle("POST /v1/me/notifications", protected(r.notifications.Enable))
+	mux.Handle("PUT /v1/me/notifications", protected(r.notifications.Put))
 	mux.Handle("DELETE /v1/me/notifications", protected(r.notifications.Disable))
 	mux.Handle("DELETE /v1/me/sessions", protected(r.sessions.Delete))
 	return mux

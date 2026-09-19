@@ -5,12 +5,14 @@ import "context"
 // NotificationChannel is the per-user ntfy subscription. Topic is empty until
 // notifications are enabled. When per-user auth is configured, Username and
 // Token identify the dedicated ntfy user with read-only access to Topic.
+// AdvanceSeconds is the advance lead; 0 means unset (worker default).
 type NotificationChannel struct {
-	UserID   string
-	Enabled  bool
-	Topic    string
-	Username string
-	Token    string
+	UserID         string
+	Enabled        bool
+	Topic          string
+	Username       string
+	Token          string
+	AdvanceSeconds int
 }
 
 // NotificationRepository persists each user's ntfy channel. The topic is a

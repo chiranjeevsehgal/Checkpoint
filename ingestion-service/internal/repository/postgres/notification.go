@@ -18,11 +18,12 @@ func (p *Pool) GetNotificationChannel(ctx context.Context, userID string) (*repo
 
 	var enabled bool
 	var topic, username, token *string
+	var advance *int
 	err := p.WithUserTx(ctx, userID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
-			SELECT enabled, ntfy_topic, ntfy_username, ntfy_token
+			SELECT enabled, ntfy_topic, ntfy_username, ntfy_token, advance_seconds
 			FROM user_notification_settings WHERE user_id = $1`, userID).
-			Scan(&enabled, &topic, &username, &token)
+			Scan(&enabled, &topic, &username, &token, &advance)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -40,6 +41,9 @@ func (p *Pool) GetNotificationChannel(ctx context.Context, userID string) (*repo
 	if token != nil {
 		channel.Token = *token
 	}
+	if advance != nil {
+		channel.AdvanceSeconds = *advance
+	}
 	return channel, nil
 }
 
@@ -52,15 +56,16 @@ func (p *Pool) SetNotificationChannel(ctx context.Context, channel *repository.N
 	return p.WithUserTx(ctx, channel.UserID, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO user_notification_settings
-				(user_id, ntfy_topic, ntfy_username, ntfy_token, enabled, updated_at)
-			VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), $5, NOW())
+				(user_id, ntfy_topic, ntfy_username, ntfy_token, enabled, advance_seconds, updated_at)
+			VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), $5, NULLIF($6, 0), NOW())
 			ON CONFLICT (user_id) DO UPDATE
 			SET ntfy_topic = EXCLUDED.ntfy_topic,
 			    ntfy_username = EXCLUDED.ntfy_username,
 			    ntfy_token = EXCLUDED.ntfy_token,
 			    enabled = EXCLUDED.enabled,
+			    advance_seconds = EXCLUDED.advance_seconds,
 			    updated_at = NOW()`,
-			channel.UserID, channel.Topic, channel.Username, channel.Token, channel.Enabled)
+			channel.UserID, channel.Topic, channel.Username, channel.Token, channel.Enabled, channel.AdvanceSeconds)
 		return err
 	})
 }

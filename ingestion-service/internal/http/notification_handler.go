@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"checkpoint/ingestion/internal/service"
@@ -12,6 +13,7 @@ type notificationService interface {
 	Get(ctx context.Context, userID string) (*service.NotificationChannel, error)
 	Enable(ctx context.Context, userID string) (*service.NotificationChannel, error)
 	Disable(ctx context.Context, userID string) error
+	SetAdvance(ctx context.Context, userID string, minutes int) (*service.NotificationChannel, error)
 }
 
 // NotificationHandler serves the per-user ntfy channel API.
@@ -26,10 +28,15 @@ func NewNotificationHandler(notifications notificationService, ntfyURL string) *
 }
 
 type notificationResponse struct {
-	Enabled bool   `json:"enabled"`
-	NtfyURL string `json:"ntfy_url"`
-	Topic   string `json:"topic,omitempty"`
-	Token   string `json:"token,omitempty"`
+	Enabled        bool   `json:"enabled"`
+	NtfyURL        string `json:"ntfy_url"`
+	Topic          string `json:"topic,omitempty"`
+	Token          string `json:"token,omitempty"`
+	AdvanceMinutes int    `json:"advance_minutes,omitempty"`
+}
+
+type updateNotificationRequest struct {
+	AdvanceMinutes *int `json:"advance_minutes"`
 }
 
 // Get handles GET /v1/me/notifications.
@@ -76,11 +83,40 @@ func (h *NotificationHandler) Disable(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, notificationResponse{Enabled: false, NtfyURL: h.ntfyURL})
 }
 
+// Put handles PUT /v1/me/notifications, updating the advance lead time.
+func (h *NotificationHandler) Put(w http.ResponseWriter, r *http.Request) {
+	principal, ok := PrincipalFrom(r.Context())
+	if !ok {
+		writeError(w, r, http.StatusUnauthorized, CodeUnauthorized, "Missing or invalid authorization.")
+		return
+	}
+	raw, ok := readRawBody(w, r, 1<<20)
+	if !ok {
+		return
+	}
+	var req updateNotificationRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Malformed JSON request body.")
+		return
+	}
+	if req.AdvanceMinutes == nil {
+		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "advance_minutes is required.")
+		return
+	}
+	channel, err := h.notifications.SetAdvance(r.Context(), principal.UserID, *req.AdvanceMinutes)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, h.response(channel))
+}
+
 func (h *NotificationHandler) response(channel *service.NotificationChannel) notificationResponse {
 	return notificationResponse{
-		Enabled: channel.Enabled,
-		NtfyURL: h.ntfyURL,
-		Topic:   channel.Topic,
-		Token:   channel.Token,
+		Enabled:        channel.Enabled,
+		NtfyURL:        h.ntfyURL,
+		Topic:          channel.Topic,
+		Token:          channel.Token,
+		AdvanceMinutes: channel.AdvanceMinutes,
 	}
 }

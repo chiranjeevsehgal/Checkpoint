@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"checkpoint/ingestion/internal/domain"
 	"checkpoint/ingestion/internal/metrics"
 	"checkpoint/ingestion/internal/repository"
 	"checkpoint/ingestion/internal/service"
@@ -42,6 +43,20 @@ func (f *fakeNotifications) Disable(_ context.Context, _ string) error {
 	}
 	f.channel = nil
 	return nil
+}
+
+func (f *fakeNotifications) SetAdvance(_ context.Context, _ string, minutes int) (*service.NotificationChannel, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if _, err := domain.ValidateAdvanceMinutes(minutes); err != nil {
+		return nil, err
+	}
+	if f.channel == nil {
+		f.channel = &service.NotificationChannel{}
+	}
+	f.channel.AdvanceMinutes = minutes
+	return f.channel, nil
 }
 
 func notificationRouter(notifications notificationService) http.Handler {
@@ -119,11 +134,45 @@ func TestDisableNotificationsClears(t *testing.T) {
 	}
 }
 
+func TestPutNotificationsSetsAdvance(t *testing.T) {
+	r := notificationRouter(&fakeNotifications{})
+
+	req := httptest.NewRequest("PUT", "/v1/me/notifications", strings.NewReader(`{"advance_minutes":30}`))
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp notificationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.AdvanceMinutes != 30 {
+		t.Fatalf("advance_minutes = %d, want 30", resp.AdvanceMinutes)
+	}
+}
+
+func TestPutNotificationsRejectsUnknownAdvance(t *testing.T) {
+	r := notificationRouter(&fakeNotifications{})
+
+	req := httptest.NewRequest("PUT", "/v1/me/notifications", strings.NewReader(`{"advance_minutes":7}`))
+	authed(req)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestNotificationsRequireAuth(t *testing.T) {
 	r := notificationRouter(&fakeNotifications{})
 	for _, tc := range []struct{ method, target string }{
 		{"GET", "/v1/me/notifications"},
 		{"POST", "/v1/me/notifications"},
+		{"PUT", "/v1/me/notifications"},
 		{"DELETE", "/v1/me/notifications"},
 	} {
 		req := httptest.NewRequest(tc.method, tc.target, strings.NewReader(`{}`))

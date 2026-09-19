@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"checkpoint/ingestion/internal/domain"
 	"checkpoint/ingestion/internal/repository"
 )
 
@@ -186,6 +187,78 @@ func TestNotificationEnablePropagatesRepositoryError(t *testing.T) {
 
 	if _, err := svc.Enable(context.Background(), "user-1"); err == nil {
 		t.Fatal("expected repository error")
+	}
+}
+
+func TestNotificationGetDefaultsAdvance(t *testing.T) {
+	svc := NewNotificationService(&fakeNotificationRepo{}, nil)
+
+	got, err := svc.Get(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.AdvanceMinutes != domain.DefaultAdvanceMinutes {
+		t.Fatalf("advance = %d, want %d", got.AdvanceMinutes, domain.DefaultAdvanceMinutes)
+	}
+}
+
+func TestNotificationSetAdvancePersists(t *testing.T) {
+	repo := &fakeNotificationRepo{channel: &repository.NotificationChannel{Enabled: true, Topic: "cp-t"}}
+	svc := NewNotificationService(repo, nil)
+
+	got, err := svc.SetAdvance(context.Background(), "user-1", 30)
+	if err != nil {
+		t.Fatalf("set advance: %v", err)
+	}
+	if got.AdvanceMinutes != 30 {
+		t.Fatalf("advance = %d, want 30", got.AdvanceMinutes)
+	}
+	if repo.saved == nil || repo.saved.AdvanceSeconds != 1800 {
+		t.Fatalf("seconds not persisted: %+v", repo.saved)
+	}
+	if !repo.saved.Enabled || repo.saved.Topic != "cp-t" {
+		t.Fatalf("set advance must keep channel state: %+v", repo.saved)
+	}
+}
+
+func TestNotificationSetAdvanceRejectsInvalid(t *testing.T) {
+	repo := &fakeNotificationRepo{}
+	svc := NewNotificationService(repo, nil)
+
+	if _, err := svc.SetAdvance(context.Background(), "user-1", 7); !errors.Is(err, domain.ErrInvalidAdvance) {
+		t.Fatalf("want ErrInvalidAdvance, got %v", err)
+	}
+	if repo.saved != nil {
+		t.Fatalf("invalid advance must not persist, got %+v", repo.saved)
+	}
+}
+
+func TestNotificationDisablePreservesAdvance(t *testing.T) {
+	repo := &fakeNotificationRepo{channel: &repository.NotificationChannel{
+		Enabled: true, Topic: "cp-t", Username: "cp_u", Token: "tk_t", AdvanceSeconds: 1200,
+	}}
+	svc := NewNotificationService(repo, nil)
+
+	if err := svc.Disable(context.Background(), "user-1"); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if repo.saved.AdvanceSeconds != 1200 {
+		t.Fatalf("disable must keep the advance preference, got %d", repo.saved.AdvanceSeconds)
+	}
+}
+
+func TestNotificationEnablePreservesAdvance(t *testing.T) {
+	repo := &fakeNotificationRepo{channel: &repository.NotificationChannel{
+		Enabled: true, Topic: "cp-t", Username: "cp_u", Token: "tk_t", AdvanceSeconds: 1800,
+	}}
+	svc := NewNotificationService(repo, nil)
+
+	got, err := svc.Enable(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if got.AdvanceMinutes != 30 {
+		t.Fatalf("enable lost the advance preference: %+v", got)
 	}
 }
 

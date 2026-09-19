@@ -27,7 +27,7 @@ func TestNotificationChannelRoundTrip(t *testing.T) {
 	}
 
 	if err := p.SetNotificationChannel(ctx, &repository.NotificationChannel{
-		UserID: userID, Topic: "cp-abc", Username: "cp_user", Token: "tk_read", Enabled: true,
+		UserID: userID, Topic: "cp-abc", Username: "cp_user", Token: "tk_read", Enabled: true, AdvanceSeconds: 1800,
 	}); err != nil {
 		t.Fatalf("set: %v", err)
 	}
@@ -35,8 +35,8 @@ func TestNotificationChannelRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got == nil || !got.Enabled || got.Topic != "cp-abc" || got.Username != "cp_user" || got.Token != "tk_read" {
-		t.Fatalf("got %+v, want enabled cp-abc with credentials", got)
+	if got == nil || !got.Enabled || got.Topic != "cp-abc" || got.Username != "cp_user" || got.Token != "tk_read" || got.AdvanceSeconds != 1800 {
+		t.Fatalf("got %+v, want enabled cp-abc with credentials and advance", got)
 	}
 
 	if err := p.SetNotificationChannel(ctx, &repository.NotificationChannel{UserID: userID}); err != nil {

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"checkpoint/ingestion/internal/domain"
 	"checkpoint/ingestion/internal/repository"
 )
 
@@ -30,9 +31,10 @@ type NotificationProvisioner interface {
 
 // NotificationChannel is the per-user ntfy subscription returned to the API.
 type NotificationChannel struct {
-	Enabled bool
-	Topic   string
-	Token   string
+	Enabled        bool
+	Topic          string
+	Token          string
+	AdvanceMinutes int
 }
 
 // NotificationService owns reads and writes of the per-user ntfy channel.
@@ -53,9 +55,14 @@ func (s *NotificationService) Get(ctx context.Context, userID string) (*Notifica
 		return nil, err
 	}
 	if channel == nil {
-		return &NotificationChannel{}, nil
+		return &NotificationChannel{AdvanceMinutes: domain.DefaultAdvanceMinutes}, nil
 	}
-	return &NotificationChannel{Enabled: channel.Enabled, Topic: channel.Topic, Token: channel.Token}, nil
+	return &NotificationChannel{
+		Enabled:        channel.Enabled,
+		Topic:          channel.Topic,
+		Token:          channel.Token,
+		AdvanceMinutes: domain.AdvanceMinutesFromSeconds(channel.AdvanceSeconds),
+	}, nil
 }
 
 // Enable turns notifications on, minting a topic and (when configured) a
@@ -72,6 +79,7 @@ func (s *NotificationService) Enable(ctx context.Context, userID string) (*Notif
 		channel.Topic = existing.Topic
 		channel.Username = existing.Username
 		channel.Token = existing.Token
+		channel.AdvanceSeconds = existing.AdvanceSeconds
 	}
 	if channel.Topic == "" {
 		if channel.Topic, err = generateTopic(); err != nil {
@@ -87,7 +95,12 @@ func (s *NotificationService) Enable(ctx context.Context, userID string) (*Notif
 	if err := s.channels.SetNotificationChannel(ctx, channel); err != nil {
 		return nil, err
 	}
-	return &NotificationChannel{Enabled: true, Topic: channel.Topic, Token: channel.Token}, nil
+	return &NotificationChannel{
+		Enabled:        true,
+		Topic:          channel.Topic,
+		Token:          channel.Token,
+		AdvanceMinutes: domain.AdvanceMinutesFromSeconds(channel.AdvanceSeconds),
+	}, nil
 }
 
 // Disable clears the topic and credentials so old subscribers stop receiving;
@@ -108,7 +121,41 @@ func (s *NotificationService) Disable(ctx context.Context, userID string) error 
 			slog.Warn("ntfy_user_delete_failed", "user_id", userID, "error", err)
 		}
 	}
-	return s.channels.SetNotificationChannel(ctx, &repository.NotificationChannel{UserID: userID, Enabled: false})
+	return s.channels.SetNotificationChannel(ctx, &repository.NotificationChannel{
+		UserID:         userID,
+		Enabled:        false,
+		AdvanceSeconds: channel.AdvanceSeconds,
+	})
+}
+
+// SetAdvance stores the user's advance lead in minutes, keeping the channel's
+// topic and credentials. It works whether or not notifications are enabled.
+func (s *NotificationService) SetAdvance(ctx context.Context, userID string, minutes int) (*NotificationChannel, error) {
+	seconds, err := domain.ValidateAdvanceMinutes(minutes)
+	if err != nil {
+		return nil, err
+	}
+	existing, err := s.channels.GetNotificationChannel(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	channel := &repository.NotificationChannel{UserID: userID, AdvanceSeconds: seconds}
+	if existing != nil {
+		channel.Enabled = existing.Enabled
+		channel.Topic = existing.Topic
+		channel.Username = existing.Username
+		channel.Token = existing.Token
+	}
+	if err := s.channels.SetNotificationChannel(ctx, channel); err != nil {
+		return nil, err
+	}
+	return &NotificationChannel{
+		Enabled:        channel.Enabled,
+		Topic:          channel.Topic,
+		Token:          channel.Token,
+		AdvanceMinutes: domain.AdvanceMinutesFromSeconds(channel.AdvanceSeconds),
+	}, nil
 }
 
 // provision creates the ntfy user, grants read-only access to the topic, and
