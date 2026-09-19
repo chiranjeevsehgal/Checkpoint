@@ -168,10 +168,14 @@ export function McpKeysScreen() {
     const target = pendingRevoke;
     const token = getSessionToken();
     if (!target || !token) return;
-    await revokeMcpKey(token, target.id);
-    setPendingRevoke(null);
-    showToast('Key revoked');
-    await load();
+    try {
+      await revokeMcpKey(token, target.id);
+      setPendingRevoke(null);
+      showToast('Key revoked');
+      await load();
+    } catch (err) {
+      setError(describeError(err));
+    }
   }, [pendingRevoke, load, showToast]);
 
   return (
@@ -209,20 +213,20 @@ export function McpKeysScreen() {
         {created ? <RevealCard endpoint={endpoint} created={created} onCopy={copy} /> : null}
 
         <Section title="Your keys">
-          {keys === null ? (
+          {keys === null && !error ? (
             <Text variant="muted">Loading…</Text>
-          ) : keys.length === 0 ? (
+          ) : keys !== null && keys.length === 0 ? (
             <EmptyState
               title="No keys yet"
               hint="Create a key to connect Claude Code, Cursor or another MCP client."
             />
-          ) : (
+          ) : keys !== null ? (
             <View className="gap-3">
               {keys.map((key) => (
                 <KeyRow key={key.id} item={key} onRevoke={(item) => setPendingRevoke(item)} />
               ))}
             </View>
-          )}
+          ) : null}
         </Section>
 
         {error ? <Text className="text-destructive">{error}</Text> : null}
