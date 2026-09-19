@@ -51,6 +51,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       CHECKPOINT_REQUEST_PASSWORD: ${CHECKPOINT_REQUEST_PASSWORD:-checkpoint_request_password}
       CHECKPOINT_WORKER_PASSWORD: ${CHECKPOINT_WORKER_PASSWORD:-checkpoint_worker_password}
+      CHECKPOINT_MCP_PASSWORD: ${CHECKPOINT_MCP_PASSWORD:-checkpoint_mcp_password}
       KRATOS_DB_PASSWORD: ${KRATOS_DB_PASSWORD:-kratos_db_password}
       PGDATA: /var/lib/postgresql/data/pgdata
       TZ: Asia/Kolkata
@@ -380,6 +381,48 @@ services:
       CONFIG_PATH: /app/config.yaml
       POSTGRES_DSN: postgres://checkpoint_worker:${CHECKPOINT_WORKER_PASSWORD:-checkpoint_worker_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       NTFY_TOKEN: ${NTFY_TOKEN:-tk_checkpointdevpublishtoken0001}
+    restart: unless-stopped
+
+  mcp-migrate:
+    build:
+      context: ./mcp-service
+      target: migrate
+    container_name: mcp-migrate
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      notification-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      CHECKPOINT_MCP_PASSWORD: ${CHECKPOINT_MCP_PASSWORD:-checkpoint_mcp_password}
+
+  mcp-service:
+    build:
+      context: ./mcp-service
+      target: worker
+    container_name: mcp-service
+    networks:
+      - backend
+    ports:
+      - "1417:1417"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mcp-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_MCP_URL: postgres://checkpoint_mcp:${CHECKPOINT_MCP_PASSWORD:-checkpoint_mcp_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      DATABASE_WORKER_URL: postgres://checkpoint_worker:${CHECKPOINT_WORKER_PASSWORD:-checkpoint_worker_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 1417
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://localhost:1417}
+      MCP_TURBOVEC_BITS: ${MCP_TURBOVEC_BITS:-4}
+      MCP_POLL_SECONDS: ${MCP_POLL_SECONDS:-30}
+      MCP_FALLBACK_TIMEZONE: ${SUMMARIES_TIMEZONE:-Asia/Kolkata}
     restart: unless-stopped
 
   ntfy:

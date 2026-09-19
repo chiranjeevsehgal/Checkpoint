@@ -10,6 +10,9 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
       IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'checkpoint_worker') THEN
         CREATE ROLE checkpoint_worker LOGIN PASSWORD '${CHECKPOINT_WORKER_PASSWORD}' BYPASSRLS;
       END IF;
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'checkpoint_mcp') THEN
+        CREATE ROLE checkpoint_mcp LOGIN PASSWORD '${CHECKPOINT_MCP_PASSWORD}' NOBYPASSRLS;
+      END IF;
       IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'kratos') THEN
         CREATE ROLE kratos LOGIN PASSWORD '${KRATOS_DB_PASSWORD}';
       END IF;
