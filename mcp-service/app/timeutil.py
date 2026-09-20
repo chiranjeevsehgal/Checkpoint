@@ -21,6 +21,10 @@ def resolve_zone(name: str | None, fallback: str) -> ZoneInfo:
     return ZoneInfo("UTC")
 
 
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def as_utc(value: datetime) -> datetime:
     """Treat a naive timestamp as UTC and return an aware datetime."""
     if value.tzinfo is None:

@@ -1,0 +1,87 @@
+"""Pure response shaping for the MCP tools.
+
+Free of mcp/auth/DB imports so the envelope and formatting stay unit-testable
+without the MCP or ML dependencies, mirroring timeutil.py and documents.py.
+"""
+
+from . import timeutil
+
+
+def envelope(payload: dict, zone, as_of=None) -> dict:
+    response = dict(payload)
+    response["now"] = timeutil.dual(timeutil.utc_now(), zone)
+    if zone is not None:
+        response["timezone"] = str(zone)
+    if as_of is not None and zone is not None:
+        response["as_of"] = timeutil.dual(as_of, zone)
+    return response
+
+
+def error(code: str, message: str, zone=None, as_of=None) -> dict:
+    return envelope({"error": message, "code": code}, zone, as_of)
+
+
+def with_empty_note(payload: dict, message: str) -> dict:
+    if payload.get("count") == 0:
+        payload["message"] = message
+    return payload
+
+
+def window_text(text: str, offset: int = 0, max_chars: int | None = None) -> tuple[str, bool]:
+    """Slice text from offset and report whether more characters remain."""
+    window = text[max(0, offset):]
+    if max_chars is not None and len(window) > max_chars:
+        return window[:max_chars], True
+    return window, False
+
+
+_CONCISE_DROP = frozenset({"source_id", "language", "chunk_index", "important", "audio_id", "score"})
+
+
+def project(row: dict, concise: bool = False) -> dict:
+    """Drop technical identifiers when a caller asks for concise output."""
+    if not concise:
+        return row
+    return {key: value for key, value in row.items() if key not in _CONCISE_DROP}
+
+
+def format_row(row: dict, zone, max_chars: int | None = None, concise: bool = False) -> dict:
+    text, truncated = window_text(row["content"], 0, max_chars)
+    return project({
+        "type": row["source_type"],
+        "text": text,
+        "truncated": truncated,
+        "source_id": row["source_id"],
+        "language": row["language"],
+        "chunk_index": row["chunk_index"],
+        "important": row["important"],
+        "occurred_at": timeutil.dual(row["occurred_at"], zone),
+        "recorded_at": timeutil.dual(row["recorded_at"], zone),
+        "remind_at": timeutil.dual(row["reminded_at"], zone),
+        "is_done": row["is_done"],
+        "period": row["period"],
+        "period_start": row["period_start"].isoformat() if row["period_start"] else None,
+        "audio_id": str(row["audio_id"]) if row["audio_id"] else None,
+    }, concise)
+
+
+def format_document(document, zone, max_chars: int | None = None, concise: bool = False) -> dict:
+    meta = document.meta or {}
+    text, truncated = window_text(document.content, 0, max_chars)
+    return project({
+        "type": meta.get("source_type"),
+        "text": text,
+        "truncated": truncated,
+        "source_id": meta.get("source_id"),
+        "language": meta.get("language"),
+        "chunk_index": meta.get("chunk_index"),
+        "important": meta.get("important"),
+        "score": round(document.score, 4) if document.score is not None else None,
+        "occurred_at": timeutil.dual(timeutil.loads(meta.get("occurred_at")), zone),
+        "recorded_at": timeutil.dual(timeutil.loads(meta.get("recorded_at")), zone),
+        "remind_at": timeutil.dual(timeutil.loads(meta.get("reminded_at")), zone),
+        "is_done": meta.get("is_done"),
+        "period": meta.get("period"),
+        "period_start": meta.get("period_start"),
+        "audio_id": meta.get("audio_id"),
+    }, concise)

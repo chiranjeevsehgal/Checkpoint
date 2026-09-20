@@ -82,6 +82,7 @@ class Indexer:
         self._index = index
         self._batch_size = batch_size
         self._conn = None
+        self.last_synced_at = None
 
     def connect(self) -> None:
         if psycopg is None:
@@ -111,6 +112,7 @@ class Indexer:
         self._sync_sources(cycle_now)
         self._sync_summaries(cycle_now)
         self._embed_pending()
+        self.last_synced_at = cycle_now
 
     def _sync_sources(self, cycle_now: datetime) -> None:
         watermark = self._watermark(SOURCE_WATERMARK)

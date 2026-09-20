@@ -51,14 +51,16 @@ def _auth_settings(cfg, allow_registration: bool) -> AuthSettings:
     )
 
 
-def build_server(cfg, store: ReadStore, index, embedder: Embedder, oauth_store: OAuthStore | None = None) -> MCPServer:
+def build_server(cfg, store: ReadStore, index, embedder: Embedder,
+                 oauth_store: OAuthStore | None = None, as_of=None) -> MCPServer:
     if oauth_store is not None:
         provider = CheckpointOAuthProvider(
             oauth_store, cfg.public_url, cfg.database_mcp_url,
             set(cfg.oauth_allowed_redirect_hosts), cfg.oauth_access_ttl_seconds,
             cfg.oauth_refresh_ttl_seconds,
         )
-        server = MCPServer("checkpoint", auth_server_provider=provider, auth=_auth_settings(cfg, True))
+        server = MCPServer("checkpoint", auth_server_provider=provider, auth=_auth_settings(cfg, True),
+                           instructions=tools.GROUNDING)
         register_oauth_routes(server, provider, oauth_store, cfg.oauth_session_secret,
                               cfg.kratos_public_url, cfg.public_url)
     else:
@@ -66,8 +68,10 @@ def build_server(cfg, store: ReadStore, index, embedder: Embedder, oauth_store: 
             "checkpoint",
             token_verifier=auth.KeyTokenVerifier(cfg.database_mcp_url),
             auth=_auth_settings(cfg, False),
+            instructions=tools.GROUNDING,
         )
-    tools.register(server, store, index, embedder, cfg.fallback_timezone)
+    tools.register(server, store, index, embedder, cfg.fallback_timezone, cfg.kratos_admin_url,
+                   cfg.max_text_chars, as_of=as_of)
     return server
 
 
@@ -95,7 +99,8 @@ def main() -> None:
     stop = threading.Event()
     threading.Thread(target=_index_loop, args=(indexer, cfg.poll_seconds, stop), daemon=True).start()
 
-    server = build_server(cfg, store, index, embedder, oauth_store)
+    server = build_server(cfg, store, index, embedder, oauth_store,
+                          as_of=lambda: indexer.last_synced_at)
     try:
         server.run(transport="streamable-http", host=cfg.host, port=cfg.port)
     finally:
