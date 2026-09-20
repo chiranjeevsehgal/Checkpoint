@@ -15,9 +15,12 @@ from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
     AuthorizationParams,
+    AuthorizeError,
     OAuthAuthorizationServerProvider,
     OAuthToken,
     RefreshToken,
+    RegistrationError,
+    TokenError,
 )
 from mcp.shared.auth import OAuthClientInformationFull
 
@@ -61,14 +64,14 @@ class CheckpointOAuthProvider(OAuthAuthorizationServerProvider):
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         for uri in client_info.redirect_uris or []:
             if not self.redirect_allowed(str(uri)):
-                raise ValueError(f"redirect_uri host not allowed: {uri}")
+                raise RegistrationError("invalid_redirect_uri", f"redirect_uri host not allowed: {uri}")
         await asyncio.to_thread(self._store.save_client, client_info.client_id, client_info.model_dump_json())
 
     # --- authorization -------------------------------------------------------
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
         if not self.redirect_allowed(str(params.redirect_uri)):
-            raise ValueError("redirect_uri host not allowed")
+            raise AuthorizeError("invalid_request", "redirect_uri host not allowed")
         scopes = " ".join(params.scopes) if params.scopes else SCOPE
         request_id = await asyncio.to_thread(
             self._store.create_auth_request,
@@ -96,7 +99,7 @@ class CheckpointOAuthProvider(OAuthAuthorizationServerProvider):
     ) -> OAuthToken:
         code_hash = hash_secret(authorization_code.code)
         if not await asyncio.to_thread(self._store.consume_code, code_hash):
-            raise ValueError("authorization code already used")
+            raise TokenError("invalid_grant", "authorization code already used")
         return await self._issue_tokens(
             client.client_id, authorization_code.subject or "", authorization_code.scopes,
             authorization_code.resource,
@@ -151,7 +154,7 @@ class CheckpointOAuthProvider(OAuthAuthorizationServerProvider):
     async def _issue_tokens(self, client_id: str, user_id: str, scopes: list[str],
                             resource: str | None) -> OAuthToken:
         if not user_id:
-            raise ValueError("missing token subject")
+            raise TokenError("invalid_grant", "missing token subject")
         access = ACCESS_PREFIX + secrets.token_urlsafe(32)
         refresh = REFRESH_PREFIX + secrets.token_urlsafe(32)
         scope_text = " ".join(scopes) if scopes else SCOPE
