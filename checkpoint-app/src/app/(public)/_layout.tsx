@@ -6,7 +6,7 @@ import { useAuth } from '@/features/auth/hooks/useAuth';
 export default function PublicLayout() {
   const { status } = useAuth();
   if (status === 'loading') return <LoadingScreen message="Starting…" />;
-  if (status === 'authenticated' || status === 'unavailable') {
+  if (status === 'authenticated' || status === 'unavailable' || status === 'reconnecting') {
     return <Redirect href="/(app)/(tabs)/connect" />;
   }
   return (

@@ -12,6 +12,7 @@ import { useAuth } from '@/features/auth/hooks/useAuth';
 import { passwordMeetsLength } from '@/features/auth/password-policy';
 import { PasswordRules } from '@/features/auth/password-rules';
 import { deleteAccount } from '@/lib/api/account-api';
+import { requireDeviceCheck } from '@/lib/biometric';
 import { getSessionToken } from '@/lib/session';
 
 export function AccountScreen() {
@@ -66,6 +67,8 @@ export function AccountScreen() {
     setBusy(true);
     setError(null);
     try {
+      const allowed = await requireDeviceCheck('Confirm it is you to delete your account.');
+      if (!allowed) return;
       await confirmEmailVerification(deleteCode.trim());
       const token = getSessionToken();
       if (!token) throw new Error('Not signed in.');

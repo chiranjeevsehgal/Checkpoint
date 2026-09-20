@@ -7,7 +7,7 @@ export default function Index() {
   const { status } = useAuth();
   if (status === 'loading') return <LoadingScreen message="Starting…" />;
   if (status === 'unverified') return <Redirect href="/(public)/verify-email" />;
-  if (status === 'authenticated' || status === 'unavailable') {
+  if (status === 'authenticated' || status === 'unavailable' || status === 'reconnecting') {
     return <Redirect href="/(app)/(tabs)/connect" />;
   }
   return <Redirect href="/(public)/sign-in" />;

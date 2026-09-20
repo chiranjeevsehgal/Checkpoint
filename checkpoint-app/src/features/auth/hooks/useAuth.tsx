@@ -9,6 +9,7 @@ import {
   hasPendingVerification,
   initializeAuth,
   reauthenticate,
+  reconnectAuth,
   requestEmailVerification,
   requestPasswordRecovery,
   signIn,
@@ -25,11 +26,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
     void initializeAuth();
   }, []);
 
-  // Retry the session check when the user returns to the app after an outage.
+  // Retry the session check with backoff after an outage, and again whenever
+  // the user returns to the app.
   useEffect(() => {
     if (status !== 'unavailable') return;
+    void reconnectAuth();
     const subscription = AppState.addEventListener('change', (next) => {
-      if (next === 'active') void initializeAuth();
+      if (next === 'active') void reconnectAuth();
     });
     return () => subscription.remove();
   }, [status]);

@@ -1,5 +1,11 @@
 export type AuthStatus =
-  'loading' | 'anonymous' | 'unverified' | 'authenticated' | 'unavailable' | 'deleting';
+  | 'loading'
+  | 'anonymous'
+  | 'unverified'
+  | 'authenticated'
+  | 'unavailable'
+  | 'reconnecting'
+  | 'deleting';
 
 export interface AuthState {
   status: AuthStatus;
