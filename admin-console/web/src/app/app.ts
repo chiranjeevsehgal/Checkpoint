@@ -4,6 +4,8 @@ import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } fro
 import { filter, map, startWith } from 'rxjs';
 
 import { EventsService, isTaskBusy } from './core/events';
+import { ApiService } from './core/api';
+import { setAgentToken } from './core/auth-token';
 
 const THEME_KEY = 'ck-admin-theme';
 
@@ -33,10 +35,14 @@ const NAV_ITEMS: NavItem[] = [
 export class App {
   private readonly events = inject(EventsService);
   private readonly router = inject(Router);
+  private readonly api = inject(ApiService);
 
   protected readonly navItems = NAV_ITEMS;
   protected readonly dark = signal(readStoredTheme());
   protected readonly busy = computed(() => isTaskBusy(this.events.taskEvents()));
+  protected readonly locked = signal(false);
+  protected readonly unlockError = signal('');
+  protected readonly tokenInput = signal('');
 
   protected readonly title = toSignal(
     this.router.events.pipe(
@@ -50,11 +56,32 @@ export class App {
   constructor() {
     this.events.connectTasks();
     applyTheme(this.dark());
+    void this.checkAuth();
   }
 
   protected toggleTheme(): void {
     this.dark.update((value) => !value);
     applyTheme(this.dark());
+  }
+
+  protected unlock(): void {
+    setAgentToken(this.tokenInput().trim());
+    this.tokenInput.set('');
+    this.unlockError.set('');
+    void this.checkAuth();
+  }
+
+  private async checkAuth(): Promise<void> {
+    try {
+      await this.api.config();
+      if (this.locked()) this.events.reconnectTasks();
+      this.locked.set(false);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'unauthorized') {
+        this.locked.set(true);
+        this.unlockError.set('The agent needs its token (ADMIN_TOKEN).');
+      }
+    }
   }
 
   private currentTitle(): string {

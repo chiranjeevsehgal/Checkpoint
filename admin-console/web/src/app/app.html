@@ -1,3 +1,30 @@
+@if (locked()) {
+  <div class="app-shell">
+    <div class="body">
+      <main class="main">
+        <div class="container unlock">
+          <h1 class="page-title">Checkpoint Admin</h1>
+          <p>This agent requires its token to continue.</p>
+          @if (unlockError()) {
+            <p class="error" role="alert">{{ unlockError() }}</p>
+          }
+          <div class="field">
+            <label for="unlock-token">Agent token (ADMIN_TOKEN)</label>
+            <input
+              id="unlock-token"
+              type="password"
+              autocomplete="off"
+              [value]="tokenInput()"
+              (input)="tokenInput.set($any($event.target).value)"
+              (keydown.enter)="unlock()"
+            />
+          </div>
+          <button class="btn btn-primary" type="button" (click)="unlock()">Unlock</button>
+        </div>
+      </main>
+    </div>
+  </div>
+} @else {
 <div class="app-shell">
   <aside class="sidebar">
     <div class="brand">Checkpoint<span>.</span>Admin</div>
@@ -33,3 +60,4 @@
     </main>
   </div>
 </div>
+}
