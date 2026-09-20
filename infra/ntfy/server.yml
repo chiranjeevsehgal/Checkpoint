@@ -8,15 +8,18 @@
 #
 # Tokens are deliberately NOT defined here. docker-compose injects
 # NTFY_AUTH_TOKENS from NTFY_ADMIN_TOKEN/NTFY_TOKEN (.env), so ntfy and the app
-# services share one source of truth. Users and ACL stay here because they do
-# not track .env.
+# services share one source of truth.
+#
+# Password hashes are NOT committed here either. docker-compose injects
+# NTFY_AUTH_USERS from NTFY_ADMIN_PASS_HASH/NTFY_PUBLISHER_PASS_HASH (.env;
+# throwaway dev defaults live in docker-compose.yaml). Generate a hash with
+# `ntfy user hash <password>` and rotate the live user.db after changing it:
+# `docker compose exec ntfy ntfy user change-pass <user>`, or wipe the
+# ntfy-data volume. ACLs stay here because they do not track .env.
 base-url: "http://localhost:8085"
 listen-http: ":80"
 cache-file: "/var/lib/ntfy/cache.db"
 auth-file: "/var/lib/ntfy/user.db"
 auth-default-access: "deny-all"
-auth-users:
-  - "checkpoint-admin:$2a$10$YLiO8U21sX1uhZamTLJXHuxgVC0Z/GKISibrKCLohPgtG7yIxSk4C:admin"
-  - "checkpoint-publisher:$2a$10$YLiO8U21sX1uhZamTLJXHuxgVC0Z/GKISibrKCLohPgtG7yIxSk4C:user"
 auth-access:
   - "checkpoint-publisher:cp-*:write-only"
