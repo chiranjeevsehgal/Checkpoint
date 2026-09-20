@@ -20,7 +20,7 @@ groq:
 
 batch:
   # Exactly-N batching: one LLM call per user once this many transcripts are
-  size: 10
+  size: 1
   poll_interval_seconds: 5
   # Flush a partial batch once its oldest item is this old, so a low-volume
   # user's transcript is never stranded waiting for a full batch.
