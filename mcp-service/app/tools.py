@@ -5,7 +5,7 @@ no prose is generated server-side. Timestamps come back twice (UTC and the
 user's local zone) so the model never has to guess a timezone.
 """
 
-from . import documents, presentation, timeutil
+from . import documents, presentation, retrieval, timeutil
 from . import search as semantic
 from .auth import current_user_id
 from .identity import fetch_name
@@ -78,10 +78,8 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
         filters = semantic.build_filters(user_id, selected_types(types), start_at, end_at)
-        vector = embedder.embed([query])[0]
-        results = semantic.scoped(index.search(vector, filters, clamp(limit)), user_id)
-        if min_score is not None:
-            results = [d for d in results if d.score is not None and d.score >= min_score]
+        results = retrieval.retrieve(
+            index, embedder, user_id, query, filters, clamp(limit), min_score)
         payload = {
             "count": len(results),
             "results": [presentation.format_document(d, zone) for d in results],
