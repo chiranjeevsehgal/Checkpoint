@@ -133,8 +133,9 @@ type FailureRecord struct {
 	OriginalEventID string
 	SourceService   string
 	SourceTopic     string
-	// MessageKey is the Kafka key of the original message so re-delivery
-	// lands on the same source-topic partition; empty when there was none.
+	// MessageKey is the Kafka key of the original message, preserved on
+	// re-delivery for traceability; consumers are idempotent upserters, so
+	// re-delivery need not land on the original partition.
 	MessageKey      string
 	// UserID is empty when the original event carries no user_id.
 	UserID          string

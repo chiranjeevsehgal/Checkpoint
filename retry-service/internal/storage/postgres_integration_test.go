@@ -256,11 +256,22 @@ func TestReclaimStaleAndPruneTerminal(t *testing.T) {
 	if _, _, err := store.RecordFailure(ctx, done, 2, 0); err != nil {
 		t.Fatalf("record: %v", err)
 	}
+	// The reclaimed row is also due again; claim everything and dispatch
+	// only the row under test.
 	jobs, err := store.ClaimDue(ctx, 10)
-	if err != nil || len(jobs) != 1 {
-		t.Fatalf("claim: jobs=%d err=%v", len(jobs), err)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
 	}
-	if err := store.MarkDispatched(ctx, jobs[0].ID); err != nil {
+	var doneJob *model.RetryJob
+	for i := range jobs {
+		if jobs[i].OriginalEventID == done.OriginalEventID {
+			doneJob = &jobs[i]
+		}
+	}
+	if doneJob == nil {
+		t.Fatalf("claim did not return the row under test (%d jobs)", len(jobs))
+	}
+	if err := store.MarkDispatched(ctx, doneJob.ID); err != nil {
 		t.Fatalf("mark dispatched: %v", err)
 	}
 	// Backdate the dispatched row past the retention window.

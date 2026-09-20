@@ -12,7 +12,9 @@ CREATE TABLE retry_jobs (
     source_topic      TEXT NOT NULL,
     message_key       TEXT,
     user_id           UUID,
-    original_payload  JSONB NOT NULL,
+    -- BYTEA, not JSONB: the original payload must survive the round trip
+    -- byte-identical; JSONB would reorder keys and respace the document.
+    original_payload  BYTEA NOT NULL,
     status            TEXT NOT NULL DEFAULT 'pending'
                       CHECK (status IN ('pending','processing','dispatched','failed','skipped')),
     attempts          INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),

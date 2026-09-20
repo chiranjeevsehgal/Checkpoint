@@ -111,7 +111,7 @@ func (p *PostgresStore) RecordFailure(ctx context.Context, rec model.FailureReco
 				original_event_id, source_service, source_topic, message_key, user_id,
 				original_payload, next_attempt_at, last_stage, last_error_code, last_error, attempt_log
 			) VALUES (
-				$1, $2, $3, NULLIF($4, ''), NULLIF($5, '')::uuid, $6::jsonb,
+				$1, $2, $3, NULLIF($4, ''), NULLIF($5, '')::uuid, $6,
 				now() + make_interval(secs => $7), $8, $9, $10, jsonb_build_array($11::jsonb)
 			)`,
 			rec.OriginalEventID, rec.SourceService, rec.SourceTopic, rec.MessageKey, rec.UserID,
@@ -138,27 +138,37 @@ func (p *PostgresStore) RecordFailure(ctx context.Context, rec model.FailureReco
 		return model.OutcomeTerminal, attempts, nil
 
 	case "dispatched":
-		outcome := model.OutcomeRearmed
 		if attempts >= maxAttempts {
-			outcome = model.OutcomeFailed
+			if _, err := tx.Exec(ctx, `
+				UPDATE retry_jobs SET
+					status = 'failed', failed_at = now(),
+					last_stage = $1, last_error_code = $2, last_error = $3,
+					attempt_log = retry_jobs.attempt_log || $4::jsonb,
+					updated_at = now()
+				WHERE id = $5`,
+				rec.Entry.Stage, rec.Entry.ErrorCode, truncateErr(rec.Entry.ErrorMessage), entryJSON, id); err != nil {
+				return 0, 0, fmt.Errorf("failing retry job: %w", err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return 0, 0, fmt.Errorf("committing record-failure tx: %w", err)
+			}
+			return model.OutcomeFailed, attempts, nil
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE retry_jobs SET
-				status = CASE WHEN $7 THEN 'failed' ELSE 'pending' END,
-				failed_at = CASE WHEN $7 THEN now() ELSE failed_at END,
-				next_attempt_at = CASE WHEN $7 THEN next_attempt_at ELSE now() + make_interval(secs => $8) END,
-				last_stage = $9, last_error_code = $10, last_error = $11,
-				attempt_log = retry_jobs.attempt_log || $12::jsonb,
+				status = 'pending',
+				next_attempt_at = now() + make_interval(secs => $1),
+				last_stage = $2, last_error_code = $3, last_error = $4,
+				attempt_log = retry_jobs.attempt_log || $5::jsonb,
 				updated_at = now()
-			WHERE id = $13`,
-			outcome == model.OutcomeFailed, int(delay.Seconds()),
-			rec.Entry.Stage, rec.Entry.ErrorCode, truncateErr(rec.Entry.ErrorMessage), entryJSON, id); err != nil {
-			return 0, 0, fmt.Errorf("updating retry job: %w", err)
+			WHERE id = $6`,
+			int(delay.Seconds()), rec.Entry.Stage, rec.Entry.ErrorCode, truncateErr(rec.Entry.ErrorMessage), entryJSON, id); err != nil {
+			return 0, 0, fmt.Errorf("re-arming retry job: %w", err)
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return 0, 0, fmt.Errorf("committing record-failure tx: %w", err)
 		}
-		return outcome, attempts, nil
+		return model.OutcomeRearmed, attempts, nil
 
 	default: // pending or processing: duplicate handoff before a dispatch
 		if _, err := tx.Exec(ctx, `
