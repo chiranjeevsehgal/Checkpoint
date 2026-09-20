@@ -1,0 +1,10 @@
+# Public TLS for the MCP hostname. Caddy obtains and renews a Let's Encrypt
+# certificate for 160-236-239-95.sslip.io (sslip.io resolves the name to the
+# server IP). The OAuth authorization server and the MCP resource server are
+# the same mcp-service process, so every path is proxied there:
+#   /.well-known/oauth-authorization-server, /.well-known/oauth-protected-resource
+#   /authorize, /token, /register, /revoke, /login, /consent, /mcp
+160-236-239-95.sslip.io {
+	encode gzip
+	reverse_proxy mcp-service:1417
+}
