@@ -5,6 +5,8 @@ no prose is generated server-side. Timestamps come back twice (UTC and the
 user's local zone) so the model never has to guess a timezone.
 """
 
+from mcp.types import ToolAnnotations
+
 from . import documents, presentation, retrieval, timeutil
 from . import search as semantic
 from .auth import current_user_id
@@ -14,6 +16,9 @@ from .store import DocumentQuery
 MAX_LIMIT = 200
 _TODO_STATUS = {"all": None, "open": False, "done": True}
 _REMINDER_WINDOWS = ("upcoming", "past", "all")
+_RESPONSE_FORMATS = ("detailed", "concise")
+
+READ_ONLY = ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False)
 
 GROUNDING = (
     "Answer only from tool results. Cite type, source_id and occurred_at for each claim. "
@@ -46,15 +51,25 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
     def fail(code: str, message: str, zone=None) -> dict:
         return presentation.error(code, message, zone, as_of_value())
 
-    def row_view(row: dict, zone) -> dict:
-        return presentation.format_row(row, zone, max_text_chars)
+    def format_problem(response_format: str):
+        if response_format not in _RESPONSE_FORMATS:
+            return fail("invalid_response_format", "response_format must be detailed or concise")
+        return None
 
-    def document_view(document, zone) -> dict:
-        return presentation.format_document(document, zone, max_text_chars)
+    def row_view(row: dict, zone, concise: bool = False) -> dict:
+        return presentation.format_row(row, zone, max_text_chars, concise)
 
-    @mcp.tool()
+    def document_view(document, zone, concise: bool = False) -> dict:
+        return presentation.format_document(document, zone, max_text_chars, concise)
+
+    @mcp.tool(title="Account info", annotations=READ_ONLY)
     def whoami() -> dict:
-        """Report the authenticated account, its display name, timezone, and the searchable types."""
+        """Return the authenticated account's identity and working context.
+
+        Call this first: it gives the account name, the IANA timezone used by
+        every timestamp, and the exact `types` values accepted by search and
+        timeline. Also carries grounding `guidance` and the response `now`.
+        """
         user_id = current_user_id()
         if user_id is None:
             return fail("unauthenticated", "unauthenticated")
@@ -66,7 +81,7 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
             "guidance": GROUNDING,
         }, zone)
 
-    @mcp.tool()
+    @mcp.tool(title="Search recordings", annotations=READ_ONLY)
     def search(
         query: str,
         types: list[str] | None = None,
@@ -74,8 +89,14 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
         end: str | None = None,
         min_score: float | None = None,
         limit: int = 10,
+        response_format: str = "detailed",
     ) -> dict:
-        """Semantic search across transcripts, todos, reminders, insights and summaries.
+        """Find relevant moments across all recordings by meaning (semantic search).
+
+        Use for open-ended questions ("what did I say about the launch?"). Results
+        are ranked by similarity, not time, and one recording may appear as several
+        transcript chunks (see `chunk_index`; -1 means a whole item). Prefer narrow
+        queries. To read a full recording, pass its `audio_id` to get_transcript.
 
         Args:
             query: Natural-language question or phrase.
@@ -84,12 +105,17 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
             end: Range end, inclusive.
             min_score: Optional minimum similarity score; results below it are dropped.
             limit: Maximum number of results (1-200).
+            response_format: "detailed" (default, includes ids) or "concise" (content only).
         """
         user_id = current_user_id()
         if user_id is None:
             return fail("unauthenticated", "unauthenticated")
         if not query.strip():
             return fail("invalid_query", "query must not be empty")
+        problem = format_problem(response_format)
+        if problem is not None:
+            return problem
+        concise = response_format == "concise"
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
         filters = semantic.build_filters(user_id, selected_types(types), start_at, end_at)
@@ -97,19 +123,24 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
             index, embedder, user_id, query, filters, clamp(limit), min_score)
         payload = {
             "count": len(results),
-            "results": [document_view(d, zone) for d in results],
+            "results": [document_view(d, zone, concise) for d in results],
         }
         return respond(presentation.with_empty_note(payload, "No matching documents."), zone)
 
-    @mcp.tool()
+    @mcp.tool(title="Timeline", annotations=READ_ONLY)
     def timeline(
         start: str,
         end: str,
         types: list[str] | None = None,
         limit: int = 100,
         offset: int = 0,
+        response_format: str = "detailed",
     ) -> dict:
-        """Everything recorded in a time window, newest first.
+        """List everything recorded in a time window, newest first.
+
+        Use when the user asks what happened on or around a date, or to browse.
+        Chronological, unlike search. Long items are capped and flagged with
+        `truncated`; read a full recording via get_transcript(audio_id).
 
         Args:
             start: Window start as YYYY-MM-DD (your timezone) or an ISO-8601 instant.
@@ -117,27 +148,37 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
             types: Optional subset of transcript, todo, reminder, insight, summary.
             limit: Maximum number of items (1-200).
             offset: Number of items to skip, for paging.
+            response_format: "detailed" (default) or "concise".
         """
         user_id = current_user_id()
         if user_id is None:
             return fail("unauthenticated", "unauthenticated")
+        problem = format_problem(response_format)
+        if problem is not None:
+            return problem
+        concise = response_format == "concise"
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
         rows = store.fetch(user_id, DocumentQuery(
             source_types=selected_types(types), start=start_at, end=end_at,
             chunk_index=documents.WHOLE_DOCUMENT, limit=clamp(limit), offset=max(0, offset)))
-        payload = {"count": len(rows), "items": [row_view(r, zone) for r in rows]}
+        payload = {"count": len(rows), "items": [row_view(r, zone, concise) for r in rows]}
         return respond(presentation.with_empty_note(payload, "No items in this window."), zone)
 
-    @mcp.tool()
+    @mcp.tool(title="List todos", annotations=READ_ONLY)
     def list_todos(
         status: str = "all",
         start: str | None = None,
         end: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        response_format: str = "detailed",
     ) -> dict:
-        """Todos extracted from recordings.
+        """List action items extracted from recordings.
+
+        Use to check outstanding work; filter with `status`. A recording's todos
+        reflect its latest extraction (replaced, not accumulated). Prefer this over
+        search when the user wants the full todo list rather than a specific match.
 
         Args:
             status: One of all, open, done.
@@ -145,29 +186,39 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
             end: Optional range end, inclusive.
             limit: Maximum number of todos (1-200).
             offset: Number of todos to skip, for paging.
+            response_format: "detailed" (default) or "concise".
         """
         user_id = current_user_id()
         if user_id is None:
             return fail("unauthenticated", "unauthenticated")
         if status.lower() not in _TODO_STATUS:
             return fail("invalid_status", "status must be all, open, or done")
+        problem = format_problem(response_format)
+        if problem is not None:
+            return problem
+        concise = response_format == "concise"
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
         rows = store.fetch(user_id, DocumentQuery(
             source_types=(documents.SOURCE_TODO,), start=start_at, end=end_at,
             is_done=_TODO_STATUS[status.lower()], limit=clamp(limit), offset=max(0, offset)))
-        payload = {"count": len(rows), "items": [row_view(r, zone) for r in rows]}
+        payload = {"count": len(rows), "items": [row_view(r, zone, concise) for r in rows]}
         return respond(presentation.with_empty_note(payload, "No todos matched."), zone)
 
-    @mcp.tool()
+    @mcp.tool(title="List reminders", annotations=READ_ONLY)
     def list_reminders(
         window: str = "upcoming",
         start: str | None = None,
         end: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        response_format: str = "detailed",
     ) -> dict:
-        """Reminders with their resolved due times.
+        """List reminders with their resolved due times.
+
+        `remind_at` is the due time resolved into the user's timezone. `window`
+        selects upcoming (due now or later, soonest first), past, or all. Use
+        upcoming to answer "what's next". A rescheduled reminder becomes a new row.
 
         Args:
             window: One of upcoming (due now or later), past, or all.
@@ -175,12 +226,17 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
             end: Optional recording range end, inclusive.
             limit: Maximum number of reminders (1-200).
             offset: Number of reminders to skip, for paging.
+            response_format: "detailed" (default) or "concise".
         """
         user_id = current_user_id()
         if user_id is None:
             return fail("unauthenticated", "unauthenticated")
         if window.lower() not in _REMINDER_WINDOWS:
             return fail("invalid_window", "window must be upcoming, past, or all")
+        problem = format_problem(response_format)
+        if problem is not None:
+            return problem
+        concise = response_format == "concise"
         now = timeutil.utc_now()
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
@@ -191,18 +247,23 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
             reminded_to=now if window.lower() == "past" else None,
             order="reminded_at ASC" if window.lower() == "upcoming" else "reminded_at DESC",
             limit=clamp(limit), offset=max(0, offset)))
-        payload = {"count": len(rows), "items": [row_view(r, zone) for r in rows]}
+        payload = {"count": len(rows), "items": [row_view(r, zone, concise) for r in rows]}
         return respond(presentation.with_empty_note(payload, "No reminders matched."), zone)
 
-    @mcp.tool()
+    @mcp.tool(title="List summaries", annotations=READ_ONLY)
     def get_summaries(
         period: str = "daily",
         start: str | None = None,
         end: str | None = None,
         limit: int = 14,
         offset: int = 0,
+        response_format: str = "detailed",
     ) -> dict:
-        """Daily or weekly narrative summaries.
+        """Read daily or weekly narrative recaps.
+
+        Use for "summarize my day/week" questions. English narratives written by
+        the rollup worker; `period_start` is the covered day or week in the user's
+        timezone.
 
         Args:
             period: One of daily or weekly.
@@ -210,42 +271,62 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
             end: Optional end, inclusive.
             limit: Maximum number of summaries (1-200).
             offset: Number of summaries to skip, for paging.
+            response_format: "detailed" (default) or "concise".
         """
         user_id = current_user_id()
         if user_id is None:
             return fail("unauthenticated", "unauthenticated")
         if period.lower() not in ("daily", "weekly"):
             return fail("invalid_period", "period must be daily or weekly")
+        problem = format_problem(response_format)
+        if problem is not None:
+            return problem
+        concise = response_format == "concise"
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
         rows = store.fetch(user_id, DocumentQuery(
             source_types=(documents.SOURCE_SUMMARY,), period=period.lower(),
             start=start_at, end=end_at, limit=clamp(limit), offset=max(0, offset)))
-        payload = {"count": len(rows), "items": [row_view(r, zone) for r in rows]}
+        payload = {"count": len(rows), "items": [row_view(r, zone, concise) for r in rows]}
         return respond(presentation.with_empty_note(payload, "No summaries matched."), zone)
 
-    @mcp.tool()
-    def get_transcript(audio_id: str, offset: int = 0, max_chars: int | None = None) -> dict:
-        """Full transcript text for one recording, looked up by its audio_id.
+    @mcp.tool(title="Get transcript", annotations=READ_ONLY)
+    def get_transcript(
+        audio_id: str,
+        offset: int = 0,
+        max_chars: int | None = None,
+        response_format: str = "detailed",
+    ) -> dict:
+        """Read the full transcript text of one recording, by `audio_id`.
+
+        Use after search or timeline returns an `audio_id` when exact wording
+        matters. Long transcripts are windowed: page with `offset` (a character
+        offset, not a result index) and `max_chars`, and check `total_chars` and
+        `truncated`.
 
         Args:
             audio_id: The UUID of the recording (available on every other result).
             offset: Character offset to start from, for paging long transcripts.
             max_chars: Maximum characters to return (defaults to the service cap).
+            response_format: "detailed" (default) or "concise".
         """
         user_id = current_user_id()
         if user_id is None:
             return fail("unauthenticated", "unauthenticated")
+        problem = format_problem(response_format)
+        if problem is not None:
+            return problem
+        concise = response_format == "concise"
         zone = zone_for(user_id)
         rows = store.fetch(user_id, DocumentQuery(
             source_types=(documents.SOURCE_TRANSCRIPT,), audio_id=audio_id,
             chunk_index=documents.WHOLE_DOCUMENT, limit=1))
         if not rows:
-            return fail("not_found", "transcript not found")
+            return fail("not_found", "transcript not found; it may still be processing, check as_of")
         row = rows[0]
         window, truncated = presentation.window_text(
             row["content"], offset, max_chars if max_chars is not None else max_text_chars)
-        payload = presentation.format_row({**row, "content": window}, zone)
+        payload = presentation.format_row({**row, "content": window}, zone, concise=concise)
         payload["offset"] = max(0, offset)
         payload["total_chars"] = len(row["content"])
         payload["truncated"] = truncated

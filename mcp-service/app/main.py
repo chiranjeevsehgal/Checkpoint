@@ -59,7 +59,8 @@ def build_server(cfg, store: ReadStore, index, embedder: Embedder,
             set(cfg.oauth_allowed_redirect_hosts), cfg.oauth_access_ttl_seconds,
             cfg.oauth_refresh_ttl_seconds,
         )
-        server = MCPServer("checkpoint", auth_server_provider=provider, auth=_auth_settings(cfg, True))
+        server = MCPServer("checkpoint", auth_server_provider=provider, auth=_auth_settings(cfg, True),
+                           instructions=tools.GROUNDING)
         register_oauth_routes(server, provider, oauth_store, cfg.oauth_session_secret,
                               cfg.kratos_public_url, cfg.public_url)
     else:
@@ -67,6 +68,7 @@ def build_server(cfg, store: ReadStore, index, embedder: Embedder,
             "checkpoint",
             token_verifier=auth.KeyTokenVerifier(cfg.database_mcp_url),
             auth=_auth_settings(cfg, False),
+            instructions=tools.GROUNDING,
         )
     tools.register(server, store, index, embedder, cfg.fallback_timezone, cfg.kratos_admin_url,
                    cfg.max_text_chars, as_of=as_of)

@@ -69,6 +69,17 @@ class EmptyNoteTest(unittest.TestCase):
         self.assertNotIn("message", presentation.with_empty_note({"count": 2}, "nothing"))
 
 
+class ProjectTest(unittest.TestCase):
+    def test_detailed_keeps_everything(self):
+        row = {"source_id": "s", "text": "t"}
+        self.assertEqual(presentation.project(row), row)
+
+    def test_concise_drops_technical_ids(self):
+        row = {"source_id": "s", "audio_id": "a", "language": "eng", "chunk_index": 2,
+               "important": True, "score": 0.5, "text": "t", "is_done": False}
+        self.assertEqual(presentation.project(row, concise=True), {"text": "t", "is_done": False})
+
+
 class FormatRowTest(unittest.TestCase):
     def row(self, **overrides):
         base = {
@@ -112,6 +123,14 @@ class FormatRowTest(unittest.TestCase):
     def test_short_text_is_not_truncated(self):
         self.assertFalse(presentation.format_row(self.row(), ZONE, max_chars=100)["truncated"])
 
+    def test_concise_drops_ids_but_keeps_content(self):
+        got = presentation.format_row(self.row(audio_id="a"), ZONE, concise=True)
+        self.assertNotIn("source_id", got)
+        self.assertNotIn("audio_id", got)
+        self.assertNotIn("chunk_index", got)
+        self.assertEqual(got["text"], "buy milk")
+        self.assertFalse(got["is_done"])
+
 
 class FormatDocumentTest(unittest.TestCase):
     def test_reads_meta_provenance_and_score(self):
@@ -134,6 +153,12 @@ class FormatDocumentTest(unittest.TestCase):
         got = presentation.format_document(document, ZONE, max_chars=5)
         self.assertEqual(got["text"], "yyyyy")
         self.assertTrue(got["truncated"])
+
+    def test_concise_drops_score_and_ids(self):
+        document = FakeDocument(score=0.9, source_type="transcript", source_id="audio-1")
+        got = presentation.format_document(document, ZONE, concise=True)
+        self.assertNotIn("score", got)
+        self.assertNotIn("source_id", got)
 
 
 if __name__ == "__main__":

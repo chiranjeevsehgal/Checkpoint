@@ -35,9 +35,19 @@ def window_text(text: str, offset: int = 0, max_chars: int | None = None) -> tup
     return window, False
 
 
-def format_row(row: dict, zone, max_chars: int | None = None) -> dict:
+_CONCISE_DROP = frozenset({"source_id", "language", "chunk_index", "important", "audio_id", "score"})
+
+
+def project(row: dict, concise: bool = False) -> dict:
+    """Drop technical identifiers when a caller asks for concise output."""
+    if not concise:
+        return row
+    return {key: value for key, value in row.items() if key not in _CONCISE_DROP}
+
+
+def format_row(row: dict, zone, max_chars: int | None = None, concise: bool = False) -> dict:
     text, truncated = window_text(row["content"], 0, max_chars)
-    return {
+    return project({
         "type": row["source_type"],
         "text": text,
         "truncated": truncated,
@@ -52,13 +62,13 @@ def format_row(row: dict, zone, max_chars: int | None = None) -> dict:
         "period": row["period"],
         "period_start": row["period_start"].isoformat() if row["period_start"] else None,
         "audio_id": str(row["audio_id"]) if row["audio_id"] else None,
-    }
+    }, concise)
 
 
-def format_document(document, zone, max_chars: int | None = None) -> dict:
+def format_document(document, zone, max_chars: int | None = None, concise: bool = False) -> dict:
     meta = document.meta or {}
     text, truncated = window_text(document.content, 0, max_chars)
-    return {
+    return project({
         "type": meta.get("source_type"),
         "text": text,
         "truncated": truncated,
@@ -74,4 +84,4 @@ def format_document(document, zone, max_chars: int | None = None) -> dict:
         "period": meta.get("period"),
         "period_start": meta.get("period_start"),
         "audio_id": meta.get("audio_id"),
-    }
+    }, concise)
