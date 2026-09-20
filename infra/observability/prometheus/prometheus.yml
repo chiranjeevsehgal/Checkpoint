@@ -1,0 +1,14 @@
+# Scrapes the ingestion API's dependency-free Prometheus endpoint. The other
+# workers expose no HTTP server yet, so they are not scraped here.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: ingestion
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["ingestion-api:8080"]

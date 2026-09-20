@@ -1,0 +1,147 @@
+# Prometheus-backed alert rules. Each fires only after the `for` window so a
+# single scrape blip does not page anyone.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: checkpoint
+    folder: Checkpoint
+    interval: 1m
+    rules:
+      - uid: checkpoint-ingestion-down
+        title: Ingestion metrics target down
+        condition: C
+        noDataState: NoData
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: Ingestion /metrics target has been unreachable for 5 minutes.
+        labels:
+          severity: critical
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: up{job="ingestion"}
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 1
+                    type: lt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              refId: C
+              type: threshold
+
+      - uid: checkpoint-outbox-backlog
+        title: Outbox backlog growing
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        annotations:
+          summary: More than 100 outbox events have been pending for 10 minutes.
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(outbox_pending_total)
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 100
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              refId: C
+              type: threshold
+
+      - uid: checkpoint-ingestion-5xx
+        title: Ingestion 5xx rate elevated
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: Ingestion is returning more than 0.1 5xx responses per second.
+        labels:
+          severity: critical
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(rate(http_requests_total{code=~"5.."}[5m]))
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0.1
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              refId: C
+              type: threshold
