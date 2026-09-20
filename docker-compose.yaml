@@ -19,7 +19,7 @@ services:
     networks:
       - backend
     ports:
-      - "9092:9092"
+      - "${BIND_KAFKA:-127.0.0.1}:9092:9092"
     environment:
       KAFKA_NODE_ID: ${KAFKA_NODE_ID}
       KAFKA_PROCESS_ROLES: broker,controller
@@ -44,7 +44,7 @@ services:
     networks:
       - backend
     ports:
-      - "5432:5432"
+      - "${BIND_POSTGRES:-127.0.0.1}:5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -72,8 +72,8 @@ services:
     networks:
       - backend
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${BIND_MINIO_API:-0.0.0.0}:9000:9000"
+      - "${BIND_MINIO_CONSOLE:-127.0.0.1}:9001:9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
@@ -128,7 +128,7 @@ services:
     networks:
       - backend
     ports:
-      - "8080:8080"
+      - "${BIND_INGESTION_API:-0.0.0.0}:8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -406,7 +406,7 @@ services:
     networks:
       - backend
     ports:
-      - "1417:1417"
+      - "${BIND_MCP:-127.0.0.1}:1417:1417"
     depends_on:
       postgres:
         condition: service_healthy
@@ -430,7 +430,7 @@ services:
     networks:
       - backend
     ports:
-      - "8085:80"
+      - "${BIND_NTFY:-0.0.0.0}:8085:80"
     volumes:
       - ntfy-data:/var/lib/ntfy
       - ./infra/ntfy/server.yml:/etc/ntfy/server.yml:ro
@@ -446,8 +446,8 @@ services:
     networks:
       - backend
     ports:
-      - "8025:8025"
-      - "1025:1025"
+      - "${BIND_MAILPIT_UI:-127.0.0.1}:8025:8025"
+      - "${BIND_MAILPIT_SMTP:-127.0.0.1}:1025:1025"
 
   kratos-migrate:
     image: oryd/kratos:v26.2.0
@@ -473,10 +473,10 @@ services:
       kratos-migrate:
         condition: service_completed_successfully
     ports:
-      - "4433:4433"
+      - "${BIND_KRATOS_PUBLIC:-0.0.0.0}:4433:4433"
       # Loopback-only so the local admin-console agent can reach the admin API
       # without exposing it to the network (Kratos admin has no auth of its own).
-      - "127.0.0.1:4434:4434"
+      - "${BIND_KRATOS_ADMIN:-127.0.0.1}:4434:4434"
     environment:
       DSN: postgres://kratos:${KRATOS_DB_PASSWORD:-kratos_db_password}@postgres:5432/kratos?sslmode=disable
       # Public URL advertised in flow ui.action; must be reachable by the

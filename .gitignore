@@ -1,6 +1,7 @@
 # Data files
 data
 .env
+.env.prod
 *.pyc
 __pycache__/
 *.bin
