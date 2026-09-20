@@ -19,6 +19,8 @@ class Config:
     max_text_chars: int
     hybrid_enabled: bool
     oversample: int
+    search_per_minute: int
+    search_burst: int
     oauth_session_secret: str
     oauth_access_ttl_seconds: int
     oauth_refresh_ttl_seconds: int
@@ -80,6 +82,8 @@ def load() -> Config:
         max_text_chars=_int_env("MCP_MAX_TEXT_CHARS", 8000),
         hybrid_enabled=_bool_env("MCP_HYBRID_ENABLED", True),
         oversample=_int_env("MCP_OVERSAMPLE", 2),
+        search_per_minute=_int_env("MCP_SEARCH_PER_MINUTE", 120),
+        search_burst=_int_env("MCP_SEARCH_BURST", 20),
         oauth_session_secret=os.getenv("MCP_OAUTH_SESSION_SECRET", ""),
         oauth_access_ttl_seconds=_int_env("MCP_OAUTH_ACCESS_TTL_SECONDS", 3600),
         oauth_refresh_ttl_seconds=_int_env("MCP_OAUTH_REFRESH_TTL_SECONDS", 2592000),
@@ -96,4 +100,8 @@ def load() -> Config:
         raise ValueError("MCP_MAX_TEXT_CHARS must be positive")
     if cfg.oversample < 1:
         raise ValueError("MCP_OVERSAMPLE must be at least 1")
+    if cfg.search_per_minute <= 0:
+        raise ValueError("MCP_SEARCH_PER_MINUTE must be positive")
+    if cfg.search_burst <= 0:
+        raise ValueError("MCP_SEARCH_BURST must be positive")
     return cfg

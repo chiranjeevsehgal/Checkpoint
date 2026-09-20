@@ -30,6 +30,7 @@ const (
 	CodeDeviceNotFound       = "DEVICE_NOT_FOUND"
 	CodeDeviceClaimFailed    = "DEVICE_CLAIM_FAILED"
 	CodeDeviceStateConflict  = "DEVICE_STATE_CONFLICT"
+	CodeRateLimited          = "RATE_LIMITED"
 )
 
 type errorBody struct {

@@ -11,6 +11,7 @@ from . import documents, presentation, retrieval, timeutil
 from . import search as semantic
 from .auth import current_user_id
 from .identity import fetch_name
+from .ratelimit import RateLimiter
 from .store import DocumentQuery
 
 MAX_LIMIT = 200
@@ -29,7 +30,8 @@ GROUNDING = (
 
 def register(mcp, store, index, embedder, fallback_timezone: str,
              kratos_admin_url: str = "", max_text_chars: int = 8000, as_of=None,
-             hybrid_enabled: bool = False, oversample: int = 2) -> None:
+             hybrid_enabled: bool = False, oversample: int = 2,
+             search_limiter: RateLimiter | None = None) -> None:
     def clamp(limit: int) -> int:
         return max(1, min(limit, MAX_LIMIT))
 
@@ -114,6 +116,11 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
             return fail("unauthenticated", "unauthenticated")
         if not query.strip():
             return fail("invalid_query", "query must not be empty")
+        if search_limiter is not None:
+            allowed, retry_after = search_limiter.allow(user_id)
+            if not allowed:
+                return fail("rate_limited",
+                            f"search rate limit exceeded, retry in {retry_after:.0f} seconds")
         problem = format_problem(response_format)
         if problem is not None:
             return problem

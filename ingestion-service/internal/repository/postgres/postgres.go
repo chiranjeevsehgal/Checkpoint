@@ -14,16 +14,31 @@ type Pool struct {
 	inner *pgxpool.Pool
 }
 
+// PoolOptions sizes the pool; zero values keep the defaults.
+type PoolOptions struct {
+	MaxConns int
+	MinConns int
+}
+
 // NewPool opens a pool sized for a lightweight API service. With a few
-// replicas each holding at most 20 connections, total usage stays well
-// under typical PostgreSQL defaults.
-func NewPool(ctx context.Context, databaseURL string) (*Pool, error) {
+// replicas each holding at most PoolOptions.MaxConns connections, total usage
+// stays well under typical PostgreSQL defaults.
+func NewPool(ctx context.Context, databaseURL string, opts ...PoolOptions) (*Pool, error) {
+	maxConns, minConns := 20, 5
+	if len(opts) > 0 {
+		if opts[0].MaxConns > 0 {
+			maxConns = opts[0].MaxConns
+		}
+		if opts[0].MinConns > 0 {
+			minConns = opts[0].MinConns
+		}
+	}
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, err
 	}
-	cfg.MaxConns = 20
-	cfg.MinConns = 5
+	cfg.MaxConns = int32(maxConns)
+	cfg.MinConns = int32(minConns)
 	cfg.MaxConnLifetime = 30 * time.Minute
 	cfg.MaxConnIdleTime = 5 * time.Minute
 

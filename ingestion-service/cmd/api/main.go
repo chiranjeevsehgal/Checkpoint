@@ -44,12 +44,13 @@ func main() {
 	}
 
 	ctx := context.Background()
-	requestPool, err := postgres.NewPool(ctx, cfg.DatabaseRequestURL)
+	poolOpts := postgres.PoolOptions{MaxConns: cfg.PoolMaxConns, MinConns: cfg.PoolMinConns}
+	requestPool, err := postgres.NewPool(ctx, cfg.DatabaseRequestURL, poolOpts)
 	if err != nil {
 		logger.Error("postgres request pool connect failed", "error", err)
 		os.Exit(1)
 	}
-	workerPool, err := postgres.NewPool(ctx, cfg.DatabaseWorkerURL)
+	workerPool, err := postgres.NewPool(ctx, cfg.DatabaseWorkerURL, poolOpts)
 	if err != nil {
 		logger.Error("postgres worker pool connect failed", "error", err)
 		os.Exit(1)
@@ -90,6 +91,7 @@ func main() {
 		DB:            requestPool,
 		Storage:       objectStorage,
 		Metrics:       reg,
+		Limiter:       apihttp.NewRateLimiter(cfg.RateLimitRPS, cfg.RateLimitBurst),
 	}
 	if kratosAdmin != nil {
 		deps.Sessions = kratosAdmin
