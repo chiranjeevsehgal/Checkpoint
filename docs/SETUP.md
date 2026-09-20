@@ -330,7 +330,39 @@ npm test
 
 ---
 
-## 10. Stop containers
+## 10. Observability (opt-in)
+
+Grafana, Loki, Prometheus and Alloy run behind the `observability` Compose
+profile, so the default `docker compose up` is unchanged. Start them with:
+
+```bash
+docker compose --profile observability up -d
+```
+
+- Grafana: `http://localhost:3000` (login `admin` / `GRAFANA_ADMIN_PASSWORD`).
+  Datasources and the `Checkpoint / Logs` and `Checkpoint / Ingestion`
+  dashboards are provisioned from `infra/observability/grafana/`.
+- Loki: `http://localhost:3100`. Alloy tails every container's stdout/stderr
+  and labels streams with `stack="checkpoint"`, `service` and `container`.
+- Prometheus: `http://localhost:9090`. It scrapes `ingestion-api:8080/metrics`.
+
+Every service emits structured JSON to stdout and reads `LOG_LEVEL`
+(`debug|info|warn|error`). Query logs in Grafana Explore, for example:
+
+```logql
+{stack="checkpoint"} | json | level="ERROR"
+```
+
+Three alert rules (ingestion target down, outbox backlog, elevated 5xx rate)
+notify the `cp-alerts` ntfy topic through the provisioned `ntfy` contact point.
+ntfy receives Grafana's webhook JSON as the message body, so pushes are verbose.
+
+All observability ports bind to loopback; tunnel over SSH to reach them from a
+remote host.
+
+---
+
+## 11. Stop containers
 
 Stop and remove containers:
 

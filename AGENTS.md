@@ -14,7 +14,7 @@ Monorepo with five separate Go modules plus firmware and Python services. No roo
 - `vad-service/` — empty placeholder (`.gitkeep` only). Ignore.
 - `loadtest/ingestion-service/` — k6 scripts (`smoke.js`, `spike.js`, `sustained.js`, `arrival-rate.js`).
 - `admin-console/` — local-only admin UI. Angular 21 in `web/`, Fastify+TS agent in `server/`. Binds `127.0.0.1:4300`, not in Compose. Details: `admin-console/README.md`.
-- Infra: root `docker-compose.yaml` (postgres, kafka KRaft, minio, Kratos + mailpit, ntfy, `*-migrate`, `kafka-init`, services). Kratos config: `infra/kratos/`; ntfy config: `infra/ntfy/server.yml`; Postgres roles/DB bootstrap: `infra/postgres/bootstrap.sh`. Docs: `docs/SETUP.md`.
+- Infra: root `docker-compose.yaml` (postgres, kafka KRaft, minio, Kratos + mailpit, ntfy, `*-migrate`, `kafka-init`, services). Kratos config: `infra/kratos/`; ntfy config: `infra/ntfy/server.yml`; Postgres roles/DB bootstrap: `infra/postgres/bootstrap.sh`; observability config: `infra/observability/` (opt-in Compose profile). Docs: `docs/SETUP.md`.
 - CI: `.github/workflows/firmware-build.yml`, `.github/workflows/checkpoint-app-build.yml`, and `.github/workflows/admin-console-build.yml` (three workflows).
 
 ## Setup / run
@@ -102,6 +102,14 @@ docker compose ps        # postgres + kafka should be healthy
 - Catch-up policy: an advance fire time older than `delivery.advance_grace_seconds` is skipped (the due one still fires); a due fire time older than `delivery.max_lateness_seconds` is ignored. Retries use `delivery.max_attempts` with a `reclaim_after_seconds` gate on stale `processing` rows. Rows older than `retention_days` are pruned hourly.
 - The Android app subscribes to `wss://<ntfy-host>/<topic>/ws` from its foreground service and shows local notifications via Notifee; it registers/clears the channel through `AuthSyncBridge`. Self-hosted ntfy does not use FCM, so background delivery requires that foreground service.
 - Deletion coupling: `user_notification_settings` and `notification_deliveries` are purged by ingestion's account-deletion worker.
+
+## Observability quirks
+
+- `docker compose --profile observability up -d` starts Grafana (`:3000`), Loki (`:3100`), Prometheus (`:9090`) and Alloy; all bind loopback and are absent from the default profile. Config lives in `infra/observability/`.
+- Every service logs JSON to stdout and reads `LOG_LEVEL` (`debug|info|warn|error`, default info): Go uses `log/slog` via a per-module `internal/observability` helper, Python uses `app/logging_setup.py`. Alloy tails container stdout and adds `stack="checkpoint"`, `service` and `container` labels; `audio_id`/`user_id`/`request_id` are structured fields for filtering.
+- Prometheus scrapes only `ingestion-api:8080/metrics`; the four headless workers expose no metrics endpoint. Grafana datasources and the `Checkpoint / Logs` + `Checkpoint / Ingestion` dashboards are file-provisioned.
+- Alert rules notify ntfy topic `cp-alerts` through the provisioned `ntfy` webhook contact point. Grafana extracts `authorization_credentials` from `settings` (not `secureSettings`) into encrypted storage, and only `settings` is env-interpolated — the publisher token comes from `NTFY_TOKEN` via the Grafana container env. ntfy shows Grafana's webhook JSON as the message body because ntfy only parses JSON bodies that carry a `topic` field.
+- Observability data is time-retained (Loki compactor, Prometheus TSDB), not account-scoped; account deletion does not purge it.
 
 ## MCP service quirks
 
