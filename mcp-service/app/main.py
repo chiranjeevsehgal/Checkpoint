@@ -17,6 +17,7 @@ from . import auth, search, tools
 from .config import load
 from .embedder import EMBEDDING_DIM, Embedder
 from .indexer import Indexer
+from .logging_setup import setup
 from .oauth import CheckpointOAuthProvider
 from .oauth_store import OAuthStore
 from .oauth_web import register_oauth_routes
@@ -30,7 +31,7 @@ def _index_loop(indexer: Indexer, poll_seconds: int, stop: threading.Event) -> N
         try:
             indexer.run_once()
         except Exception as exc:  # noqa: BLE001 - keep serving reads through index errors
-            log.warning("index cycle failed: %s", exc)
+            log.warning("index cycle failed", extra={"error": str(exc)})
             try:
                 indexer.reset()
             except Exception:  # noqa: BLE001
@@ -76,7 +77,7 @@ def build_server(cfg, store: ReadStore, index, embedder: Embedder,
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    setup("mcp-service")
     cfg = load()
 
     embedder = Embedder(cfg.embedding_model)

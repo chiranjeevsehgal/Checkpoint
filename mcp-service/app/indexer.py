@@ -128,7 +128,7 @@ class Indexer:
         self._index.remove(removed)
         self._index.upsert(to_index)
         if audio_ids:
-            log.info("indexed %d changed audio(s)", len(audio_ids))
+            log.info("indexed changed audio", extra={"count": len(audio_ids)})
 
     def _rebuild_audio(self, audio_id, to_index: list) -> list[int]:
         removed: list[int] = []
