@@ -85,6 +85,22 @@ function RevealCard({
   );
 }
 
+function ConnectorCard({ endpoint, onCopy }: { endpoint: string; onCopy: Copy }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Connect Claude or ChatGPT</CardTitle>
+        <CardDescription>
+          Add this as a custom connector. You sign in with your Checkpoint account — no key needed.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="gap-4">
+        <Snippet label="Connector URL" value={endpoint} onCopy={onCopy} />
+      </CardContent>
+    </Card>
+  );
+}
+
 function KeyRow({ item, onRevoke }: { item: McpKey; onRevoke: (item: McpKey) => void }) {
   return (
     <Card>
@@ -187,7 +203,11 @@ export function McpKeysScreen() {
         contentContainerStyle={{ gap: 24, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
       >
-        <Section title="New key">
+        <Section title="AI apps">
+          <ConnectorCard endpoint={endpoint} onCopy={copy} />
+        </Section>
+
+        <Section title="New CLI key">
           <Card>
             <Input
               value={name}

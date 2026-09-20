@@ -1,21 +1,25 @@
 """mcp-service entrypoint.
 
 One process owns the bge-m3 embedder, the TurboVec index, a polling indexer
-thread, and the authenticated MCP endpoint. Run a single worker: TurboVec is
-not safe across processes.
+thread, and the authenticated MCP endpoint. When the OAuth settings are present
+it is also the MCP authorization server. Run a single worker: TurboVec is not
+safe across processes.
 """
 
 import logging
 import threading
 
 from mcp.server import MCPServer
-from mcp.server.auth.settings import AuthSettings
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from pydantic import AnyHttpUrl
 
 from . import auth, search, tools
 from .config import load
 from .embedder import EMBEDDING_DIM, Embedder
 from .indexer import Indexer
+from .oauth import CheckpointOAuthProvider
+from .oauth_store import OAuthStore
+from .oauth_web import register_oauth_routes
 from .store import ReadStore
 
 log = logging.getLogger("mcp-service")
@@ -33,17 +37,36 @@ def _index_loop(indexer: Indexer, poll_seconds: int, stop: threading.Event) -> N
                 log.warning("indexer reconnect failed")
 
 
-def build_server(cfg, store: ReadStore, index, embedder: Embedder) -> MCPServer:
-    server = MCPServer(
-        "checkpoint",
-        token_verifier=auth.KeyTokenVerifier(cfg.database_mcp_url),
-        auth=AuthSettings(
-            issuer_url=AnyHttpUrl(cfg.public_url),
-            resource_server_url=AnyHttpUrl(cfg.public_url.rstrip("/") + "/mcp"),
-            required_scopes=[auth.SCOPE],
-            validate_token_resource=False,
+def _auth_settings(cfg, allow_registration: bool) -> AuthSettings:
+    return AuthSettings(
+        issuer_url=AnyHttpUrl(cfg.public_url),
+        resource_server_url=AnyHttpUrl(cfg.public_url.rstrip("/") + "/mcp"),
+        required_scopes=[auth.SCOPE],
+        client_registration_options=(
+            ClientRegistrationOptions(enabled=True, valid_scopes=[auth.SCOPE], default_scopes=[auth.SCOPE])
+            if allow_registration else None
         ),
+        revocation_options=RevocationOptions(enabled=True) if allow_registration else None,
+        validate_token_resource=False,
     )
+
+
+def build_server(cfg, store: ReadStore, index, embedder: Embedder, oauth_store: OAuthStore | None = None) -> MCPServer:
+    if oauth_store is not None:
+        provider = CheckpointOAuthProvider(
+            oauth_store, cfg.public_url, cfg.database_mcp_url,
+            set(cfg.oauth_allowed_redirect_hosts), cfg.oauth_access_ttl_seconds,
+            cfg.oauth_refresh_ttl_seconds,
+        )
+        server = MCPServer("checkpoint", auth_server_provider=provider, auth=_auth_settings(cfg, True))
+        register_oauth_routes(server, provider, oauth_store, cfg.oauth_session_secret,
+                              cfg.kratos_public_url, cfg.public_url)
+    else:
+        server = MCPServer(
+            "checkpoint",
+            token_verifier=auth.KeyTokenVerifier(cfg.database_mcp_url),
+            auth=_auth_settings(cfg, False),
+        )
     tools.register(server, store, index, embedder, cfg.fallback_timezone)
     return server
 
@@ -63,16 +86,24 @@ def main() -> None:
     indexer.rebuild_index()
     indexer.run_once()
 
+    oauth_store = None
+    if cfg.oauth_enabled:
+        oauth_store = OAuthStore(cfg.database_worker_url)
+        oauth_store.connect()
+        log.info("oauth authorization server enabled")
+
     stop = threading.Event()
     threading.Thread(target=_index_loop, args=(indexer, cfg.poll_seconds, stop), daemon=True).start()
 
-    server = build_server(cfg, store, index, embedder)
+    server = build_server(cfg, store, index, embedder, oauth_store)
     try:
         server.run(transport="streamable-http", host=cfg.host, port=cfg.port)
     finally:
         stop.set()
         store.close()
         indexer.close()
+        if oauth_store is not None:
+            oauth_store.close()
 
 
 if __name__ == "__main__":

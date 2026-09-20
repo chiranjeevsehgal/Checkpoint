@@ -10,3 +10,6 @@ find infra/kratos -type f -exec chmod 644 {} +
 
 find infra/ntfy -type d -exec chmod 755 {} +
 find infra/ntfy -type f -exec chmod 644 {} +
+
+find infra/caddy -type d -exec chmod 755 {} +
+find infra/caddy -type f -exec chmod 644 {} +

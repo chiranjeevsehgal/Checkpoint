@@ -14,6 +14,20 @@ class Config:
     turbovec_bits: int
     poll_seconds: int
     fallback_timezone: str
+    kratos_public_url: str
+    oauth_session_secret: str
+    oauth_access_ttl_seconds: int
+    oauth_refresh_ttl_seconds: int
+    oauth_allowed_redirect_hosts: tuple[str, ...]
+
+    @property
+    def oauth_enabled(self) -> bool:
+        return bool(self.oauth_session_secret and self.kratos_public_url)
+
+
+def _csv_env(name: str, default: str) -> tuple[str, ...]:
+    raw = os.getenv(name, default)
+    return tuple(part.strip().lower() for part in raw.split(",") if part.strip())
 
 
 def _int_env(name: str, default: int) -> int:
@@ -45,6 +59,11 @@ def load() -> Config:
         turbovec_bits=_int_env("MCP_TURBOVEC_BITS", 4),
         poll_seconds=_int_env("MCP_POLL_SECONDS", 30),
         fallback_timezone=os.getenv("MCP_FALLBACK_TIMEZONE", "UTC"),
+        kratos_public_url=os.getenv("KRATOS_PUBLIC_URL", ""),
+        oauth_session_secret=os.getenv("MCP_OAUTH_SESSION_SECRET", ""),
+        oauth_access_ttl_seconds=_int_env("MCP_OAUTH_ACCESS_TTL_SECONDS", 3600),
+        oauth_refresh_ttl_seconds=_int_env("MCP_OAUTH_REFRESH_TTL_SECONDS", 2592000),
+        oauth_allowed_redirect_hosts=_csv_env("MCP_OAUTH_ALLOWED_REDIRECT_HOSTS", "claude.ai,chatgpt.com"),
     )
 
     if cfg.turbovec_bits not in (2, 3, 4):

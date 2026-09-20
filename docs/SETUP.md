@@ -262,16 +262,22 @@ curl -X POST http://localhost:8080/v1/me/mcp-keys \
 Point a client at the MCP endpoint with that key:
 
 ```bash
-claude mcp add --transport http checkpoint http://localhost:1417/mcp \
+claude mcp add --transport http checkpoint https://160-236-239-95.sslip.io/mcp \
   --header "Authorization: Bearer cp_mcp_..."
 ```
 
-Every request is scoped to the key's account (`checkpoint_mcp` role plus RLS on
-`search_documents`), so one key can never read another account's rows. Run a
-single `mcp-service` replica: the TurboVec index lives in-process.
+Hosted clients connect with OAuth instead of a key: add
+`https://160-236-239-95.sslip.io/mcp` as a custom connector in Claude or ChatGPT
+and sign in with your Checkpoint account (verified email required). See
+`AGENTS.md` → MCP service quirks for the endpoints and lifetimes.
 
-The port is published on all interfaces; put it behind TLS and a firewall before
-exposing it beyond your machine. Verify indexing after an upload flows through
+Every request is scoped to the key's / account's identity (`checkpoint_mcp` role
+plus RLS on `search_documents`), so one account can never read another's rows.
+Run a single `mcp-service` replica: the TurboVec index lives in-process.
+
+TLS is terminated by the `caddy` compose service for
+`160-236-239-95.sslip.io`; `BIND_MCP` stays loopback, so TLS + the OAuth flow are
+the only public paths. Verify indexing after an upload flows through
 extraction:
 
 ```bash

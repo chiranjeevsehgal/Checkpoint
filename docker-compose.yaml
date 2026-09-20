@@ -11,6 +11,10 @@ volumes:
     driver: local
   ntfy-data:
     driver: local
+  caddy-data:
+    driver: local
+  caddy-config:
+    driver: local
 
 services:
   kafka:
@@ -412,6 +416,8 @@ services:
         condition: service_healthy
       mcp-migrate:
         condition: service_completed_successfully
+      kratos:
+        condition: service_started
     environment:
       DATABASE_MCP_URL: postgres://checkpoint_mcp:${CHECKPOINT_MCP_PASSWORD:-checkpoint_mcp_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       DATABASE_WORKER_URL: postgres://checkpoint_worker:${CHECKPOINT_WORKER_PASSWORD:-checkpoint_worker_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable
@@ -422,6 +428,11 @@ services:
       MCP_TURBOVEC_BITS: ${MCP_TURBOVEC_BITS:-4}
       MCP_POLL_SECONDS: ${MCP_POLL_SECONDS:-30}
       MCP_FALLBACK_TIMEZONE: ${SUMMARIES_TIMEZONE:-Asia/Kolkata}
+      KRATOS_PUBLIC_URL: ${KRATOS_PUBLIC_URL:-http://kratos:4433}
+      MCP_OAUTH_SESSION_SECRET: ${MCP_OAUTH_SESSION_SECRET:-}
+      MCP_OAUTH_ACCESS_TTL_SECONDS: ${MCP_OAUTH_ACCESS_TTL_SECONDS:-3600}
+      MCP_OAUTH_REFRESH_TTL_SECONDS: ${MCP_OAUTH_REFRESH_TTL_SECONDS:-2592000}
+      MCP_OAUTH_ALLOWED_REDIRECT_HOSTS: ${MCP_OAUTH_ALLOWED_REDIRECT_HOSTS:-claude.ai,chatgpt.com}
     restart: unless-stopped
 
   ntfy:
@@ -485,4 +496,24 @@ services:
     volumes:
       - ./infra/kratos:/etc/config/kratos:ro
     command: serve -c /etc/config/kratos/kratos.yml --watch-courier
+    restart: unless-stopped
+
+  # TLS termination for the public MCP hostname. The OAuth authorization server
+  # and the MCP resource server are the same mcp-service process, so all paths
+  # proxy there. Requires ports 80/443 reachable from the internet for ACME.
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    networks:
+      - backend
+    ports:
+      - "${BIND_CADDY_HTTP:-0.0.0.0}:80:80"
+      - "${BIND_CADDY_HTTPS:-0.0.0.0}:443:443"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      mcp-service:
+        condition: service_started
     restart: unless-stopped
