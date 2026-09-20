@@ -1,8 +1,9 @@
 """Retrieval quality harness: reports hit@k / MRR and asserts grounding.
 
-Quality thresholds are deliberately not asserted, so the suite stays green on
-the dense baseline; the numbers are recorded before and after the hybrid
-change. Run:
+The corpus pairs each expected document with many near-neighbour distractors
+that share every token except the distinguishing one, so the metric can show a
+dense miss. Quality thresholds are deliberately not asserted; the numbers are
+recorded before and after the hybrid change. Run:
 
     TEST_DATABASE_URL=postgres://... python -m unittest tests.test_retrieval_eval -v
 """
@@ -27,24 +28,49 @@ except ModuleNotFoundError:  # pragma: no cover - ML/DB deps absent
 DSN = os.getenv("TEST_DATABASE_URL")
 TOP_K = 5
 
-CORPUS = (
-    ("todo", "todo-halcyon", "Email Priya about the Project Halcyon kickoff"),
-    ("todo", "todo-invoice", "Pay invoice 8842 before Friday"),
-    ("transcript", "audio-1", "We reviewed the quarterly roadmap and delayed the launch"),
-    ("reminder", "reminder-1", "Call the dentist on Tuesday"),
-    ("insight", "insight-1", "The team works best in the morning"),
-    ("summary", "daily:2026-09-19", "You spent the morning planning the product launch"),
-    ("todo", "todo-helios", "Email Priya about the Project Helios kickoff"),
-    ("todo", "todo-invoice-other", "Pay invoice 9911 before Friday"),
-    ("reminder", "reminder-doctor", "Call the doctor on Tuesday"),
-    ("insight", "insight-2", "The team works best in the evening"),
-)
+PEOPLE = ("Priya", "Marco", "Lena", "Sam", "Aiko", "Tomas", "Nadia", "Omar")
+CODENAMES = ("Helios", "Titan", "Nimbus", "Vertex", "Onyx", "Zephyr", "Atlas", "Orion")
+PROFESSIONS = ("doctor", "dentist", "vet", "optician", "therapist")
+DAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
+TIMES = ("morning", "afternoon", "evening", "night")
+
+
+def _build_corpus():
+    docs = [
+        ("todo", "todo-halcyon", "Email Priya about the Project Halcyon kickoff"),
+        ("todo", "todo-invoice", "Pay invoice 8842 before Friday"),
+        ("transcript", "audio-1", "We reviewed the quarterly roadmap and delayed the launch"),
+        ("reminder", "reminder-1", "Call the dentist on Tuesday"),
+        ("insight", "insight-1", "The team works best in the morning"),
+        ("summary", "daily:2026-09-19", "You spent the morning planning the product launch"),
+    ]
+    for i, codename in enumerate(CODENAMES):
+        person = PEOPLE[i % len(PEOPLE)]
+        docs.append(("todo", f"todo-project-{i}", f"Email {person} about the Project {codename} kickoff"))
+    for number in range(1000, 1060):
+        docs.append(("todo", f"todo-invoice-{number}", f"Pay invoice {number} before Friday"))
+    for profession in PROFESSIONS:
+        for day in DAYS:
+            if (profession, day) == ("dentist", "Tuesday"):
+                continue
+            docs.append(("reminder", f"reminder-{profession}-{day.lower()}", f"Call the {profession} on {day}"))
+    for time_of_day in TIMES:
+        if time_of_day == "morning":
+            continue
+        docs.append(("insight", f"insight-team-{time_of_day}", f"The team works best in the {time_of_day}"))
+    for i, topic in enumerate(("annual", "product", "engineering", "hiring", "platform")):
+        docs.append(("transcript", f"audio-roadmap-{i}", f"We reviewed the {topic} roadmap and delayed the launch"))
+    return tuple(docs)
+
+
+CORPUS = _build_corpus()
 
 QUERIES = (
     ("Project Halcyon kickoff", "todo-halcyon"),
     ("invoice 8842", "todo-invoice"),
-    ("dentist appointment", "reminder-1"),
-    ("when does the team work best", "insight-1"),
+    ("dentist on Tuesday", "reminder-1"),
+    ("when does the team work best in the morning", "insight-1"),
+    ("quarterly roadmap launch", "audio-1"),
 )
 
 _INSERT = """
@@ -118,7 +144,7 @@ class RetrievalEvalTest(unittest.TestCase):
 
         hits = sum(1 for rank in ranks if rank) / len(ranks)
         mrr = sum(1 / rank for rank in ranks if rank) / len(ranks)
-        print(f"\n[retrieval-eval] hit@{TOP_K}={hits:.2f} mrr={mrr:.2f} ranks={ranks}")
+        print(f"\n[retrieval-eval] corpus={len(CORPUS)} hit@{TOP_K}={hits:.2f} mrr={mrr:.2f} ranks={ranks}")
 
 
 if __name__ == "__main__":
