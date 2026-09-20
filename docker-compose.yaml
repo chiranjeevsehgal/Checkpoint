@@ -456,6 +456,9 @@ services:
     environment:
       # Must match the client-facing host; override with the LAN IP for phones.
       NTFY_BASE_URL: ${NTFY_BASE_URL:-http://localhost:8085}
+      # Provision the publisher/admin tokens from .env so ntfy and the app
+      # services share one source of truth. Users/ACL stay in server.yml.
+      NTFY_AUTH_TOKENS: "checkpoint-admin:${NTFY_ADMIN_TOKEN:-tk_checkpointdevadmintoken000001},checkpoint-publisher:${NTFY_TOKEN:-tk_checkpointdevpublishtoken0001}"
     command: serve
     restart: unless-stopped
 
