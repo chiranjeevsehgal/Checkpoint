@@ -538,6 +538,10 @@ services:
       - backend
     ports:
       - "${BIND_LOKI:-127.0.0.1}:3100:3100"
+    # The image runs as uid 10001, which cannot read repo-mounted configs on
+    # hosts whose parent dirs are not world-traversable. Run as root, matching
+    # Grafana/Alloy, so the bind-mounted config and data volume are readable.
+    user: "0:0"
     volumes:
       - loki-data:/loki
       - ./infra/observability/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
@@ -570,6 +574,10 @@ services:
       - backend
     ports:
       - "${BIND_PROMETHEUS:-127.0.0.1}:9090:9090"
+    # The image runs as nobody (65534), which cannot read repo-mounted configs
+    # on hosts whose parent dirs are not world-traversable. Run as root so the
+    # bind-mounted config and TSDB volume are readable.
+    user: "0:0"
     volumes:
       - prometheus-data:/prometheus
       - ./infra/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
