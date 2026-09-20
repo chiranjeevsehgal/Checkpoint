@@ -9,6 +9,7 @@ import asyncio
 import html
 import json
 import secrets
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,8 @@ from .oauth_store import OAuthStore
 
 SESSION_COOKIE = "cp_mcp_oauth"
 _KRATOS_TIMEOUT_SECONDS = 10
+_KRATOS_MAX_ATTEMPTS = 3
+_KRATOS_RETRY_BACKOFFS = (0.5, 1.0)
 
 _LOGIN_HTML = """<!doctype html><html><head><meta charset="utf-8">
 <title>Checkpoint sign in</title></head><body>
@@ -79,17 +82,22 @@ def _kratos_call(url: str, method: str, body: dict | None = None,
         request.add_header("Content-Type", "application/json")
     if token:
         request.add_header("X-Session-Token", token)
-    try:
-        with urllib.request.urlopen(request, timeout=_KRATOS_TIMEOUT_SECONDS) as response:
-            return response.status, json.loads(response.read() or b"{}")
-    except urllib.error.HTTPError as exc:
+    # Retry only network errors (no response received, so no double-submit):
+    # an HTTPError already carries the server's answer.
+    for attempt in range(1, _KRATOS_MAX_ATTEMPTS + 1):
         try:
-            payload = json.loads(exc.read() or b"{}")
-        except ValueError:
-            payload = {}
-        return exc.code, payload
-    except (urllib.error.URLError, TimeoutError):
-        return 0, {}
+            with urllib.request.urlopen(request, timeout=_KRATOS_TIMEOUT_SECONDS) as response:
+                return response.status, json.loads(response.read() or b"{}")
+        except urllib.error.HTTPError as exc:
+            try:
+                payload = json.loads(exc.read() or b"{}")
+            except ValueError:
+                payload = {}
+            return exc.code, payload
+        except (urllib.error.URLError, TimeoutError):
+            if attempt < _KRATOS_MAX_ATTEMPTS:
+                time.sleep(_KRATOS_RETRY_BACKOFFS[attempt - 1])
+    return 0, {}
 
 
 def _verified_user_id(kratos_url: str, session_token: str) -> str | None:

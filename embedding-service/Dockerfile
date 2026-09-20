@@ -2,7 +2,7 @@ FROM python:3.14-slim AS deps
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY embedding-service/requirements.txt .
 # Cache mount keeps downloaded wheels on the host between builds; changing
 # requirements.txt wont redownload torch (~200 MB) from scratch.
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -17,7 +17,7 @@ FROM deps AS model
 # proves the cache is complete — a missing file fails the build here
 # instead of the worker at runtime.
 ENV HF_HOME=/opt/hf-cache
-COPY download_model.py .
+COPY tools/download_bge_m3.py ./download_model.py
 RUN python download_model.py
 RUN HF_HUB_OFFLINE=1 python -c "\
     print('[model] loading bge-m3 from cache...', flush=True); \
@@ -31,7 +31,7 @@ FROM model AS worker
 
 ENV HF_HUB_OFFLINE=1 \
     PYTHONUNBUFFERED=1
-COPY app ./app
+COPY embedding-service/app ./app
 ENTRYPOINT ["python", "-u", "-m", "app.main"]
 
 FROM python:3.14-slim AS migrate
@@ -40,8 +40,8 @@ WORKDIR /app
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install psycopg[binary]==3.3.5
-COPY migrate.py .
-COPY migrations ./migrations
+COPY embedding-service/migrate.py .
+COPY embedding-service/migrations ./migrations
 
 ENTRYPOINT ["python", "-u", "migrate.py"]
 CMD ["up"]

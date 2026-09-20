@@ -24,7 +24,8 @@ class FakeResponse:
 
 class FetchNameTest(unittest.TestCase):
     def fetch(self, response=None, error=None, user_id=USER_ID, admin_url="http://kratos:4434"):
-        with mock.patch.object(identity.urllib.request, "urlopen") as urlopen:
+        with mock.patch.object(identity.urllib.request, "urlopen") as urlopen, \
+                mock.patch.object(identity.time, "sleep"):
             if error is not None:
                 urlopen.side_effect = error
             else:
@@ -56,6 +57,21 @@ class FetchNameTest(unittest.TestCase):
     def test_network_error_is_none(self):
         got, _ = self.fetch(error=urllib.error.URLError("down"))
         self.assertIsNone(got)
+
+    def test_persistent_error_retries_three_times(self):
+        with mock.patch.object(identity.urllib.request, "urlopen") as urlopen, \
+                mock.patch.object(identity.time, "sleep") as asleep:
+            urlopen.side_effect = urllib.error.URLError("down")
+            self.assertIsNone(identity.fetch_name("http://kratos:4434", USER_ID))
+            self.assertEqual(urlopen.call_count, 3)
+            self.assertEqual(asleep.call_count, 2)
+
+    def test_transient_error_recovers(self):
+        with mock.patch.object(identity.urllib.request, "urlopen") as urlopen, \
+                mock.patch.object(identity.time, "sleep"):
+            urlopen.side_effect = [urllib.error.URLError("blip"),
+                                   FakeResponse({"traits": {"name": "Asha"}})]
+            self.assertEqual(identity.fetch_name("http://kratos:4434", USER_ID), "Asha")
 
     def test_malformed_json_is_none(self):
         got, _ = self.fetch(FakeResponse(raw=b"not json"))

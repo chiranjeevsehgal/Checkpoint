@@ -1,8 +1,10 @@
 """Download bge-m3 into the local HF cache with plain-text progress.
 
-docker build has no tty, so huggingface's default progress bar renders
-nothing there and a 2.3 GB fetch looks like a hung step. This prints one
-line per file plus a rolling progress line every 15 seconds.
+Shared by the embedding-service and mcp-service images (single copy; both
+Dockerfiles COPY it from tools/). docker build has no tty, so huggingface's
+default progress bar renders nothing there and a 2.3 GB fetch looks like a
+hung step. This prints one line per file plus a rolling progress line every
+15 seconds.
 """
 
 import fnmatch

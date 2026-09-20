@@ -1,0 +1,26 @@
+# Build context guard for the images that build from the repo root
+# (embedding-service, mcp-service: they share tools/download_bge_m3.py).
+# Services with their own sub-directory context never read this file.
+# Strategy is fail-open on speed, never on correctness: only the known-big
+# trees are excluded; everything else still ships in the context.
+
+.git/
+.gitignore
+checkpoint-app/
+admin-console/
+firmware/
+loadtest/
+docs/
+.github/
+repomix-output.xml
+ingestion-service/
+transcription-service/
+extraction-service/
+rollup-service/
+notification-service/
+vad-service/
+infra/
+**/node_modules/
+**/__pycache__/
+**/.cxx/
+.env
