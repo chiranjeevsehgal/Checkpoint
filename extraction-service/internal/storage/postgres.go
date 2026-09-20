@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -67,7 +67,7 @@ func (p *PostgresStore) missingTombstoneTable(err error) bool {
 		return false
 	}
 	tombstoneMissingWarned.Do(func() {
-		log.Printf("account_deletions missing; deletion-tombstone gating disabled")
+		slog.Warn("account_deletions missing; deletion-tombstone gating disabled")
 	})
 	return true
 }

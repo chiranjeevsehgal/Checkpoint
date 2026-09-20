@@ -32,7 +32,7 @@ def fetch_name(admin_url: str, user_id: str, timeout: int = _TIMEOUT_SECONDS) ->
         with urllib.request.urlopen(request, timeout=timeout) as response:
             identity = json.loads(response.read() or b"{}")
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
-        log.warning("kratos identity lookup failed: %s", exc)
+        log.warning("kratos identity lookup failed", extra={"error": str(exc)})
         return None
     name = (identity.get("traits") or {}).get("name")
     return name if isinstance(name, str) and name.strip() else None

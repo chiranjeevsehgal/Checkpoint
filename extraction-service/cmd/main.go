@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
@@ -15,10 +15,13 @@ import (
 	"extraction-service/internal/kafka"
 	"extraction-service/internal/llm"
 	"extraction-service/internal/model"
+	"extraction-service/internal/observability"
 	"extraction-service/internal/storage"
 )
 
 func main() {
+	slog.SetDefault(observability.New("extraction-service"))
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -29,21 +32,24 @@ func main() {
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		slog.Error("loading config", "error", err)
+		os.Exit(1)
 	}
 
 	store, err := storage.NewPostgresStore(ctx, cfg.Postgres.DSN())
 	if err != nil {
-		log.Fatalf("connecting to postgres: %v", err)
+		slog.Error("connecting to postgres", "error", err)
+		os.Exit(1)
 	}
 	defer store.Close()
 
 	// Rows stranded in 'processing' by a previous crash go back to pending
 	// before new work is accepted.
 	if n, err := store.ReclaimStale(ctx, cfg.Batch.ReclaimAfter()); err != nil {
-		log.Fatalf("reclaiming stale jobs: %v", err)
+		slog.Error("reclaiming stale jobs", "error", err)
+		os.Exit(1)
 	} else if n > 0 {
-		log.Printf("reclaimed %d stale processing rows", n)
+		slog.Info("reclaimed stale processing rows", "count", n)
 	}
 
 	consumer := kafka.NewConsumer(cfg.Kafka)
@@ -63,8 +69,12 @@ func main() {
 		Timeout:             cfg.Groq.Timeout(),
 	})
 
-	log.Printf("listening on kafka topic %q (group %q), model %s, batch=%d, writing todos+reminders+insights to postgres",
-		cfg.Kafka.ConsumeTopic, cfg.Kafka.ConsumerGroup, cfg.Groq.Model, cfg.Batch.Size)
+	slog.Info("listening on kafka topic",
+		"topic", cfg.Kafka.ConsumeTopic,
+		"group", cfg.Kafka.ConsumerGroup,
+		"model", cfg.Groq.Model,
+		"batch_size", cfg.Batch.Size,
+		"outputs", "todos+reminders+insights")
 
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -82,9 +92,9 @@ func main() {
 	}()
 
 	<-ctx.Done()
-	log.Println("shutting down")
+	slog.Info("shutting down")
 	wg.Wait()
-	log.Println("shut down cleanly")
+	slog.Info("shut down cleanly")
 }
 
 // runConsumer is the fast path: event → pending queue row → commit. No LLM
@@ -101,25 +111,25 @@ func runConsumer(ctx context.Context, consumer *kafka.Consumer, store *storage.P
 			var malformed *kafka.MalformedMessageError
 			if errors.As(err, &malformed) {
 				if dlqErr := dlq.SendToDLQ(ctx, cfg.Kafka.ConsumeTopic, "INVALID_EVENT", err.Error(), msg.Value); dlqErr != nil {
-					log.Printf("dlq send failed (will retry): %v", dlqErr)
+					slog.Error("dlq send failed (will retry)", "error", dlqErr)
 					continue // not committed: redelivered, DLQ retried
 				}
 				if err := consumer.Commit(ctx, msg); err != nil {
-					log.Printf("commit error for poison message: %v", err)
+					slog.Error("commit error for poison message", "error", err)
 				}
 				continue
 			}
-			log.Printf("read error: %v", err)
+			slog.Error("read error", "error", err)
 			continue
 		}
 
 		if err := event.Validate(); err != nil {
 			if dlqErr := dlq.SendToDLQ(ctx, cfg.Kafka.ConsumeTopic, "INVALID_EVENT", err.Error(), msg.Value); dlqErr != nil {
-				log.Printf("dlq send failed (will retry): %v", dlqErr)
+				slog.Error("dlq send failed (will retry)", "error", dlqErr)
 				continue
 			}
 			if err := consumer.Commit(ctx, msg); err != nil {
-				log.Printf("commit error for invalid event: %v", err)
+				slog.Error("commit error for invalid event", "error", err)
 			}
 			continue
 		}
@@ -128,13 +138,13 @@ func runConsumer(ctx context.Context, consumer *kafka.Consumer, store *storage.P
 		if err != nil {
 			// Not committing means redelivery on restart — the event is
 			// never silently lost.
-			log.Printf("tombstone check failed audio_id=%s: %v", event.Data.AudioID, err)
+			slog.Error("tombstone check failed", "audio_id", event.Data.AudioID, "error", err)
 			continue
 		}
 		if deleting {
-			log.Printf("stale_deleted_user_event audio_id=%s", event.Data.AudioID)
+			slog.Info("stale_deleted_user_event", "audio_id", event.Data.AudioID)
 			if err := consumer.Commit(ctx, msg); err != nil {
-				log.Printf("commit error for stale event: %v", err)
+				slog.Error("commit error for stale event", "error", err)
 			}
 			continue
 		}
@@ -152,12 +162,12 @@ func runConsumer(ctx context.Context, consumer *kafka.Consumer, store *storage.P
 		if err := store.EnqueueJob(ctx, job); err != nil {
 			// Not committing means redelivery on restart — the event is
 			// never silently lost.
-			log.Printf("enqueue failed audio_id=%s: %v", event.Data.AudioID, err)
+			slog.Error("enqueue failed", "audio_id", event.Data.AudioID, "error", err)
 			continue
 		}
 
 		if err := consumer.Commit(ctx, msg); err != nil {
-			log.Printf("commit error for audio_id=%s: %v", event.Data.AudioID, err)
+			slog.Error("commit error", "audio_id", event.Data.AudioID, "error", err)
 		}
 	}
 }
@@ -178,9 +188,9 @@ func runReclaimer(ctx context.Context, store *storage.PostgresStore, cfg *config
 			return
 		case <-t.C:
 			if n, err := store.ReclaimStale(ctx, cfg.Batch.ReclaimAfter()); err != nil {
-				log.Printf("reclaim error: %v", err)
+				slog.Error("reclaim error", "error", err)
 			} else if n > 0 {
-				log.Printf("reclaimed %d stale processing rows", n)
+				slog.Info("reclaimed stale processing rows", "count", n)
 			}
 		}
 	}
@@ -203,7 +213,7 @@ func runBatcher(ctx context.Context, store *storage.PostgresStore, client *llm.C
 
 		users, err := store.ReadyUsers(ctx, model.TypeAll, cfg.Batch.Size, cfg.Batch.MaxWait())
 		if err != nil {
-			log.Printf("ready users error: %v", err)
+			slog.Error("ready users error", "error", err)
 			continue
 		}
 		for _, u := range users {
@@ -229,7 +239,7 @@ func runBatcher(ctx context.Context, store *storage.PostgresStore, client *llm.C
 func processBatch(ctx context.Context, store *storage.PostgresStore, client *llm.Client, userID string, cfg *config.Config) {
 	jobs, err := store.ClaimBatch(ctx, userID, model.TypeAll, cfg.Batch.Size)
 	if err != nil {
-		log.Printf("claim error user_id=%s: %v", userID, err)
+		slog.Error("claim error", "user_id", userID, "error", err)
 		return
 	}
 	if len(jobs) == 0 {
@@ -260,8 +270,12 @@ func processBatch(ctx context.Context, store *storage.PostgresStore, client *llm
 			}
 			entries += len(r.Todos) + len(r.Reminders) + len(r.Insights)
 		}
-		log.Printf("extracted user_id=%s items=%d done=%d skipped=%d entries=%d",
-			userID, len(group), len(results)-skipped, skipped, entries)
+		slog.Info("extracted",
+			"user_id", userID,
+			"items", len(group),
+			"done", len(results)-skipped,
+			"skipped", skipped,
+			"entries", entries)
 	}
 }
 
@@ -270,7 +284,7 @@ func processBatch(ctx context.Context, store *storage.PostgresStore, client *llm
 func userLocation(ctx context.Context, store *storage.PostgresStore, userID string, cfg *config.Config) *time.Location {
 	timezone, err := store.UserTimezone(ctx, userID)
 	if err != nil {
-		log.Printf("timezone lookup failed user_id=%s: %v", userID, err)
+		slog.Error("timezone lookup failed", "user_id", userID, "error", err)
 		return cfg.Reminders.Loc()
 	}
 	if timezone == "" {
@@ -278,7 +292,7 @@ func userLocation(ctx context.Context, store *storage.PostgresStore, userID stri
 	}
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
-		log.Printf("invalid stored timezone %q user_id=%s; using default", timezone, userID)
+		slog.Warn("invalid stored timezone; using default", "timezone", timezone, "user_id", userID)
 		return cfg.Reminders.Loc()
 	}
 	return loc
@@ -298,15 +312,15 @@ func handleBatchFailure(ctx context.Context, store *storage.PostgresStore, jobs 
 	}
 	if len(release) > 0 {
 		if rErr := store.ReleaseJobs(ctx, release, err.Error()); rErr != nil {
-			log.Printf("release error: %v", rErr)
+			slog.Error("release error", "error", rErr)
 		}
 	}
 	if len(fail) > 0 {
 		if fErr := store.FailJobs(ctx, fail, err.Error()); fErr != nil {
-			log.Printf("fail error: %v", fErr)
+			slog.Error("fail error", "error", fErr)
 		}
 	}
-	log.Printf("batch failed (released=%d failed=%d): %v", len(release), len(fail), err)
+	slog.Error("batch failed", "released", len(release), "failed", len(fail), "error", err)
 
 	// Small backoff so a downed Groq isn't hammered at poll speed. The
 	// sleep is capped and cancellable.

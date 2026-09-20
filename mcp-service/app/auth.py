@@ -39,7 +39,7 @@ def resolve_key_user(dsn: str, key: str) -> str | None:
                 row = cur.fetchone()
         return row[0] if row and row[0] else None
     except Exception as exc:  # noqa: BLE001 - never turn a DB blip into a 500
-        log.warning("mcp key resolution failed: %s", exc)
+        log.warning("mcp key resolution failed", extra={"error": str(exc)})
         return None
 
 

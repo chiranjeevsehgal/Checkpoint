@@ -1,0 +1,21 @@
+# Routes firing alerts to the existing self-hosted ntfy. The topic is under
+# cp-* so the write-only checkpoint-publisher token is allowed. ntfy only
+# accepts that token as an Authorization: Bearer header, not a query param.
+#
+# Grafana extracts secret fields (authorization_credentials) out of `settings`
+# into encrypted storage; `settings` is also the only block that gets
+# environment-variable interpolation, so the token is injected from NTFY_TOKEN.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: ntfy
+    receivers:
+      - uid: ntfy
+        type: webhook
+        settings:
+          url: http://ntfy:80/cp-alerts
+          httpMethod: POST
+          authorization_scheme: Bearer
+          authorization_credentials: ${NTFY_ALERT_TOKEN}
+        disableResolveMessage: false

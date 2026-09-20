@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,6 +16,7 @@ import (
 	"transcription-service/internal/kafka"
 	"transcription-service/internal/language"
 	"transcription-service/internal/model"
+	"transcription-service/internal/observability"
 	"transcription-service/internal/provider"
 	"transcription-service/internal/storage"
 )
@@ -32,6 +33,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	slog.SetDefault(observability.New("transcription-service"))
+
 	configPath := os.Getenv("CONFIG_PATH")
 	if configPath == "" {
 		configPath = "config.yaml"
@@ -39,23 +42,27 @@ func main() {
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		slog.Error("loading config", "error", err)
+		os.Exit(1)
 	}
 
 	transcriber, err := buildProvider(cfg)
 	if err != nil {
-		log.Fatalf("building provider: %v", err)
+		slog.Error("building provider", "error", err)
+		os.Exit(1)
 	}
-	log.Printf("using transcription provider: %s", transcriber.Name())
+	slog.Info("using transcription provider", "provider", transcriber.Name())
 
 	minioClient, err := storage.NewMinIOClient(cfg.MinIO)
 	if err != nil {
-		log.Fatalf("connecting to minio: %v", err)
+		slog.Error("connecting to minio", "error", err)
+		os.Exit(1)
 	}
 
 	pgStore, err := storage.NewPostgresStore(ctx, cfg.Postgres.DSN())
 	if err != nil {
-		log.Fatalf("connecting to postgres: %v", err)
+		slog.Error("connecting to postgres", "error", err)
+		os.Exit(1)
 	}
 	defer pgStore.Close()
 
@@ -65,13 +72,15 @@ func main() {
 	producer := kafka.NewProducer(cfg.Kafka)
 	defer producer.Close()
 
-	log.Printf("listening on kafka topic %q, publishing to %q and %q",
-		cfg.Kafka.ConsumeTopic, cfg.Kafka.ProduceTopicEmbedding, cfg.Kafka.ProduceTopicExtraction)
+	slog.Info("listening on kafka topic",
+		"consume_topic", cfg.Kafka.ConsumeTopic,
+		"embedding_topic", cfg.Kafka.ProduceTopicEmbedding,
+		"extraction_topic", cfg.Kafka.ProduceTopicExtraction)
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("shutting down")
+			slog.Info("shutting down")
 			return
 		default:
 		}
@@ -82,44 +91,44 @@ func main() {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("read error: %v", err)
+			slog.Error("read error", "error", err)
 			continue
 		}
 
 		if err := event.Validate(); err != nil {
 			// Malformed identifiers never succeed on redelivery, so drop the
 			// message instead of looping on it.
-			log.Printf("dropping invalid event: %v", err)
+			slog.Warn("dropping invalid event", "error", err)
 			if cerr := consumer.Commit(ctx, msg); cerr != nil {
-				log.Printf("commit error for invalid event: %v", cerr)
+				slog.Error("commit error for invalid event", "error", cerr)
 			}
 			continue
 		}
 
 		if err := handleMessage(ctx, event, transcriber, minioClient, pgStore, producer, cfg.Kafka); err != nil {
 			if errors.Is(err, errStaleDeletedUser) {
-				log.Printf("stale_deleted_user_event audio_id=%s", event.Data.AudioID)
-			if cerr := consumer.Commit(ctx, msg); cerr != nil {
-				log.Printf("commit error for stale event: %v", cerr)
+				slog.Info("stale_deleted_user_event", "audio_id", event.Data.AudioID)
+				if cerr := consumer.Commit(ctx, msg); cerr != nil {
+					slog.Error("commit error for stale event", "error", cerr)
+				}
+				continue
 			}
-			continue
-		}
-		if errors.Is(err, errOmitTranscript) {
-			log.Printf("omitted transcript audio_id=%s reason=%v", event.Data.AudioID, err)
-			if cerr := consumer.Commit(ctx, msg); cerr != nil {
-				log.Printf("commit error for omitted transcript: %v", cerr)
+			if errors.Is(err, errOmitTranscript) {
+				slog.Info("omitted transcript", "audio_id", event.Data.AudioID, "reason", err)
+				if cerr := consumer.Commit(ctx, msg); cerr != nil {
+					slog.Error("commit error for omitted transcript", "error", cerr)
+				}
+				continue
 			}
-			continue
-		}
-		// Not committing here means this message will be
-			// redelivered on restart — intentional, so a failed
-			// transcription isn't silently lost.
-			log.Printf("failed to process audio_id=%s: %v", event.Data.AudioID, err)
+			// Not committing here means this message will be redelivered on
+			// restart — intentional, so a failed transcription isn't silently
+			// lost.
+			slog.Error("failed to process", "audio_id", event.Data.AudioID, "error", err)
 			continue
 		}
 
 		if err := consumer.Commit(ctx, msg); err != nil {
-			log.Printf("commit error for audio_id=%s: %v", event.Data.AudioID, err)
+			slog.Error("commit error", "audio_id", event.Data.AudioID, "error", err)
 		}
 	}
 }
@@ -134,7 +143,7 @@ func handleMessage(
 	kafkaCfg config.KafkaConfig,
 ) error {
 	data := event.Data
-	log.Printf("processing audio_id=%s bucket=%s key=%s", data.AudioID, data.Bucket, data.ObjectKey)
+	slog.Info("processing", "audio_id", data.AudioID, "bucket", data.Bucket, "object_key", data.ObjectKey)
 
 	deleting, err := pgStore.IsUserDeleting(ctx, data.UserID)
 	if err != nil {
@@ -190,7 +199,7 @@ func handleMessage(
 		return err
 	}
 
-	log.Printf("completed audio_id=%s duration=%.2fs", data.AudioID, result.DurationSeconds)
+	slog.Info("completed", "audio_id", data.AudioID, "duration_seconds", result.DurationSeconds)
 	return nil
 }
 

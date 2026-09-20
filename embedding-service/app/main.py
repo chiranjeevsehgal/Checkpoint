@@ -7,6 +7,7 @@ from .chunker import TokenChunker
 from .embedder import Embedder
 from .events import EmbeddingJobEvent, InvalidEvent
 from .kafka import Kafka
+from .logging_setup import setup
 from .store import Store
 
 log = logging.getLogger("embedding")
@@ -39,16 +40,13 @@ def process(event: EmbeddingJobEvent, embedder: Embedder, chunker: TokenChunker,
         vectors=vectors,
     )
     log.info(
-        "embedded audio_id=%s user_id=%s chunks=%d",
-        event.audio_id, event.user_id, len(chunks),
+        "embedded",
+        extra={"audio_id": event.audio_id, "user_id": event.user_id, "chunks": len(chunks)},
     )
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    setup("embedding-service")
     cfg = load()
 
     embedder = Embedder(cfg.embedding_model)
@@ -57,8 +55,12 @@ def main() -> None:
     store.connect()
     kafka = Kafka(cfg.kafka_brokers, cfg.kafka_topic, cfg.kafka_consumer_group)
     log.info(
-        "listening on kafka topic %s (group %s), model %s, writing to pgvector",
-        cfg.kafka_topic, cfg.kafka_consumer_group, cfg.embedding_model,
+        "listening",
+        extra={
+            "topic": cfg.kafka_topic,
+            "group": cfg.kafka_consumer_group,
+            "model": cfg.embedding_model,
+        },
     )
 
     stop = False
@@ -78,16 +80,19 @@ def main() -> None:
             continue
         if Kafka.error(msg):
             if msg.error().fatal():
-                log.error("fatal kafka error: %s", msg.error())
+                log.error("fatal kafka error", extra={"error": str(msg.error())})
                 break
-            log.warning("kafka error: %s", msg.error())
+            log.warning("kafka error", extra={"error": str(msg.error())})
             continue
 
         try:
             event = EmbeddingJobEvent.from_raw(msg.value())
         except InvalidEvent as exc:
             kafka.send_to_dlq("INVALID_EVENT", str(exc), msg.value())
-            log.error("dlq audio offset=%d partition=%d: %s", msg.offset(), msg.partition(), exc)
+            log.error(
+                "dlq",
+                extra={"offset": msg.offset(), "partition": msg.partition(), "error": str(exc)},
+            )
             kafka.commit(msg)
             retry_attempt = 0
             continue
@@ -96,12 +101,12 @@ def main() -> None:
             process(event, embedder, chunker, store)
         except InvalidEvent as exc:
             kafka.send_to_dlq("INVALID_EVENT", str(exc), msg.value())
-            log.error("dlq audio_id=%s: %s", event.audio_id, exc)
+            log.error("dlq", extra={"audio_id": event.audio_id, "error": str(exc)})
             kafka.commit(msg)
             retry_attempt = 0
             continue
         except StaleDeletedUser:
-            log.info("stale_deleted_user_event audio_id=%s", event.audio_id)
+            log.info("stale_deleted_user_event", extra={"audio_id": event.audio_id})
             kafka.commit(msg)
             retry_attempt = 0
             continue
@@ -109,8 +114,13 @@ def main() -> None:
             retry_attempt += 1
             backoff = RETRY_BACKOFFS[min(retry_attempt - 1, len(RETRY_BACKOFFS) - 1)]
             log.error(
-                "transient failure (attempt %d) audio_id=%s: %s; retrying in %ds",
-                retry_attempt, event.audio_id, exc, backoff,
+                "transient failure; retrying",
+                extra={
+                    "attempt": retry_attempt,
+                    "audio_id": event.audio_id,
+                    "error": str(exc),
+                    "retry_seconds": backoff,
+                },
             )
             # Drop the pooled pg connection: if the failure was a broken
             # socket, reusing it would fail every subsequent attempt.
