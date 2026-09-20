@@ -52,8 +52,9 @@ type Producer struct {
 
 func NewProducer(cfg config.KafkaConfig) *Producer {
 	writer := &kafkago.Writer{
-		Addr:     kafkago.TCP(cfg.Brokers...),
-		Balancer: &kafkago.LeastBytes{},
+		Addr:         kafkago.TCP(cfg.Brokers...),
+		Balancer:     &kafkago.LeastBytes{},
+		RequiredAcks: kafkago.RequireAll,
 		// Topic intentionally left unset on the writer itself — this service publishes to two different topics (embedding + extraction jobs), so each message specifies its own topic.
 	}
 	return &Producer{writer: writer}

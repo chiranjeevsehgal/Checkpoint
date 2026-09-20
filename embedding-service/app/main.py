@@ -2,17 +2,18 @@ import logging
 import signal
 import time
 
+import psycopg
+
 from .config import load
 from .chunker import TokenChunker
 from .embedder import Embedder
 from .events import EmbeddingJobEvent, InvalidEvent
+from .health import HealthServer
 from .kafka import Kafka
 from .logging_setup import setup
 from .store import Store
 
 log = logging.getLogger("embedding")
-
-RETRY_BACKOFFS = [1, 5, 15, 60]
 
 
 class StaleDeletedUser(Exception):
@@ -72,6 +73,10 @@ def main() -> None:
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
+    health = HealthServer(cfg.metrics_addr, cfg.metrics_port)
+    health.start()
+    health.set_ready()
+
     retry_attempt = 0
 
     while not stop:
@@ -94,6 +99,7 @@ def main() -> None:
                 extra={"offset": msg.offset(), "partition": msg.partition(), "error": str(exc)},
             )
             kafka.commit(msg)
+            health.inc("embedding_events_invalid_total")
             retry_attempt = 0
             continue
 
@@ -103,30 +109,39 @@ def main() -> None:
             kafka.send_to_dlq("INVALID_EVENT", str(exc), msg.value())
             log.error("dlq", extra={"audio_id": event.audio_id, "error": str(exc)})
             kafka.commit(msg)
+            health.inc("embedding_events_invalid_total")
             retry_attempt = 0
             continue
         except StaleDeletedUser:
             log.info("stale_deleted_user_event", extra={"audio_id": event.audio_id})
             kafka.commit(msg)
+            health.inc("embedding_events_stale_total")
             retry_attempt = 0
             continue
         except Exception as exc:
+            # Only InvalidEvent and StaleDeletedUser are terminal (committed
+            # above). Everything else — psycopg.Error, Kafka errors, model
+            # failures — retries with backoff by design, mirroring the Go
+            # workers' redelivery model. The class name is logged so new
+            # terminal cases can be split out when they appear.
             retry_attempt += 1
-            backoff = RETRY_BACKOFFS[min(retry_attempt - 1, len(RETRY_BACKOFFS) - 1)]
+            backoff = cfg.retry_backoffs[min(retry_attempt - 1, len(cfg.retry_backoffs) - 1)]
             log.error(
                 "transient failure; retrying",
                 extra={
                     "attempt": retry_attempt,
                     "audio_id": event.audio_id,
                     "error": str(exc),
+                    "error_type": type(exc).__name__,
                     "retry_seconds": backoff,
                 },
             )
+            health.inc("embedding_events_failed_total")
             # Drop the pooled pg connection: if the failure was a broken
             # socket, reusing it would fail every subsequent attempt.
             try:
                 store.reset()
-            except Exception:
+            except psycopg.Error:
                 log.warning("pg reconnect failed; will retry next attempt")
             time.sleep(backoff)
             # Seek back so the same message is redelivered after the pause;
@@ -135,10 +150,12 @@ def main() -> None:
             continue
 
         retry_attempt = 0
+        health.inc("embedding_events_ok_total")
         kafka.commit(msg)
 
     kafka.close()
     store.close()
+    health.stop()
     log.info("shut down cleanly")
 
 

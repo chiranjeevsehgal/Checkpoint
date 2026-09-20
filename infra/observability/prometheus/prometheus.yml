@@ -1,5 +1,7 @@
-# Scrapes the ingestion API's dependency-free Prometheus endpoint. The other
-# workers expose no HTTP server yet, so they are not scraped here.
+# Scrapes the ingestion API and the worker health endpoints. Every worker
+# exposes GET /health/live, GET /health/ready and GET /metrics (Prometheus
+# text format, no client library) on its container port; nothing is published
+# to the host.
 global:
   scrape_interval: 15s
 
@@ -12,3 +14,28 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["ingestion-api:8080"]
+
+  - job_name: transcription
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["transcription:9081"]
+
+  - job_name: extraction
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["extraction:9082"]
+
+  - job_name: notification
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["notification-service:9083"]
+
+  - job_name: rollup
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["rollup:9084"]
+
+  - job_name: embedding
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["embedding:9085"]

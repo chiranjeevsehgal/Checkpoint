@@ -43,9 +43,18 @@ func (s Summarizer) Daily(ctx context.Context, day time.Time, src model.DaySourc
 }
 
 // Weekly summarizes a week from its ordered daily recaps (index i is
-// weekStart+i days). Empty entries are skipped.
+// weekStart+i days). Empty entries are skipped, and the heading tells the
+// model how many days had recordings so a partial week is never presented
+// as a complete one.
 func (s Summarizer) Weekly(ctx context.Context, weekStart time.Time, dailyTexts []string) (string, error) {
-	heading := "Weekly recap for the week of " + weekStart.Format("2006-01-02")
+	covered := 0
+	for _, text := range dailyTexts {
+		if strings.TrimSpace(text) != "" {
+			covered++
+		}
+	}
+	heading := fmt.Sprintf("Weekly recap for the week of %s (based on %d of %d days with recordings)",
+		weekStart.Format("2006-01-02"), covered, len(dailyTexts))
 	var b strings.Builder
 	for i, text := range dailyTexts {
 		if strings.TrimSpace(text) == "" {

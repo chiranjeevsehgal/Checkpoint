@@ -77,6 +77,10 @@ func main() {
 		"embedding_topic", cfg.Kafka.ProduceTopicEmbedding,
 		"extraction_topic", cfg.Kafka.ProduceTopicExtraction)
 
+	health := observability.NewHealthServer(":9081")
+	health.Start(ctx)
+	health.SetReady(true)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -99,6 +103,7 @@ func main() {
 			// Malformed identifiers never succeed on redelivery, so drop the
 			// message instead of looping on it.
 			slog.Warn("dropping invalid event", "error", err)
+			health.Inc("transcription_processed_invalid_total")
 			if cerr := consumer.Commit(ctx, msg); cerr != nil {
 				slog.Error("commit error for invalid event", "error", cerr)
 			}
@@ -108,6 +113,7 @@ func main() {
 		if err := handleMessage(ctx, event, transcriber, minioClient, pgStore, producer, cfg.Kafka); err != nil {
 			if errors.Is(err, errStaleDeletedUser) {
 				slog.Info("stale_deleted_user_event", "audio_id", event.Data.AudioID)
+				health.Inc("transcription_processed_stale_total")
 				if cerr := consumer.Commit(ctx, msg); cerr != nil {
 					slog.Error("commit error for stale event", "error", cerr)
 				}
@@ -115,6 +121,7 @@ func main() {
 			}
 			if errors.Is(err, errOmitTranscript) {
 				slog.Info("omitted transcript", "audio_id", event.Data.AudioID, "reason", err)
+				health.Inc("transcription_processed_omitted_total")
 				if cerr := consumer.Commit(ctx, msg); cerr != nil {
 					slog.Error("commit error for omitted transcript", "error", cerr)
 				}
@@ -124,9 +131,11 @@ func main() {
 			// restart — intentional, so a failed transcription isn't silently
 			// lost.
 			slog.Error("failed to process", "audio_id", event.Data.AudioID, "error", err)
+			health.Inc("transcription_processed_failed_total")
 			continue
 		}
 
+		health.Inc("transcription_processed_ok_total")
 		if err := consumer.Commit(ctx, msg); err != nil {
 			slog.Error("commit error", "audio_id", event.Data.AudioID, "error", err)
 		}
@@ -247,16 +256,6 @@ func buildProvider(cfg *config.Config) (provider.Transcriber, error) {
 	case "deepgram":
 		return provider.NewDeepgramProvider(cfg.Providers.Deepgram), nil
 	default:
-		return nil, unsupportedProviderErr(cfg.Provider)
+		return nil, fmt.Errorf("unsupported transcription provider %q: must be elevenlabs or deepgram", cfg.Provider)
 	}
-}
-
-func unsupportedProviderErr(name string) error {
-	return &unsupportedProviderError{name: name}
-}
-
-type unsupportedProviderError struct{ name string }
-
-func (e *unsupportedProviderError) Error() string {
-	return "unsupported transcription provider: " + e.name
 }

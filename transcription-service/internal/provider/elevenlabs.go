@@ -25,15 +25,21 @@ type ElevenLabsProvider struct {
 	modelID        string
 	diarize        bool
 	tagAudioEvents bool
+	maxAttempts    int
 	client         *http.Client
 }
 
 func NewElevenLabsProvider(cfg config.ElevenLabsConfig) *ElevenLabsProvider {
+	attempts := cfg.MaxAttempts
+	if attempts <= 0 {
+		attempts = 5
+	}
 	return &ElevenLabsProvider{
 		apiKey:         cfg.APIKey(),
 		modelID:        cfg.ModelID,
 		diarize:        cfg.Diarize,
 		tagAudioEvents: cfg.TagAudioEvents,
+		maxAttempts:    attempts,
 		client:         &http.Client{Timeout: 10 * time.Minute},
 	}
 }
@@ -42,7 +48,7 @@ func (e *ElevenLabsProvider) Name() string { return "elevenlabs" }
 
 func (e *ElevenLabsProvider) Transcribe(ctx context.Context, audio []byte, contentType string, languages []string) (*model.TranscriptResult, error) {
 	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	for attempt := 1; attempt <= e.maxAttempts; attempt++ {
 		result, retryable, err := e.attempt(ctx, audio, contentType, languages)
 		if err == nil {
 			return result, nil
@@ -51,7 +57,7 @@ func (e *ElevenLabsProvider) Transcribe(ctx context.Context, audio []byte, conte
 		if !retryable {
 			return nil, err
 		}
-		if attempt == maxAttempts {
+		if attempt == e.maxAttempts {
 			break
 		}
 		backoff := time.Duration(1<<(attempt-1)) * time.Second
@@ -61,7 +67,7 @@ func (e *ElevenLabsProvider) Transcribe(ctx context.Context, audio []byte, conte
 		case <-time.After(backoff):
 		}
 	}
-	return nil, fmt.Errorf("elevenlabs failed after %d attempts: %w", maxAttempts, lastErr)
+	return nil, fmt.Errorf("elevenlabs failed after %d attempts: %w", e.maxAttempts, lastErr)
 }
 
 func (e *ElevenLabsProvider) attempt(ctx context.Context, audio []byte, contentType string, languages []string) (*model.TranscriptResult, bool, error) {

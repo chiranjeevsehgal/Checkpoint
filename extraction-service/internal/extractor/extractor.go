@@ -28,6 +28,11 @@ func New(loc *time.Location) Extractor {
 	return Extractor{loc: loc}
 }
 
+// PromptVersion identifies the system prompt that produced a result. It is
+// persisted alongside the model name (model@version) so prompt changes stay
+// visible in the output tables.
+const PromptVersion = "v1"
+
 const systemPrompt = `Role: you are an extraction engine for personal audio transcripts (meetings, voice notes, calls). Each numbered item is a separate transcript.
 
 For every item, extract up to three kinds of output:
@@ -85,7 +90,12 @@ func (e Extractor) Parse(content string, items []model.Job) ([]model.Result, err
 			Text string `json:"text"`
 		} `json:"insights"`
 	}
-	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+	// Strict decoding: json_object mode guarantees JSON, not the shape. An
+	// unexpected key means the model drifted, so fail loudly (retryable)
+	// instead of persisting a silently partial result.
+	decoder := json.NewDecoder(strings.NewReader(content))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
 		return nil, fmt.Errorf("parsing llm json: %w", err)
 	}
 

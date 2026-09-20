@@ -80,14 +80,18 @@ func main() {
 		slog.Info("continuous mode", "model", cfg.Groq.Model)
 	}
 
-	runLoop(ctx, store, sum, client, cfg)
+	health := observability.NewHealthServer(":9084")
+	health.Start(ctx)
+	health.SetReady(true)
+
+	runLoop(ctx, store, sum, client, cfg, health)
 	slog.Info("shut down cleanly")
 }
 
 // runLoop triggers one summary run per night while the window is open. The
 // nightly gate advances only on success, so a failed run is retried with
 // backoff until the window closes.
-func runLoop(ctx context.Context, store *storage.PostgresStore, sum summarizer.Summarizer, client *llm.Client, cfg *config.Config) {
+func runLoop(ctx context.Context, store *storage.PostgresStore, sum summarizer.Summarizer, client *llm.Client, cfg *config.Config, health *observability.HealthServer) {
 	runLoc := cfg.Processing.Loc()
 	if runLoc == nil {
 		runLoc = cfg.Summaries.Loc()
@@ -106,6 +110,7 @@ func runLoop(ctx context.Context, store *storage.PostgresStore, sum summarizer.S
 				if err != nil {
 					attempt++
 					nextAttempt = now.Add(runRetryDelay(attempt))
+					health.Inc("rollup_runs_failed_total")
 					slog.Error("summary run failed", "attempt", attempt, "error", err)
 				} else {
 					slog.Info("summary run complete",
@@ -113,6 +118,7 @@ func runLoop(ctx context.Context, store *storage.PostgresStore, sum summarizer.S
 						"daily", stats.daily.Load(),
 						"weekly", stats.weekly.Load(),
 						"failed", stats.failed.Load())
+					health.Inc("rollup_runs_ok_total")
 					lastRun = runDay
 					attempt = 0
 					nextAttempt = time.Time{}

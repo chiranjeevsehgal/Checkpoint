@@ -56,19 +56,23 @@ func main() {
 		"advance", cfg.Ntfy.Advance(),
 		"poll_interval", cfg.Delivery.PollInterval())
 
-	runLoop(ctx, store, client, cfg)
+	health := observability.NewHealthServer(":9083")
+	health.Start(ctx)
+	health.SetReady(true)
+
+	runLoop(ctx, store, client, cfg, health)
 	slog.Info("shut down cleanly")
 }
 
 // runLoop polls for reminders whose advance or due fire time has arrived and
 // publishes them on a bounded worker pool.
-func runLoop(ctx context.Context, store *storage.PostgresStore, client *ntfy.Client, cfg *config.Config) {
+func runLoop(ctx context.Context, store *storage.PostgresStore, client *ntfy.Client, cfg *config.Config, health *observability.HealthServer) {
 	ticker := time.NewTicker(cfg.Delivery.PollInterval())
 	defer ticker.Stop()
 
 	lastPrune := time.Time{}
 	for {
-		processDue(ctx, store, client, cfg)
+		processDue(ctx, store, client, cfg, health)
 		if time.Since(lastPrune) >= time.Hour {
 			if n, err := store.PruneOld(ctx, cfg.Delivery.Retention()); err != nil {
 				slog.Error("prune error", "error", err)
@@ -86,7 +90,7 @@ func runLoop(ctx context.Context, store *storage.PostgresStore, client *ntfy.Cli
 }
 
 // processDue drains both delivery kinds each poll.
-func processDue(ctx context.Context, store *storage.PostgresStore, client *ntfy.Client, cfg *config.Config) {
+func processDue(ctx context.Context, store *storage.PostgresStore, client *ntfy.Client, cfg *config.Config, health *observability.HealthServer) {
 	var candidates []model.Candidate
 	for _, kind := range []string{model.KindAdvance, model.KindDue} {
 		list, err := store.DueCandidates(ctx, kind,
@@ -114,7 +118,7 @@ func processDue(ctx context.Context, store *storage.PostgresStore, client *ntfy.
 		go func(c model.Candidate) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			deliver(ctx, store, client, cfg, c)
+			deliver(ctx, store, client, cfg, c, health)
 		}(candidate)
 	}
 	wg.Wait()
@@ -122,7 +126,7 @@ func processDue(ctx context.Context, store *storage.PostgresStore, client *ntfy.
 
 // deliver claims one delivery, publishes it, and records the outcome. A
 // retryable failure leaves the row failed so the next poll re-claims it.
-func deliver(ctx context.Context, store *storage.PostgresStore, client *ntfy.Client, cfg *config.Config, c model.Candidate) {
+func deliver(ctx context.Context, store *storage.PostgresStore, client *ntfy.Client, cfg *config.Config, c model.Candidate, health *observability.HealthServer) {
 	id, attempts, claimed, err := store.ClaimDelivery(ctx, c, cfg.Delivery.MaxAttempts, cfg.Delivery.ReclaimAfter())
 	if err != nil {
 		slog.Error("claim failed", "user_id", c.UserID, "error", err)
@@ -145,12 +149,15 @@ func deliver(ctx context.Context, store *storage.PostgresStore, client *ntfy.Cli
 			slog.Error("mark failed", "id", id, "error", ferr)
 		}
 		slog.Error("delivery failed", "kind", c.Kind, "user_id", c.UserID, "attempt", attempts, "error", err)
+		health.Inc("notification_deliveries_failed_total")
 		return
 	}
 	if err := store.MarkSent(ctx, id); err != nil {
 		slog.Error("mark sent failed", "id", id, "error", err)
+		health.Inc("notification_deliveries_failed_total")
 		return
 	}
+	health.Inc("notification_deliveries_ok_total")
 	slog.Info("reminder notified", "kind", c.Kind, "user_id", c.UserID, "attempts", attempts)
 }
 
