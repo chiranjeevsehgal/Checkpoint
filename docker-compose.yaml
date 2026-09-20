@@ -595,6 +595,10 @@ services:
       - backend
     ports:
       - "${BIND_GRAFANA:-127.0.0.1}:3000:3000"
+    # The image runs as uid 472, which cannot read repo-mounted provisioning on
+    # hosts whose parent dirs are not world-traversable. Run as root, matching
+    # Loki/Prometheus/Alloy, so datasources/dashboards/alerts provision.
+    user: "0:0"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
