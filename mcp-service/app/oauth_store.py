@@ -110,6 +110,10 @@ class OAuthStore:
         return request_id
 
     def load_auth_request(self, request_id: str) -> AuthRequest | None:
+        try:
+            uuid.UUID(request_id)
+        except (ValueError, TypeError):
+            return None
         with self._cursor() as cur:
             cur.execute(
                 "SELECT id::text, client_id, redirect_uri, redirect_uri_provided_explicitly, "

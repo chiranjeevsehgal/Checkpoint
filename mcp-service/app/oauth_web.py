@@ -120,11 +120,13 @@ def kratos_login(kratos_url: str, email: str, password: str) -> tuple[str | None
 
 
 def register_oauth_routes(server, provider: CheckpointOAuthProvider, store: OAuthStore,
-                          secret: str, kratos_url: str) -> None:
+                          secret: str, kratos_url: str, public_url: str) -> None:
+    cookie_secure = public_url.startswith("https://")
+
     @server.custom_route("/login", methods=["GET", "POST"])
     async def login(request) -> Response:
-        request_id = request.query_params.get("req") or await _form_value(request, "req")
-        auth_request = await asyncio.to_thread(store.load_auth_request, request_id)
+        request_id = (request.query_params.get("req") or await _form_value(request, "req")).strip()
+        auth_request = await asyncio.to_thread(store.load_auth_request, request_id) if request_id else None
         if auth_request is None:
             return _render(_LOGIN_HTML, req="", error=_error_block("This sign-in link has expired."))
         if request.method == "GET":
@@ -139,16 +141,16 @@ def register_oauth_routes(server, provider: CheckpointOAuthProvider, store: OAut
             return _render(_LOGIN_HTML, req=html.escape(request_id), error=_error_block(error))
         response = RedirectResponse(f"/consent?req={request_id}", status_code=303)
         response.set_cookie(SESSION_COOKIE, sign_session(secret, user_id), max_age=600,
-                            httponly=True, secure=True, samesite="lax", path="/")
+                            httponly=True, secure=cookie_secure, samesite="lax", path="/")
         return response
 
     @server.custom_route("/consent", methods=["GET", "POST"])
     async def consent(request) -> Response:
-        request_id = request.query_params.get("req") or await _form_value(request, "req")
+        request_id = (request.query_params.get("req") or await _form_value(request, "req")).strip()
         user_id = verify_session(secret, request.cookies.get(SESSION_COOKIE))
         if not user_id:
             return RedirectResponse(f"/login?req={request_id}", status_code=303)
-        auth_request = await asyncio.to_thread(store.load_auth_request, request_id)
+        auth_request = await asyncio.to_thread(store.load_auth_request, request_id) if request_id else None
         if auth_request is None:
             return _error("This authorization request has expired.")
         if request.method == "GET":
