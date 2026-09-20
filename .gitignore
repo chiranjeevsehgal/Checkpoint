@@ -2,6 +2,7 @@
 data
 .env
 .env.prod
+/checkpoint_vps_full_recap.md
 *.pyc
 __pycache__/
 *.bin
