@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -48,7 +48,7 @@ func (p *PostgresStore) isMissingTable(err error) bool {
 		return false
 	}
 	missingTableWarned.Do(func() {
-		log.Printf("source tables missing; nothing to summarize")
+		slog.Warn("source tables missing; nothing to summarize")
 	})
 	return true
 }

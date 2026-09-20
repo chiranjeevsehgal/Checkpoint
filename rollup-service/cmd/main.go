@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
@@ -13,6 +13,7 @@ import (
 	"rollup-service/internal/config"
 	"rollup-service/internal/llm"
 	"rollup-service/internal/model"
+	"rollup-service/internal/observability"
 	"rollup-service/internal/storage"
 	"rollup-service/internal/summarizer"
 )
@@ -34,6 +35,8 @@ type runStats struct {
 // window. Each run refreshes every active user's previous local day; the
 // Monday run also backfills the previous week's dailies and writes the weekly.
 func main() {
+	slog.SetDefault(observability.New("rollup-service"))
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -44,12 +47,14 @@ func main() {
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		slog.Error("loading config", "error", err)
+		os.Exit(1)
 	}
 
 	store, err := storage.NewPostgresStore(ctx, cfg.Postgres.DSN())
 	if err != nil {
-		log.Fatalf("connecting to postgres: %v", err)
+		slog.Error("connecting to postgres", "error", err)
+		os.Exit(1)
 	}
 	defer store.Close()
 
@@ -67,14 +72,16 @@ func main() {
 	sum := summarizer.New(client, cfg.Summaries.MaxInputChars)
 
 	if cfg.Processing.WindowEnabled {
-		log.Printf("rollup-service summarizing inside window %s-%s (model %s)",
-			cfg.Processing.WindowStart, cfg.Processing.WindowEnd, cfg.Groq.Model)
+		slog.Info("summarizing inside window",
+			"window_start", cfg.Processing.WindowStart,
+			"window_end", cfg.Processing.WindowEnd,
+			"model", cfg.Groq.Model)
 	} else {
-		log.Printf("rollup-service continuous mode (model %s)", cfg.Groq.Model)
+		slog.Info("continuous mode", "model", cfg.Groq.Model)
 	}
 
 	runLoop(ctx, store, sum, client, cfg)
-	log.Println("shut down cleanly")
+	slog.Info("shut down cleanly")
 }
 
 // runLoop triggers one summary run per night while the window is open. The
@@ -99,10 +106,13 @@ func runLoop(ctx context.Context, store *storage.PostgresStore, sum summarizer.S
 				if err != nil {
 					attempt++
 					nextAttempt = now.Add(runRetryDelay(attempt))
-					log.Printf("summary run failed (attempt %d): %v", attempt, err)
+					slog.Error("summary run failed", "attempt", attempt, "error", err)
 				} else {
-					log.Printf("summary run complete: users=%d daily=%d weekly=%d failed=%d",
-						stats.users, stats.daily.Load(), stats.weekly.Load(), stats.failed.Load())
+					slog.Info("summary run complete",
+						"users", stats.users,
+						"daily", stats.daily.Load(),
+						"weekly", stats.weekly.Load(),
+						"failed", stats.failed.Load())
 					lastRun = runDay
 					attempt = 0
 					nextAttempt = time.Time{}
@@ -145,7 +155,7 @@ func runOnce(ctx context.Context, store *storage.PostgresStore, sum summarizer.S
 		return nil, err
 	}
 	stats := &runStats{users: len(users)}
-	log.Printf("summarizing %d active user(s)", len(users))
+	slog.Info("summarizing active users", "users", len(users))
 
 	sem := make(chan struct{}, cfg.Summaries.WorkerConcurrency)
 	var wg sync.WaitGroup
@@ -172,7 +182,7 @@ func runOnce(ctx context.Context, store *storage.PostgresStore, sum summarizer.S
 func summarizeUser(ctx context.Context, store *storage.PostgresStore, sum summarizer.Summarizer, client *llm.Client, cfg *config.Config, runLoc *time.Location, user model.UserRef, now time.Time, stats *runStats) {
 	deleting, err := store.IsUserDeleting(ctx, user.UserID)
 	if err != nil {
-		log.Printf("tombstone check failed user_id=%s: %v", user.UserID, err)
+		slog.Error("tombstone check failed", "user_id", user.UserID, "error", err)
 		stats.failed.Add(1)
 		return
 	}
@@ -195,7 +205,7 @@ func summarizeUser(ctx context.Context, store *storage.PostgresStore, sum summar
 func writeDaily(ctx context.Context, store *storage.PostgresStore, sum summarizer.Summarizer, client *llm.Client, userID string, loc *time.Location, day time.Time, stats *runStats) {
 	src, err := store.DaySources(ctx, userID, loc, day)
 	if err != nil {
-		log.Printf("day sources failed user_id=%s day=%s: %v", userID, day.Format("2006-01-02"), err)
+		slog.Error("day sources failed", "user_id", userID, "day", day.Format("2006-01-02"), "error", err)
 		stats.failed.Add(1)
 		return
 	}
@@ -204,14 +214,14 @@ func writeDaily(ctx context.Context, store *storage.PostgresStore, sum summarize
 	}
 	text, err := sum.Daily(ctx, day, src)
 	if err != nil {
-		log.Printf("daily summary failed user_id=%s day=%s: %v", userID, day.Format("2006-01-02"), err)
+		slog.Error("daily summary failed", "user_id", userID, "day", day.Format("2006-01-02"), "error", err)
 		stats.failed.Add(1)
 		return
 	}
 	if err := store.UpsertSummary(ctx, model.Summary{
 		UserID: userID, Period: model.PeriodDaily, PeriodStart: day, Text: text, Model: client.Model(),
 	}); err != nil {
-		log.Printf("daily upsert failed user_id=%s day=%s: %v", userID, day.Format("2006-01-02"), err)
+		slog.Error("daily upsert failed", "user_id", userID, "day", day.Format("2006-01-02"), "error", err)
 		stats.failed.Add(1)
 		return
 	}
@@ -224,7 +234,7 @@ func writeWeekly(ctx context.Context, store *storage.PostgresStore, sum summariz
 	weekStart := mondayOfPreviousWeek(now.In(loc))
 	existing, err := store.Summaries(ctx, userID, model.PeriodDaily, weekStart, weekStart.AddDate(0, 0, 6))
 	if err != nil {
-		log.Printf("weekly lookup failed user_id=%s: %v", userID, err)
+		slog.Error("weekly lookup failed", "user_id", userID, "error", err)
 		stats.failed.Add(1)
 		return
 	}
@@ -253,14 +263,14 @@ func writeWeekly(ctx context.Context, store *storage.PostgresStore, sum summariz
 
 	text, err := sum.Weekly(ctx, weekStart, dailyTexts)
 	if err != nil {
-		log.Printf("weekly summary failed user_id=%s week=%s: %v", userID, weekStart.Format("2006-01-02"), err)
+		slog.Error("weekly summary failed", "user_id", userID, "week", weekStart.Format("2006-01-02"), "error", err)
 		stats.failed.Add(1)
 		return
 	}
 	if err := store.UpsertSummary(ctx, model.Summary{
 		UserID: userID, Period: model.PeriodWeekly, PeriodStart: weekStart, Text: text, Model: client.Model(),
 	}); err != nil {
-		log.Printf("weekly upsert failed user_id=%s week=%s: %v", userID, weekStart.Format("2006-01-02"), err)
+		slog.Error("weekly upsert failed", "user_id", userID, "week", weekStart.Format("2006-01-02"), "error", err)
 		stats.failed.Add(1)
 		return
 	}
@@ -272,7 +282,7 @@ func writeWeekly(ctx context.Context, store *storage.PostgresStore, sum summariz
 func backfillDaily(ctx context.Context, store *storage.PostgresStore, sum summarizer.Summarizer, client *llm.Client, userID string, loc *time.Location, day time.Time, stats *runStats) string {
 	src, err := store.DaySources(ctx, userID, loc, day)
 	if err != nil {
-		log.Printf("backfill sources failed user_id=%s day=%s: %v", userID, day.Format("2006-01-02"), err)
+		slog.Error("backfill sources failed", "user_id", userID, "day", day.Format("2006-01-02"), "error", err)
 		stats.failed.Add(1)
 		return ""
 	}
@@ -281,14 +291,14 @@ func backfillDaily(ctx context.Context, store *storage.PostgresStore, sum summar
 	}
 	text, err := sum.Daily(ctx, day, src)
 	if err != nil {
-		log.Printf("backfill daily failed user_id=%s day=%s: %v", userID, day.Format("2006-01-02"), err)
+		slog.Error("backfill daily failed", "user_id", userID, "day", day.Format("2006-01-02"), "error", err)
 		stats.failed.Add(1)
 		return ""
 	}
 	if err := store.UpsertSummary(ctx, model.Summary{
 		UserID: userID, Period: model.PeriodDaily, PeriodStart: day, Text: text, Model: client.Model(),
 	}); err != nil {
-		log.Printf("backfill upsert failed user_id=%s day=%s: %v", userID, day.Format("2006-01-02"), err)
+		slog.Error("backfill upsert failed", "user_id", userID, "day", day.Format("2006-01-02"), "error", err)
 		stats.failed.Add(1)
 		return ""
 	}
@@ -304,7 +314,7 @@ func userLocation(user model.UserRef, cfg *config.Config) *time.Location {
 	}
 	loc, err := time.LoadLocation(user.Timezone)
 	if err != nil {
-		log.Printf("invalid stored timezone %q user_id=%s; using default", user.Timezone, user.UserID)
+		slog.Warn("invalid stored timezone; using default", "timezone", user.Timezone, "user_id", user.UserID)
 		return cfg.Summaries.Loc()
 	}
 	return loc

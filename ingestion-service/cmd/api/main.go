@@ -21,6 +21,7 @@ import (
 	"checkpoint/ingestion/internal/identitycleanup"
 	"checkpoint/ingestion/internal/metrics"
 	"checkpoint/ingestion/internal/ntfy"
+	"checkpoint/ingestion/internal/observability"
 	"checkpoint/ingestion/internal/outbox"
 	"checkpoint/ingestion/internal/queue"
 	"checkpoint/ingestion/internal/repository/postgres"
@@ -29,7 +30,7 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := observability.New("ingestion-api")
 	slog.SetDefault(logger)
 
 	cfg, err := config.Load()
