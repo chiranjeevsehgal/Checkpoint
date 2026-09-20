@@ -72,7 +72,8 @@ def build_server(cfg, store: ReadStore, index, embedder: Embedder,
             instructions=tools.GROUNDING,
         )
     tools.register(server, store, index, embedder, cfg.fallback_timezone, cfg.kratos_admin_url,
-                   cfg.max_text_chars, as_of=as_of)
+                   cfg.max_text_chars, as_of=as_of, hybrid_enabled=cfg.hybrid_enabled,
+                   oversample=cfg.oversample)
     return server
 
 

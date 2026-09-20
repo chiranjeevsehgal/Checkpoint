@@ -25,6 +25,15 @@ def _iso(value: datetime | None) -> str | None:
     return value.astimezone(timezone.utc).isoformat()
 
 
+def plain_embedding(value):
+    """pgvector may hand back a Vector, ndarray or list; normalise to a list."""
+    if value is None or isinstance(value, list):
+        return value
+    if hasattr(value, "to_list"):
+        return value.to_list()
+    return list(value)
+
+
 def row_to_document(row: dict, embedding) -> "Document":
     meta = {
         "user_id": str(row["user_id"]),

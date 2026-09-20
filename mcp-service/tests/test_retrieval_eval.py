@@ -2,8 +2,9 @@
 
 The corpus pairs each expected document with many near-neighbour distractors
 that share every token except the distinguishing one, so the metric can show a
-dense miss. Quality thresholds are deliberately not asserted; the numbers are
-recorded before and after the hybrid change. Run:
+dense miss. Hybrid (dense + full-text fusion) must score at least as well as
+dense alone, and at least RETRIEVAL_MIN_HIT_AT_5 of the queries must hit.
+Run:
 
     TEST_DATABASE_URL=postgres://... python -m unittest tests.test_retrieval_eval -v
 """
@@ -27,6 +28,7 @@ except ModuleNotFoundError:  # pragma: no cover - ML/DB deps absent
 
 DSN = os.getenv("TEST_DATABASE_URL")
 TOP_K = 5
+MIN_HIT_AT_5 = float(os.getenv("RETRIEVAL_MIN_HIT_AT_5", "0.8"))
 
 PEOPLE = ("Priya", "Marco", "Lena", "Sam", "Aiko", "Tomas", "Nadia", "Omar")
 CODENAMES = ("Helios", "Titan", "Nimbus", "Vertex", "Onyx", "Zephyr", "Atlas", "Orion")
@@ -133,18 +135,45 @@ class RetrievalEvalTest(unittest.TestCase):
         cls.conn.close()
 
     def test_reports_metrics_and_stays_grounded(self):
-        ranks = []
-        for query, expected in QUERIES:
-            results = retrieval.retrieve(
-                self.index, self.embedder, self.user_id, query,
-                search.build_filters(self.user_id), TOP_K)
-            source_ids = [doc.meta["source_id"] for doc in results]
-            self.assertTrue(set(source_ids) <= self.source_ids, f"ungrounded results for {query!r}")
-            ranks.append(source_ids.index(expected) + 1 if expected in source_ids else 0)
+        from app.store import ReadStore
 
-        hits = sum(1 for rank in ranks if rank) / len(ranks)
-        mrr = sum(1 / rank for rank in ranks if rank) / len(ranks)
-        print(f"\n[retrieval-eval] corpus={len(CORPUS)} hit@{TOP_K}={hits:.2f} mrr={mrr:.2f} ranks={ranks}")
+        store = ReadStore(DSN)
+        store.connect()
+        try:
+            dense_ranks = []
+            hybrid_ranks = []
+            for query, expected in QUERIES:
+                dense = retrieval.retrieve(
+                    self.index, self.embedder, self.user_id, query,
+                    search.build_filters(self.user_id), TOP_K)
+                dense_ids = [doc.meta["source_id"] for doc in dense]
+                self.assertTrue(set(dense_ids) <= self.source_ids, f"ungrounded results for {query!r}")
+                dense_ranks.append(dense_ids.index(expected) + 1 if expected in dense_ids else 0)
+
+                hybrid = retrieval.retrieve(
+                    self.index, self.embedder, self.user_id, query,
+                    search.build_filters(self.user_id), TOP_K,
+                    store=store, hybrid_enabled=True)
+                hybrid_ids = [doc.meta["source_id"] for doc in hybrid]
+                self.assertTrue(set(hybrid_ids) <= self.source_ids,
+                                f"ungrounded hybrid results for {query!r}")
+                hybrid_ranks.append(hybrid_ids.index(expected) + 1 if expected in hybrid_ids else 0)
+
+            for name, ranks in (("dense", dense_ranks), ("hybrid", hybrid_ranks)):
+                hits = sum(1 for rank in ranks if rank) / len(ranks)
+                mrr = sum(1 / rank for rank in ranks if rank) / len(ranks)
+                print(f"\n[retrieval-eval] {name} corpus={len(CORPUS)} "
+                      f"hit@{TOP_K}={hits:.2f} mrr={mrr:.2f} ranks={ranks}")
+
+            dense_hits = sum(1 for rank in dense_ranks if rank)
+            hybrid_hits = sum(1 for rank in hybrid_ranks if rank)
+            self.assertGreaterEqual(
+                hybrid_hits, dense_hits, "hybrid fusion must not regress dense retrieval")
+            self.assertGreaterEqual(
+                hybrid_hits / len(hybrid_ranks), MIN_HIT_AT_5,
+                f"hybrid hit@{TOP_K} below floor {MIN_HIT_AT_5}")
+        finally:
+            store.close()
 
 
 if __name__ == "__main__":

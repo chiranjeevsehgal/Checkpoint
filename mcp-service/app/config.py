@@ -17,6 +17,8 @@ class Config:
     kratos_public_url: str
     kratos_admin_url: str
     max_text_chars: int
+    hybrid_enabled: bool
+    oversample: int
     oauth_session_secret: str
     oauth_access_ttl_seconds: int
     oauth_refresh_ttl_seconds: int
@@ -42,6 +44,18 @@ def _int_env(name: str, default: int) -> int:
         raise ValueError(f"{name} must be an integer, got {raw!r}")
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    normalized = raw.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{name} must be a boolean, got {raw!r}")
+
+
 def load() -> Config:
     database_mcp_url = os.getenv("DATABASE_MCP_URL")
     if not database_mcp_url:
@@ -64,6 +78,8 @@ def load() -> Config:
         kratos_public_url=os.getenv("KRATOS_PUBLIC_URL", ""),
         kratos_admin_url=os.getenv("KRATOS_ADMIN_URL", ""),
         max_text_chars=_int_env("MCP_MAX_TEXT_CHARS", 8000),
+        hybrid_enabled=_bool_env("MCP_HYBRID_ENABLED", True),
+        oversample=_int_env("MCP_OVERSAMPLE", 2),
         oauth_session_secret=os.getenv("MCP_OAUTH_SESSION_SECRET", ""),
         oauth_access_ttl_seconds=_int_env("MCP_OAUTH_ACCESS_TTL_SECONDS", 3600),
         oauth_refresh_ttl_seconds=_int_env("MCP_OAUTH_REFRESH_TTL_SECONDS", 2592000),
@@ -78,4 +94,6 @@ def load() -> Config:
         raise ValueError("MCP_EMBED_BATCH_SIZE must be positive")
     if cfg.max_text_chars <= 0:
         raise ValueError("MCP_MAX_TEXT_CHARS must be positive")
+    if cfg.oversample < 1:
+        raise ValueError("MCP_OVERSAMPLE must be at least 1")
     return cfg

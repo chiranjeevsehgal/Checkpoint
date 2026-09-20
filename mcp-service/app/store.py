@@ -109,3 +109,25 @@ class ReadStore:
         with self._user_cursor(user_id) as cur:
             cur.execute(statement, params)
             return cur.fetchall()
+
+    def lexical_search(self, user_id: str, query: str, limit: int) -> list[dict]:
+        """Full-text matches for hybrid retrieval, best first.
+
+        Runs under the same per-transaction app.user_id RLS as every other
+        read, so a key can never match another account's rows. Returns raw
+        search_documents rows (including the stored embedding) for rank fusion.
+        """
+        statement = (
+            "SELECT id, user_id, source_type, source_id, audio_id, chunk_index, content, "
+            "language, occurred_at, recorded_at, reminded_at, is_done, important, period, "
+            "period_start, model, embedding "
+            "FROM search_documents "
+            "WHERE user_id = %(user_id)s "
+            "AND to_tsvector('simple', content) @@ plainto_tsquery('simple', %(query)s) "
+            "ORDER BY ts_rank(to_tsvector('simple', content), "
+            "plainto_tsquery('simple', %(query)s)) DESC "
+            "LIMIT %(limit)s"
+        )
+        with self._user_cursor(user_id) as cur:
+            cur.execute(statement, {"user_id": user_id, "query": query, "limit": max(1, limit)})
+            return cur.fetchall()

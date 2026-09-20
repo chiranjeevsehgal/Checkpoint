@@ -28,7 +28,8 @@ GROUNDING = (
 
 
 def register(mcp, store, index, embedder, fallback_timezone: str,
-             kratos_admin_url: str = "", max_text_chars: int = 8000, as_of=None) -> None:
+             kratos_admin_url: str = "", max_text_chars: int = 8000, as_of=None,
+             hybrid_enabled: bool = False, oversample: int = 2) -> None:
     def clamp(limit: int) -> int:
         return max(1, min(limit, MAX_LIMIT))
 
@@ -91,10 +92,11 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
         limit: int = 10,
         response_format: str = "detailed",
     ) -> dict:
-        """Find relevant moments across all recordings by meaning (semantic search).
+        """Find relevant moments across all recordings by meaning and keywords.
 
         Use for open-ended questions ("what did I say about the launch?"). Results
-        are ranked by similarity, not time, and one recording may appear as several
+        fuse semantic similarity with full-text matching and are ranked, not
+        chronological; one recording may appear as several
         transcript chunks (see `chunk_index`; -1 means a whole item). Prefer narrow
         queries. To read a full recording, pass its `audio_id` to get_transcript.
 
@@ -120,7 +122,8 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
         start_at, end_at = timeutil.parse_range(start, end, zone)
         filters = semantic.build_filters(user_id, selected_types(types), start_at, end_at)
         results = retrieval.retrieve(
-            index, embedder, user_id, query, filters, clamp(limit), min_score)
+            index, embedder, user_id, query, filters, clamp(limit), min_score,
+            store=store, hybrid_enabled=hybrid_enabled, oversample=oversample)
         payload = {
             "count": len(results),
             "results": [document_view(d, zone, concise) for d in results],
