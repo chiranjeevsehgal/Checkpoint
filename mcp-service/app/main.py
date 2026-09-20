@@ -51,7 +51,8 @@ def _auth_settings(cfg, allow_registration: bool) -> AuthSettings:
     )
 
 
-def build_server(cfg, store: ReadStore, index, embedder: Embedder, oauth_store: OAuthStore | None = None) -> MCPServer:
+def build_server(cfg, store: ReadStore, index, embedder: Embedder,
+                 oauth_store: OAuthStore | None = None, as_of=None) -> MCPServer:
     if oauth_store is not None:
         provider = CheckpointOAuthProvider(
             oauth_store, cfg.public_url, cfg.database_mcp_url,
@@ -67,7 +68,8 @@ def build_server(cfg, store: ReadStore, index, embedder: Embedder, oauth_store: 
             token_verifier=auth.KeyTokenVerifier(cfg.database_mcp_url),
             auth=_auth_settings(cfg, False),
         )
-    tools.register(server, store, index, embedder, cfg.fallback_timezone, cfg.kratos_admin_url)
+    tools.register(server, store, index, embedder, cfg.fallback_timezone, cfg.kratos_admin_url,
+                   cfg.max_text_chars, as_of=as_of)
     return server
 
 
@@ -95,7 +97,8 @@ def main() -> None:
     stop = threading.Event()
     threading.Thread(target=_index_loop, args=(indexer, cfg.poll_seconds, stop), daemon=True).start()
 
-    server = build_server(cfg, store, index, embedder, oauth_store)
+    server = build_server(cfg, store, index, embedder, oauth_store,
+                          as_of=lambda: indexer.last_synced_at)
     try:
         server.run(transport="streamable-http", host=cfg.host, port=cfg.port)
     finally:

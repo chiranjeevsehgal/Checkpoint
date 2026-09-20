@@ -23,7 +23,7 @@ GROUNDING = (
 
 
 def register(mcp, store, index, embedder, fallback_timezone: str,
-             kratos_admin_url: str = "") -> None:
+             kratos_admin_url: str = "", max_text_chars: int = 8000, as_of=None) -> None:
     def clamp(limit: int) -> int:
         return max(1, min(limit, MAX_LIMIT))
 
@@ -37,14 +37,29 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
         chosen = tuple(t for t in documents.SOURCE_TYPES if t in requested)
         return chosen or None
 
+    def as_of_value():
+        return as_of() if as_of else None
+
+    def respond(payload: dict, zone) -> dict:
+        return presentation.envelope(payload, zone, as_of_value())
+
+    def fail(code: str, message: str, zone=None) -> dict:
+        return presentation.error(code, message, zone, as_of_value())
+
+    def row_view(row: dict, zone) -> dict:
+        return presentation.format_row(row, zone, max_text_chars)
+
+    def document_view(document, zone) -> dict:
+        return presentation.format_document(document, zone, max_text_chars)
+
     @mcp.tool()
     def whoami() -> dict:
         """Report the authenticated account, its display name, timezone, and the searchable types."""
         user_id = current_user_id()
         if user_id is None:
-            return presentation.error("unauthenticated", "unauthenticated")
+            return fail("unauthenticated", "unauthenticated")
         zone = zone_for(user_id)
-        return presentation.envelope({
+        return respond({
             "user_id": user_id,
             "name": fetch_name(kratos_admin_url, user_id),
             "source_types": list(documents.SOURCE_TYPES),
@@ -72,9 +87,9 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
         """
         user_id = current_user_id()
         if user_id is None:
-            return presentation.error("unauthenticated", "unauthenticated")
+            return fail("unauthenticated", "unauthenticated")
         if not query.strip():
-            return presentation.error("invalid_query", "query must not be empty")
+            return fail("invalid_query", "query must not be empty")
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
         filters = semantic.build_filters(user_id, selected_types(types), start_at, end_at)
@@ -82,10 +97,9 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
             index, embedder, user_id, query, filters, clamp(limit), min_score)
         payload = {
             "count": len(results),
-            "results": [presentation.format_document(d, zone) for d in results],
+            "results": [document_view(d, zone) for d in results],
         }
-        return presentation.envelope(
-            presentation.with_empty_note(payload, "No matching documents."), zone)
+        return respond(presentation.with_empty_note(payload, "No matching documents."), zone)
 
     @mcp.tool()
     def timeline(
@@ -93,6 +107,7 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
         end: str,
         types: list[str] | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> dict:
         """Everything recorded in a time window, newest first.
 
@@ -101,18 +116,18 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
             end: Window end, inclusive.
             types: Optional subset of transcript, todo, reminder, insight, summary.
             limit: Maximum number of items (1-200).
+            offset: Number of items to skip, for paging.
         """
         user_id = current_user_id()
         if user_id is None:
-            return presentation.error("unauthenticated", "unauthenticated")
+            return fail("unauthenticated", "unauthenticated")
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
         rows = store.fetch(user_id, DocumentQuery(
             source_types=selected_types(types), start=start_at, end=end_at,
-            chunk_index=documents.WHOLE_DOCUMENT, limit=clamp(limit)))
-        payload = {"count": len(rows), "items": [presentation.format_row(r, zone) for r in rows]}
-        return presentation.envelope(
-            presentation.with_empty_note(payload, "No items in this window."), zone)
+            chunk_index=documents.WHOLE_DOCUMENT, limit=clamp(limit), offset=max(0, offset)))
+        payload = {"count": len(rows), "items": [row_view(r, zone) for r in rows]}
+        return respond(presentation.with_empty_note(payload, "No items in this window."), zone)
 
     @mcp.tool()
     def list_todos(
@@ -120,6 +135,7 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
         start: str | None = None,
         end: str | None = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> dict:
         """Todos extracted from recordings.
 
@@ -128,20 +144,20 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
             start: Optional range start (YYYY-MM-DD in your timezone or ISO-8601).
             end: Optional range end, inclusive.
             limit: Maximum number of todos (1-200).
+            offset: Number of todos to skip, for paging.
         """
         user_id = current_user_id()
         if user_id is None:
-            return presentation.error("unauthenticated", "unauthenticated")
+            return fail("unauthenticated", "unauthenticated")
         if status.lower() not in _TODO_STATUS:
-            return presentation.error("invalid_status", "status must be all, open, or done")
+            return fail("invalid_status", "status must be all, open, or done")
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
         rows = store.fetch(user_id, DocumentQuery(
             source_types=(documents.SOURCE_TODO,), start=start_at, end=end_at,
-            is_done=_TODO_STATUS[status.lower()], limit=clamp(limit)))
-        payload = {"count": len(rows), "items": [presentation.format_row(r, zone) for r in rows]}
-        return presentation.envelope(
-            presentation.with_empty_note(payload, "No todos matched."), zone)
+            is_done=_TODO_STATUS[status.lower()], limit=clamp(limit), offset=max(0, offset)))
+        payload = {"count": len(rows), "items": [row_view(r, zone) for r in rows]}
+        return respond(presentation.with_empty_note(payload, "No todos matched."), zone)
 
     @mcp.tool()
     def list_reminders(
@@ -149,6 +165,7 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
         start: str | None = None,
         end: str | None = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> dict:
         """Reminders with their resolved due times.
 
@@ -157,12 +174,13 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
             start: Optional recording range start (YYYY-MM-DD or ISO-8601).
             end: Optional recording range end, inclusive.
             limit: Maximum number of reminders (1-200).
+            offset: Number of reminders to skip, for paging.
         """
         user_id = current_user_id()
         if user_id is None:
-            return presentation.error("unauthenticated", "unauthenticated")
+            return fail("unauthenticated", "unauthenticated")
         if window.lower() not in _REMINDER_WINDOWS:
-            return presentation.error("invalid_window", "window must be upcoming, past, or all")
+            return fail("invalid_window", "window must be upcoming, past, or all")
         now = timeutil.utc_now()
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
@@ -172,10 +190,9 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
             reminded_from=now if window.lower() == "upcoming" else None,
             reminded_to=now if window.lower() == "past" else None,
             order="reminded_at ASC" if window.lower() == "upcoming" else "reminded_at DESC",
-            limit=clamp(limit)))
-        payload = {"count": len(rows), "items": [presentation.format_row(r, zone) for r in rows]}
-        return presentation.envelope(
-            presentation.with_empty_note(payload, "No reminders matched."), zone)
+            limit=clamp(limit), offset=max(0, offset)))
+        payload = {"count": len(rows), "items": [row_view(r, zone) for r in rows]}
+        return respond(presentation.with_empty_note(payload, "No reminders matched."), zone)
 
     @mcp.tool()
     def get_summaries(
@@ -183,6 +200,7 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
         start: str | None = None,
         end: str | None = None,
         limit: int = 14,
+        offset: int = 0,
     ) -> dict:
         """Daily or weekly narrative summaries.
 
@@ -191,35 +209,44 @@ def register(mcp, store, index, embedder, fallback_timezone: str,
             start: Optional start (YYYY-MM-DD in your timezone or ISO-8601).
             end: Optional end, inclusive.
             limit: Maximum number of summaries (1-200).
+            offset: Number of summaries to skip, for paging.
         """
         user_id = current_user_id()
         if user_id is None:
-            return presentation.error("unauthenticated", "unauthenticated")
+            return fail("unauthenticated", "unauthenticated")
         if period.lower() not in ("daily", "weekly"):
-            return presentation.error("invalid_period", "period must be daily or weekly")
+            return fail("invalid_period", "period must be daily or weekly")
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
         rows = store.fetch(user_id, DocumentQuery(
             source_types=(documents.SOURCE_SUMMARY,), period=period.lower(),
-            start=start_at, end=end_at, limit=clamp(limit)))
-        payload = {"count": len(rows), "items": [presentation.format_row(r, zone) for r in rows]}
-        return presentation.envelope(
-            presentation.with_empty_note(payload, "No summaries matched."), zone)
+            start=start_at, end=end_at, limit=clamp(limit), offset=max(0, offset)))
+        payload = {"count": len(rows), "items": [row_view(r, zone) for r in rows]}
+        return respond(presentation.with_empty_note(payload, "No summaries matched."), zone)
 
     @mcp.tool()
-    def get_transcript(audio_id: str) -> dict:
+    def get_transcript(audio_id: str, offset: int = 0, max_chars: int | None = None) -> dict:
         """Full transcript text for one recording, looked up by its audio_id.
 
         Args:
             audio_id: The UUID of the recording (available on every other result).
+            offset: Character offset to start from, for paging long transcripts.
+            max_chars: Maximum characters to return (defaults to the service cap).
         """
         user_id = current_user_id()
         if user_id is None:
-            return presentation.error("unauthenticated", "unauthenticated")
+            return fail("unauthenticated", "unauthenticated")
         zone = zone_for(user_id)
         rows = store.fetch(user_id, DocumentQuery(
             source_types=(documents.SOURCE_TRANSCRIPT,), audio_id=audio_id,
             chunk_index=documents.WHOLE_DOCUMENT, limit=1))
         if not rows:
-            return presentation.error("not_found", "transcript not found")
-        return presentation.envelope(presentation.format_row(rows[0], zone), zone)
+            return fail("not_found", "transcript not found")
+        row = rows[0]
+        window, truncated = presentation.window_text(
+            row["content"], offset, max_chars if max_chars is not None else max_text_chars)
+        payload = presentation.format_row({**row, "content": window}, zone)
+        payload["offset"] = max(0, offset)
+        payload["total_chars"] = len(row["content"])
+        payload["truncated"] = truncated
+        return respond(payload, zone)

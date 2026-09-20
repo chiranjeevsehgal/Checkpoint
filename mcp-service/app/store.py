@@ -35,6 +35,7 @@ class DocumentQuery:
     chunk_index: int | None = None
     order: str = "occurred_at DESC"
     limit: int = 50
+    offset: int = 0
 
 
 class ReadStore:
@@ -102,8 +103,9 @@ class ReadStore:
         statement = (
             f"SELECT {_SELECT_COLUMNS} FROM search_documents "
             f"WHERE {' AND '.join(clauses)} "
-            f"ORDER BY {query.order} LIMIT %(limit)s"
+            f"ORDER BY {query.order} LIMIT %(limit)s OFFSET %(offset)s"
         )
+        params["offset"] = max(0, query.offset)
         with self._user_cursor(user_id) as cur:
             cur.execute(statement, params)
             return cur.fetchall()

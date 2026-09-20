@@ -17,12 +17,14 @@ class DocumentQueryTest(unittest.TestCase):
         self.assertIsNone(query.source_types)
         self.assertEqual(query.limit, 50)
         self.assertEqual(query.order, "occurred_at DESC")
+        self.assertEqual(query.offset, 0)
 
     def test_fields_are_settable(self):
-        query = DocumentQuery(source_types=("todo",), is_done=False, limit=5)
+        query = DocumentQuery(source_types=("todo",), is_done=False, limit=5, offset=10)
         self.assertEqual(query.source_types, ("todo",))
         self.assertFalse(query.is_done)
         self.assertEqual(query.limit, 5)
+        self.assertEqual(query.offset, 10)
 
 
 @unittest.skipUnless(DSN and psycopg and ReadStore, "TEST_DATABASE_URL/psycopg not available")

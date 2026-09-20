@@ -8,8 +8,8 @@ ZONE = ZoneInfo("Asia/Kolkata")
 
 
 class FakeDocument:
-    def __init__(self, score=None, **meta):
-        self.content = "text"
+    def __init__(self, score=None, content="text", **meta):
+        self.content = content
         self.score = score
         self.meta = meta
 
@@ -28,6 +28,30 @@ class EnvelopeTest(unittest.TestCase):
         payload = {"count": 1}
         presentation.envelope(payload, ZONE)
         self.assertEqual(payload, {"count": 1})
+
+    def test_as_of_included_when_zone_known(self):
+        as_of = datetime(2026, 9, 20, 6, 30, tzinfo=timezone.utc)
+        got = presentation.envelope({"count": 1}, ZONE, as_of)
+        self.assertEqual(got["as_of"]["utc"], "2026-09-20T06:30:00+00:00")
+        self.assertEqual(got["as_of"]["local"], "2026-09-20T12:00:00+05:30")
+
+    def test_as_of_omitted_without_zone(self):
+        as_of = datetime(2026, 9, 20, 6, 30, tzinfo=timezone.utc)
+        self.assertNotIn("as_of", presentation.envelope({"count": 1}, None, as_of))
+
+
+class WindowTextTest(unittest.TestCase):
+    def test_no_cap_returns_everything(self):
+        self.assertEqual(presentation.window_text("abcdef", 0, None), ("abcdef", False))
+
+    def test_cap_truncates_and_flags(self):
+        self.assertEqual(presentation.window_text("abcdef", 0, 3), ("abc", True))
+
+    def test_offset_skips_prefix(self):
+        self.assertEqual(presentation.window_text("abcdef", 4, None), ("ef", False))
+
+    def test_negative_offset_clamps_to_zero(self):
+        self.assertEqual(presentation.window_text("abcdef", -5, None), ("abcdef", False))
 
 
 class ErrorTest(unittest.TestCase):
@@ -80,6 +104,14 @@ class FormatRowTest(unittest.TestCase):
     def test_absent_audio_id_is_none(self):
         self.assertIsNone(presentation.format_row(self.row(), ZONE)["audio_id"])
 
+    def test_truncates_long_text(self):
+        got = presentation.format_row(self.row(content="x" * 20), ZONE, max_chars=5)
+        self.assertEqual(got["text"], "xxxxx")
+        self.assertTrue(got["truncated"])
+
+    def test_short_text_is_not_truncated(self):
+        self.assertFalse(presentation.format_row(self.row(), ZONE, max_chars=100)["truncated"])
+
 
 class FormatDocumentTest(unittest.TestCase):
     def test_reads_meta_provenance_and_score(self):
@@ -96,6 +128,12 @@ class FormatDocumentTest(unittest.TestCase):
         self.assertEqual(got["chunk_index"], 2)
         self.assertEqual(got["score"], 0.8231)
         self.assertEqual(got["occurred_at"]["local"], "2026-09-20T12:00:00+05:30")
+
+    def test_truncates_long_text(self):
+        document = FakeDocument(content="y" * 20, source_type="transcript")
+        got = presentation.format_document(document, ZONE, max_chars=5)
+        self.assertEqual(got["text"], "yyyyy")
+        self.assertTrue(got["truncated"])
 
 
 if __name__ == "__main__":

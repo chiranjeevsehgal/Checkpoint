@@ -7,16 +7,18 @@ without the MCP or ML dependencies, mirroring timeutil.py and documents.py.
 from . import timeutil
 
 
-def envelope(payload: dict, zone) -> dict:
+def envelope(payload: dict, zone, as_of=None) -> dict:
     response = dict(payload)
     response["now"] = timeutil.dual(timeutil.utc_now(), zone)
     if zone is not None:
         response["timezone"] = str(zone)
+    if as_of is not None and zone is not None:
+        response["as_of"] = timeutil.dual(as_of, zone)
     return response
 
 
-def error(code: str, message: str, zone=None) -> dict:
-    return envelope({"error": message, "code": code}, zone)
+def error(code: str, message: str, zone=None, as_of=None) -> dict:
+    return envelope({"error": message, "code": code}, zone, as_of)
 
 
 def with_empty_note(payload: dict, message: str) -> dict:
@@ -25,10 +27,20 @@ def with_empty_note(payload: dict, message: str) -> dict:
     return payload
 
 
-def format_row(row: dict, zone) -> dict:
+def window_text(text: str, offset: int = 0, max_chars: int | None = None) -> tuple[str, bool]:
+    """Slice text from offset and report whether more characters remain."""
+    window = text[max(0, offset):]
+    if max_chars is not None and len(window) > max_chars:
+        return window[:max_chars], True
+    return window, False
+
+
+def format_row(row: dict, zone, max_chars: int | None = None) -> dict:
+    text, truncated = window_text(row["content"], 0, max_chars)
     return {
         "type": row["source_type"],
-        "text": row["content"],
+        "text": text,
+        "truncated": truncated,
         "source_id": row["source_id"],
         "language": row["language"],
         "chunk_index": row["chunk_index"],
@@ -43,11 +55,13 @@ def format_row(row: dict, zone) -> dict:
     }
 
 
-def format_document(document, zone) -> dict:
+def format_document(document, zone, max_chars: int | None = None) -> dict:
     meta = document.meta or {}
+    text, truncated = window_text(document.content, 0, max_chars)
     return {
         "type": meta.get("source_type"),
-        "text": document.content,
+        "text": text,
+        "truncated": truncated,
         "source_id": meta.get("source_id"),
         "language": meta.get("language"),
         "chunk_index": meta.get("chunk_index"),
