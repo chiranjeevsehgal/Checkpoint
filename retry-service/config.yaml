@@ -1,0 +1,28 @@
+kafka:
+  brokers:
+    - kafka:9092
+  consume_topic: retry.jobs.v1
+  consumer_group: retry-service
+  dlq_topic: retry.jobs.v1.dlq
+
+postgres:
+  dsn_env: POSTGRES_DSN
+
+retry:
+  # Fixed delay between a failure and its next re-delivery to the source
+  # topic. The wait is Postgres-scheduled (next_attempt_at), never an
+  # in-memory sleep, so a restart neither loses nor rushes a pending retry.
+  delay_seconds: 1800
+  # Delayed re-deliveries before a job is marked failed. 2 means the
+  # original event is republished twice; a third failure is terminal.
+  max_attempts: 2
+  # Dispatcher poll cadence for due rows.
+  poll_interval_seconds: 10
+  # Rows claimed per dispatcher poll.
+  batch_size: 50
+  # Rows stuck in 'processing' (crashed worker) return to pending after
+  # this long.
+  reclaim_after_seconds: 300
+  # Terminal rows (dispatched/failed/skipped) are pruned after this many
+  # days so the table stays inspectable without growing forever.
+  retention_days: 30
