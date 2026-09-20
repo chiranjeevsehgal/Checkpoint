@@ -14,6 +14,7 @@ class RetryBackoffsTest(unittest.TestCase):
     def test_defaults(self):
         cfg = self._load({})
         self.assertEqual(cfg.retry_backoffs, (1, 5, 15, 60))
+        self.assertEqual(cfg.batch_max, 8)
         self.assertEqual(cfg.metrics_port, 9085)
 
     def test_env_override(self):
