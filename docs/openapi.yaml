@@ -1,0 +1,102 @@
+# Ingestion API contract (hand-maintained; source of truth is
+# ingestion-service/internal/http/router.go + postman.json).
+openapi: 3.0.3
+info:
+  title: Checkpoint ingestion API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Opaque Ory Kratos session token.
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            request_id: { type: string }
+paths:
+  /health/live:
+    get:
+      security: []
+      responses: { '200': { description: alive } }
+  /health/ready:
+    get:
+      security: []
+      responses:
+        '200': { description: postgres + minio reachable }
+        '503': { description: dependency down }
+  /metrics:
+    get:
+      security: []
+      responses: { '200': { description: prometheus exposition } }
+  /v1/uploads:
+    post:
+      summary: Create upload (audio/ogg, 10 MB cap, needs owned device_id).
+      parameters:
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string } }
+      responses:
+        '201': { description: upload_id + presigned upload.url }
+        '401': { description: invalid session }
+        '403': { description: VERIFICATION_REQUIRED }
+        '429': { description: RATE_LIMITED }
+  /v1/uploads/{id}:
+    get:
+      responses:
+        '200': { description: upload; READY flips to SUBMITTED after outbox publish }
+  /v1/uploads/{id}/complete:
+    post:
+      responses:
+        '200': { description: verified size/type, queued for transcription }
+  /v1/device:
+    get:
+      responses: { '200': { description: owned pendant or unclaimed } }
+  /v1/device/claim:
+    post:
+      responses: { '200': { description: pendant claimed } }
+  /v1/device/release:
+    post:
+      description: Needs re-auth within 5 min or 403 REAUTH_REQUIRED.
+      responses: { '200': { description: pendant released } }
+  /v1/me:
+    delete:
+      description: Records a deletion tombstone (202); purged async with downstream rows.
+      responses: { '202': { description: deletion queued } }
+  /v1/me/settings:
+    get:
+      responses: { '200': { description: languages + timezone } }
+    put:
+      description: Partial update; languages and timezone save independently.
+      responses: { '200': { description: updated settings } }
+  /v1/me/notifications:
+    get:
+      responses: { '200': { description: topic + token (owner only) } }
+    post:
+      responses: { '200': { description: topic minted } }
+    put:
+      responses: { '200': { description: preferences updated } }
+    delete:
+      description: Revokes ntfy access and rotates the topic.
+      responses: { '200': { description: disabled } }
+  /v1/me/mcp-keys:
+    get:
+      responses: { '200': { description: key list (prefixes only) } }
+    post:
+      responses: { '200': { description: created; secret returned once } }
+  /v1/me/mcp-keys/{id}:
+    delete:
+      responses: { '200': { description: revoked } }
+  /v1/me/sessions:
+    delete:
+      responses: { '200': { description: sessions revoked } }
