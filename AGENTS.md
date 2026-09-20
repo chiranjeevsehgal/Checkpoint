@@ -8,7 +8,7 @@ Monorepo with five separate Go modules plus firmware and Python services. No roo
 - `rollup-service/` (module `rollup-service`) — nightly Postgres summarizer writing English daily/weekly narrative recaps to `summaries`. No Kafka. Entrypoint: `cmd/main.go`, `cmd/migrate/`.
 - `notification-service/` (module `notification-service`) — polls Postgres for due reminders and publishes push notifications to self-hosted ntfy. No Kafka. Entrypoint: `cmd/main.go`, `cmd/migrate/`.
 - `embedding-service/` — Python Kafka worker, bge-m3 → pgvector. Entrypoint: `app/main.py`, `migrate.py`.
-- `mcp-service/` — Python MCP server (official `mcp` SDK + Haystack/TurboVec) over the derived `search_documents` read model; per-account `cp_mcp_` access keys. Entrypoints: `app/main.py`, `migrate.py`. Single worker only (in-process index).
+- `mcp-service/` — Python MCP server (official `mcp` SDK + Haystack/TurboVec) over the derived `search_documents` read model; per-account `cp_mcp_` access keys plus an OAuth 2.1 authorization server for Claude/ChatGPT connectors. Entrypoints: `app/main.py`, `migrate.py`. Single worker only (in-process index).
 - `firmware/checkpoint/` — PROD ESP32-S3 pendant (Arduino `.ino`). Pins/timings single source: `config.h`.
 - `firmware/tests/` — host-side pytest (grep/logic, no hardware). `firmware/host/checkpoint_client/` — Python BLE client.
 - `vad-service/` — empty placeholder (`.gitkeep` only). Ignore.
@@ -105,7 +105,7 @@ docker compose ps        # postgres + kafka should be healthy
 
 ## MCP service quirks
 
-- `mcp-service/` exposes retrieval tools over Streamable HTTP on `:1417` (`search`, `timeline`, `list_todos`, `list_reminders`, `get_summaries`, `get_transcript`, `whoami`) for ChatGPT/Claude Code/Cursor. Built on the official `mcp` SDK with a `TokenVerifier`, not `hayhooks mcp run` (that endpoint cannot be auth-wrapped).
+- `mcp-service/` exposes retrieval tools over Streamable HTTP on `:1417` (`search`, `timeline`, `list_todos`, `list_reminders`, `get_summaries`, `get_transcript`, `whoami`) for ChatGPT/Claude Code/Cursor. Built on the official `mcp` SDK with a `TokenVerifier`, not `hayhooks mcp run` (that endpoint cannot be auth-wrapped). When OAuth is configured it is also the authorization server via `auth_server_provider` (see below).
 - It reads only RLS-protected tables: `search_documents` + `user_settings` as `checkpoint_mcp`, and resolves keys via `mcp_resolve_key()` (SECURITY DEFINER). The indexer writes as `checkpoint_worker` (BYPASSRLS). Every query sets `app.user_id` per transaction, so a key can never read another account's rows.
 - `search_documents` is a **derived read model** rebuilt from `transcripts`/`embeddings`/`todos`/`reminders`/`insights`/`summaries`; source tables stay authoritative. Transcript chunk vectors are copied from `embeddings`; structured text is newly embedded with bge-m3. Full transcript text is stored with no embedding and served by `get_transcript`.
 - Access keys: `cp_mcp_<base32>`, SHA-256 at rest in `mcp_access_keys` (ingestion, RLS). Mint/list/revoke via `GET/POST /v1/me/mcp-keys` and `DELETE /v1/me/mcp-keys/{id}` behind Kratos auth; the secret is returned only on create. `last_used_at` is updated by the resolve function.
@@ -113,8 +113,10 @@ docker compose ps        # postgres + kafka should be healthy
 - The index watches `embeddings.created_at` too, so chunks that land after the transcript are picked up. Out-of-band `search_documents` deletes (account deletion) are only reflected on restart/rebuild — there is no live reconciliation.
 - In-place `embeddings` re-embeds (`ON CONFLICT` updates) keep their original `created_at`, so they do not trigger an index rebuild.
 - Timestamps are returned twice (UTC and the user's IANA zone, from `user_settings.timezone` falling back to `MCP_FALLBACK_TIMEZONE`); `occurred_at = coalesce(recorded_at, created_at)` and `recorded_at` is exposed separately (nullable = pendant clock unsynced).
-- Deletion coupling: `search_documents` and `mcp_access_keys` are purged by ingestion's account-deletion worker.
-- Auth is static bearer keys today; OAuth can replace `KeyTokenVerifier`/`build_server` later. The MCP port is currently published on all interfaces — keep it behind TLS/firewall.
+- Deletion coupling: `search_documents`, `mcp_access_keys`, `oauth_tokens` and `oauth_authorization_codes` are purged by ingestion's account-deletion worker.
+- Auth is static `cp_mcp_` bearer keys for CLI/desktop clients **plus** OAuth 2.1 for hosted clients (Claude web/desktop/mobile, ChatGPT web). `build_server` passes `auth_server_provider=CheckpointOAuthProvider` when `MCP_OAUTH_SESSION_SECRET` and `KRATOS_PUBLIC_URL` are set, and otherwise falls back to `token_verifier=KeyTokenVerifier`. `CheckpointOAuthProvider.load_access_token` accepts both key and OAuth access (`cp_oauth_`) tokens, so tools still read the account id from `client_id`.
+- OAuth routes are served by the SDK (`/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`, `/register` DCR, `/authorize`, `/token`, `/revoke`); `/login` and `/consent` are custom routes (`app/oauth_web.py`) that drive the Kratos native login API and require a verified email. One scope: `checkpoint`. Access tokens 1h, refresh 30d rotated; codes and tokens are stored SHA-256 at rest in `oauth_*` (mcp-service migration `00002_create_oauth.sql`).
+- TLS terminates at the `caddy` compose service for `160-236-239-95.sslip.io` (`infra/caddy/Caddyfile`), which proxies every path to `mcp-service:1417`. `MCP_PUBLIC_URL` must be that HTTPS origin; `BIND_MCP` stays loopback, so the bare `:1417` is no longer public. OAuth redirect hosts are restricted by `MCP_OAUTH_ALLOWED_REDIRECT_HOSTS` (default `claude.ai,chatgpt.com` plus loopback).
 
 ## Test / verify
 
@@ -134,7 +136,7 @@ TEST_DATABASE_URL=postgres://... TEST_MCP_DATABASE_URL=postgres://checkpoint_mcp
 - k6: `k6 run loadtest/ingestion-service/smoke.js` (`BASE_URL` env, default `http://localhost:8080`).
 - Firmware host tests: `pytest firmware/tests -v`. BLE client: `pip install bleak cryptography && python -m client_app --cli --session-token <kratos> --device-id <32hex>` (from `firmware/host/checkpoint_client`).
 - Embedding: `cd embedding-service && python -m unittest discover -s tests -v`.
-- MCP service: `cd mcp-service && python -m unittest discover -s tests -v` (pure tests run without ML deps; DB tests skip without `TEST_DATABASE_URL`). MCP end-to-end needs the stack up: mint a key via `POST /v1/me/mcp-keys`, then `claude mcp add --transport http checkpoint http://localhost:1417/mcp --header "Authorization: Bearer cp_mcp_..."`.
+- MCP service: `cd mcp-service && python -m unittest discover -s tests -v` (pure tests run without ML deps; DB tests skip without `TEST_DATABASE_URL`). MCP end-to-end needs the stack up: mint a key via `POST /v1/me/mcp-keys`, then `claude mcp add --transport http checkpoint https://160-236-239-95.sslip.io/mcp --header "Authorization: Bearer cp_mcp_..."`, or add `https://160-236-239-95.sslip.io/mcp` as an OAuth connector in Claude/ChatGPT.
 - Device provisioning CLI: `DATABASE_URL=... go run ./cmd/device-admin provision -device <32hex> -claim-hash <64hex>` (also `status`, `unquarantine`, `list`, `deletions`, `delete-account`). The pendant emits the hash over USB with `auth provision`.
 - App: `cd checkpoint-app && npm run check && npm test`.
 - Admin console: `cd admin-console && npm --prefix server test && npm --prefix web test`; dev `npm run dev` (Angular :4200 + agent :4300), build `npm run build`, run `npm start`.
