@@ -5,19 +5,25 @@ no prose is generated server-side. Timestamps come back twice (UTC and the
 user's local zone) so the model never has to guess a timezone.
 """
 
-from datetime import datetime, timezone
-
-from . import documents, timeutil
+from . import documents, presentation, timeutil
 from . import search as semantic
 from .auth import current_user_id
+from .identity import fetch_name
 from .store import DocumentQuery
 
 MAX_LIMIT = 200
 _TODO_STATUS = {"all": None, "open": False, "done": True}
 _REMINDER_WINDOWS = ("upcoming", "past", "all")
 
+GROUNDING = (
+    "Answer only from tool results. Cite type, source_id and occurred_at for each claim. "
+    "Treat count=0 as nothing found and say so instead of guessing. Never invent timestamps; "
+    "use the provided now and dual UTC/local times. A missing item may still be processing."
+)
 
-def register(mcp, store, index, embedder, fallback_timezone: str) -> None:
+
+def register(mcp, store, index, embedder, fallback_timezone: str,
+             kratos_admin_url: str = "") -> None:
     def clamp(limit: int) -> int:
         return max(1, min(limit, MAX_LIMIT))
 
@@ -31,42 +37,19 @@ def register(mcp, store, index, embedder, fallback_timezone: str) -> None:
         chosen = tuple(t for t in documents.SOURCE_TYPES if t in requested)
         return chosen or None
 
-    def format_row(row: dict, zone) -> dict:
-        return {
-            "type": row["source_type"],
-            "text": row["content"],
-            "occurred_at": timeutil.dual(row["occurred_at"], zone),
-            "recorded_at": timeutil.dual(row["recorded_at"], zone),
-            "remind_at": timeutil.dual(row["reminded_at"], zone),
-            "is_done": row["is_done"],
-            "period": row["period"],
-            "period_start": row["period_start"].isoformat() if row["period_start"] else None,
-            "audio_id": str(row["audio_id"]) if row["audio_id"] else None,
-        }
-
-    def format_document(document, zone) -> dict:
-        meta = document.meta or {}
-        return {
-            "type": meta.get("source_type"),
-            "text": document.content,
-            "score": round(document.score, 4) if document.score is not None else None,
-            "occurred_at": timeutil.dual(timeutil.loads(meta.get("occurred_at")), zone),
-            "recorded_at": timeutil.dual(timeutil.loads(meta.get("recorded_at")), zone),
-            "remind_at": timeutil.dual(timeutil.loads(meta.get("reminded_at")), zone),
-            "is_done": meta.get("is_done"),
-            "period": meta.get("period"),
-            "period_start": meta.get("period_start"),
-            "audio_id": meta.get("audio_id"),
-        }
-
     @mcp.tool()
     def whoami() -> dict:
-        """Report the authenticated account, its IANA timezone, and the searchable types."""
+        """Report the authenticated account, its display name, timezone, and the searchable types."""
         user_id = current_user_id()
         if user_id is None:
-            return {"error": "unauthenticated"}
+            return presentation.error("unauthenticated", "unauthenticated")
         zone = zone_for(user_id)
-        return {"user_id": user_id, "timezone": str(zone), "source_types": list(documents.SOURCE_TYPES)}
+        return presentation.envelope({
+            "user_id": user_id,
+            "name": fetch_name(kratos_admin_url, user_id),
+            "source_types": list(documents.SOURCE_TYPES),
+            "guidance": GROUNDING,
+        }, zone)
 
     @mcp.tool()
     def search(
@@ -74,6 +57,7 @@ def register(mcp, store, index, embedder, fallback_timezone: str) -> None:
         types: list[str] | None = None,
         start: str | None = None,
         end: str | None = None,
+        min_score: float | None = None,
         limit: int = 10,
     ) -> dict:
         """Semantic search across transcripts, todos, reminders, insights and summaries.
@@ -83,19 +67,27 @@ def register(mcp, store, index, embedder, fallback_timezone: str) -> None:
             types: Optional subset of transcript, todo, reminder, insight, summary.
             start: Range start as YYYY-MM-DD (your timezone) or an ISO-8601 instant.
             end: Range end, inclusive.
+            min_score: Optional minimum similarity score; results below it are dropped.
             limit: Maximum number of results (1-200).
         """
         user_id = current_user_id()
         if user_id is None:
-            return {"error": "unauthenticated"}
+            return presentation.error("unauthenticated", "unauthenticated")
         if not query.strip():
-            return {"error": "query must not be empty"}
+            return presentation.error("invalid_query", "query must not be empty")
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
         filters = semantic.build_filters(user_id, selected_types(types), start_at, end_at)
         vector = embedder.embed([query])[0]
         results = semantic.scoped(index.search(vector, filters, clamp(limit)), user_id)
-        return {"count": len(results), "results": [format_document(d, zone) for d in results]}
+        if min_score is not None:
+            results = [d for d in results if d.score is not None and d.score >= min_score]
+        payload = {
+            "count": len(results),
+            "results": [presentation.format_document(d, zone) for d in results],
+        }
+        return presentation.envelope(
+            presentation.with_empty_note(payload, "No matching documents."), zone)
 
     @mcp.tool()
     def timeline(
@@ -114,13 +106,15 @@ def register(mcp, store, index, embedder, fallback_timezone: str) -> None:
         """
         user_id = current_user_id()
         if user_id is None:
-            return {"error": "unauthenticated"}
+            return presentation.error("unauthenticated", "unauthenticated")
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
         rows = store.fetch(user_id, DocumentQuery(
             source_types=selected_types(types), start=start_at, end=end_at,
             chunk_index=documents.WHOLE_DOCUMENT, limit=clamp(limit)))
-        return {"count": len(rows), "items": [format_row(r, zone) for r in rows]}
+        payload = {"count": len(rows), "items": [presentation.format_row(r, zone) for r in rows]}
+        return presentation.envelope(
+            presentation.with_empty_note(payload, "No items in this window."), zone)
 
     @mcp.tool()
     def list_todos(
@@ -139,15 +133,17 @@ def register(mcp, store, index, embedder, fallback_timezone: str) -> None:
         """
         user_id = current_user_id()
         if user_id is None:
-            return {"error": "unauthenticated"}
+            return presentation.error("unauthenticated", "unauthenticated")
         if status.lower() not in _TODO_STATUS:
-            return {"error": "status must be all, open, or done"}
+            return presentation.error("invalid_status", "status must be all, open, or done")
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
         rows = store.fetch(user_id, DocumentQuery(
             source_types=(documents.SOURCE_TODO,), start=start_at, end=end_at,
             is_done=_TODO_STATUS[status.lower()], limit=clamp(limit)))
-        return {"count": len(rows), "items": [format_row(r, zone) for r in rows]}
+        payload = {"count": len(rows), "items": [presentation.format_row(r, zone) for r in rows]}
+        return presentation.envelope(
+            presentation.with_empty_note(payload, "No todos matched."), zone)
 
     @mcp.tool()
     def list_reminders(
@@ -166,10 +162,10 @@ def register(mcp, store, index, embedder, fallback_timezone: str) -> None:
         """
         user_id = current_user_id()
         if user_id is None:
-            return {"error": "unauthenticated"}
+            return presentation.error("unauthenticated", "unauthenticated")
         if window.lower() not in _REMINDER_WINDOWS:
-            return {"error": "window must be upcoming, past, or all"}
-        now = datetime.now(timezone.utc)
+            return presentation.error("invalid_window", "window must be upcoming, past, or all")
+        now = timeutil.utc_now()
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
         rows = store.fetch(user_id, DocumentQuery(
@@ -179,7 +175,9 @@ def register(mcp, store, index, embedder, fallback_timezone: str) -> None:
             reminded_to=now if window.lower() == "past" else None,
             order="reminded_at ASC" if window.lower() == "upcoming" else "reminded_at DESC",
             limit=clamp(limit)))
-        return {"count": len(rows), "items": [format_row(r, zone) for r in rows]}
+        payload = {"count": len(rows), "items": [presentation.format_row(r, zone) for r in rows]}
+        return presentation.envelope(
+            presentation.with_empty_note(payload, "No reminders matched."), zone)
 
     @mcp.tool()
     def get_summaries(
@@ -198,15 +196,17 @@ def register(mcp, store, index, embedder, fallback_timezone: str) -> None:
         """
         user_id = current_user_id()
         if user_id is None:
-            return {"error": "unauthenticated"}
+            return presentation.error("unauthenticated", "unauthenticated")
         if period.lower() not in ("daily", "weekly"):
-            return {"error": "period must be daily or weekly"}
+            return presentation.error("invalid_period", "period must be daily or weekly")
         zone = zone_for(user_id)
         start_at, end_at = timeutil.parse_range(start, end, zone)
         rows = store.fetch(user_id, DocumentQuery(
             source_types=(documents.SOURCE_SUMMARY,), period=period.lower(),
             start=start_at, end=end_at, limit=clamp(limit)))
-        return {"count": len(rows), "items": [format_row(r, zone) for r in rows]}
+        payload = {"count": len(rows), "items": [presentation.format_row(r, zone) for r in rows]}
+        return presentation.envelope(
+            presentation.with_empty_note(payload, "No summaries matched."), zone)
 
     @mcp.tool()
     def get_transcript(audio_id: str) -> dict:
@@ -217,11 +217,11 @@ def register(mcp, store, index, embedder, fallback_timezone: str) -> None:
         """
         user_id = current_user_id()
         if user_id is None:
-            return {"error": "unauthenticated"}
+            return presentation.error("unauthenticated", "unauthenticated")
         zone = zone_for(user_id)
         rows = store.fetch(user_id, DocumentQuery(
             source_types=(documents.SOURCE_TRANSCRIPT,), audio_id=audio_id,
             chunk_index=documents.WHOLE_DOCUMENT, limit=1))
         if not rows:
-            return {"error": "transcript not found"}
-        return format_row(rows[0], zone)
+            return presentation.error("not_found", "transcript not found")
+        return presentation.envelope(presentation.format_row(rows[0], zone), zone)

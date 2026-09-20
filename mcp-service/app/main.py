@@ -67,7 +67,7 @@ def build_server(cfg, store: ReadStore, index, embedder: Embedder, oauth_store: 
             token_verifier=auth.KeyTokenVerifier(cfg.database_mcp_url),
             auth=_auth_settings(cfg, False),
         )
-    tools.register(server, store, index, embedder, cfg.fallback_timezone)
+    tools.register(server, store, index, embedder, cfg.fallback_timezone, cfg.kratos_admin_url)
     return server
 
 

@@ -15,6 +15,7 @@ class Config:
     poll_seconds: int
     fallback_timezone: str
     kratos_public_url: str
+    kratos_admin_url: str
     oauth_session_secret: str
     oauth_access_ttl_seconds: int
     oauth_refresh_ttl_seconds: int
@@ -60,6 +61,7 @@ def load() -> Config:
         poll_seconds=_int_env("MCP_POLL_SECONDS", 30),
         fallback_timezone=os.getenv("MCP_FALLBACK_TIMEZONE", "UTC"),
         kratos_public_url=os.getenv("KRATOS_PUBLIC_URL", ""),
+        kratos_admin_url=os.getenv("KRATOS_ADMIN_URL", ""),
         oauth_session_secret=os.getenv("MCP_OAUTH_SESSION_SECRET", ""),
         oauth_access_ttl_seconds=_int_env("MCP_OAUTH_ACCESS_TTL_SECONDS", 3600),
         oauth_refresh_ttl_seconds=_int_env("MCP_OAUTH_REFRESH_TTL_SECONDS", 2592000),

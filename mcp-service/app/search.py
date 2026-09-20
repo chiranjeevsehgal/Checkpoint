@@ -29,6 +29,10 @@ def row_to_document(row: dict, embedding) -> "Document":
     meta = {
         "user_id": str(row["user_id"]),
         "source_type": row["source_type"],
+        "source_id": row["source_id"],
+        "language": row["language"],
+        "chunk_index": row["chunk_index"],
+        "important": row["important"],
         "occurred_at": _iso(row["occurred_at"]),
         "recorded_at": _iso(row["recorded_at"]),
         "reminded_at": _iso(row["reminded_at"]),
