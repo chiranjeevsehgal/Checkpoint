@@ -1,10 +1,11 @@
 # AGENTS.md — Checkpoint
 
-Monorepo with five separate Go modules plus firmware and Python services. No root module, no lint config, no Go CI.
+Monorepo with six separate Go modules plus firmware and Python services. No root module, no lint config, no Go CI.
 
 - `ingestion-service/` (module `checkpoint/ingestion`) — HTTP API `:8080`, in-process outbox dispatcher, upload cleanup, and account-deletion worker. Entrypoints: `cmd/api/main.go`, `cmd/migrate/main.go`, `cmd/device-admin/main.go`.
 - `transcription-service/` (module `transcription-service`) — Kafka worker. Entrypoint: `cmd/main.go`, `cmd/migrate/`.
 - `extraction-service/` (module `extraction-service`) — Kafka worker → LLM (Groq) combined todo/reminder/insight extractor. Entrypoints: `cmd/main.go`, `cmd/migrate/`.
+- `retry-service/` (module `retry-service`) — central delayed-retry Kafka worker: consumes `RETRY_REQUESTED` handoffs and re-publishes originals to their source topics after a configurable delay. Entrypoints: `cmd/main.go`, `cmd/migrate/`.
 - `rollup-service/` (module `rollup-service`) — nightly Postgres summarizer writing English daily/weekly narrative recaps to `summaries`. No Kafka. Entrypoint: `cmd/main.go`, `cmd/migrate/`.
 - `notification-service/` (module `notification-service`) — polls Postgres for due reminders and publishes push notifications to self-hosted ntfy. No Kafka. Entrypoint: `cmd/main.go`, `cmd/migrate/`.
 - `embedding-service/` — Python Kafka worker, bge-m3 → pgvector. Entrypoint: `app/main.py`, `migrate.py`.
@@ -26,7 +27,7 @@ docker compose ps        # postgres + kafka should be healthy
 ```
 
 - Local dev (from `ingestion-service/`): `make infra-up` → `make migrate` (needs `DATABASE_URL`) → `make run` (API on `:8080`).
-- Compose runs `ingestion-migrate` / `transcription-migrate` / `embedding-migrate` / `extraction-migrate` / `rollup-migrate` / `notification-migrate` / `mcp-migrate` to `service_completed_successfully` before starting their workers. `mcp-migrate` creates the `checkpoint_mcp` role idempotently (existing volumes included) and then applies the `search_documents` schema. Migrations are goose (`make migrate`, `make status`).
+- Compose runs `ingestion-migrate` / `transcription-migrate` / `embedding-migrate` / `extraction-migrate` / `rollup-migrate` / `notification-migrate` / `mcp-migrate` / `retry-migrate` to `service_completed_successfully` before starting their workers. `mcp-migrate` creates the `checkpoint_mcp` role idempotently (existing volumes included) and then applies the `search_documents` schema. Migrations are goose (`make migrate`, `make status`).
 - Postgres init (`infra/postgres/bootstrap.sh`, first volume only) creates roles `checkpoint_request` (`NOBYPASSRLS`), `checkpoint_worker` (`BYPASSRLS`), `checkpoint_mcp` (`NOBYPASSRLS`, read-only MCP) and the separate `kratos` database. Changing those passwords in `.env` later is ignored; wipe with `make infra-reset`.
 - Migrations `00007`–`00009` add `uploads.device_id NOT NULL` and device-aware idempotency, so an old dev volume must be reset (data is disposable).
 - Kratos public API is `http://localhost:4433`; the admin API is bridge-only (never published). Mailpit UI is `http://localhost:8025`.
@@ -42,7 +43,7 @@ docker compose ps        # postgres + kafka should be healthy
 - `.env.example`, `.env`, and the `docker-compose.yaml` fallback `${KAFKA_TOPIC_TRANSCRIPTION:-...}` must carry the same value.
 - Never hardcode a `transcription.*` literal in `internal/config/config.go`; never hardcode `--topic transcription.*` in compose (use the env var).
 - Enforced by `TestTopicSingleSourceOfTruth`: `go test ./internal/config/ -run TestTopicSingleSourceOfTruth -v` (from `ingestion-service/`).
-- `kafka-init` pre-creates `transcription|embedding|extraction.jobs.v1` plus `.dlq` (6 partitions) so first publish doesn't auto-create with wrong settings.
+- `kafka-init` pre-creates `transcription|embedding|extraction|retry.jobs.v1` plus `.dlq` (6 partitions) so first publish doesn't auto-create with wrong settings.
 
 ## Ingestion API quirks
 
@@ -130,6 +131,16 @@ docker compose ps        # postgres + kafka should be healthy
 - OAuth routes are served by the SDK (`/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`, `/register` DCR, `/authorize`, `/token`, `/revoke`); `/login` and `/consent` are custom routes (`app/oauth_web.py`) that drive the Kratos native login API and require a verified email. One scope: `checkpoint`. Access tokens 1h, refresh 30d rotated; codes and tokens are stored SHA-256 at rest in `oauth_*` (mcp-service migration `00002_create_oauth.sql`).
 - TLS terminates at the `caddy` compose service for `160-236-239-95.sslip.io` (`infra/caddy/Caddyfile`), which proxies every path to `mcp-service:1417`. `MCP_PUBLIC_URL` must be that HTTPS origin; `BIND_MCP` stays loopback, so the bare `:1417` is no longer public. OAuth redirect hosts are restricted by `MCP_OAUTH_ALLOWED_REDIRECT_HOSTS` (default `claude.ai,chatgpt.com` plus loopback).
 
+## Retry worker quirks
+
+- `retry-service/` consumes `RETRY_REQUESTED` handoffs from `retry.jobs.v1`: a failing service publishes the failed event (envelope schema v2, `data{source_service, source_topic, stage, error_code, error_message, original_event}`) with the original bytes riding along unmodified, then commits its own message. No service emits these yet — the topic, queue and dispatcher are live infrastructure awaiting the first producer.
+- The delay is Postgres-scheduled, never an in-memory sleep: the consumer upserts one `retry_jobs` row per `(source_topic, original_event_id)` with `next_attempt_at = now() + retry.delay_seconds` (default 1800), and the dispatcher claims due rows with `FOR UPDATE SKIP LOCKED` and re-publishes the original payload byte-identical to the `source_topic`. `original_payload` is BYTEA, not JSONB — JSONB would reorder keys and break byte-identical re-delivery.
+- Attempt accounting: `attempts` counts completed re-deliveries (incremented in `MarkDispatched`, deliberately NOT at claim — a broker outage between claim and publish must not consume an attempt). A handoff arriving for a `dispatched` row re-arms it (`next_attempt_at = now() + delay`) while `attempts < retry.max_attempts` (default 2); once `attempts >= max_attempts` the row becomes terminal `failed` with `last_stage`/`last_error` and a per-handoff `attempt_log` (stage, error code, error, timestamp) recording where and why each failure happened, and from which service.
+- Handoffs are idempotent: a handoff for a still-`pending`/`processing` row only appends to `attempt_log` (schedule stands — duplicate Kafka publishes are safe); a handoff for a terminal `failed` row is ignored entirely. Job states: `pending | processing | dispatched | failed | skipped`.
+- Broker failures at dispatch release the claim with the schedule untouched → the next poll (default 10 s) retries indefinitely, like the outbox. Stuck `processing` rows are reclaimed after `retry.reclaim_after_seconds` (default 300); terminal rows (`dispatched|failed|skipped`) are pruned hourly past `retry.retention_days` (default 30).
+- Tombstoned accounts: the dispatcher checks `account_deletions` before re-publishing (42P01-tolerant) and marks the row `skipped` — a deleted user's events are never re-delivered. Poison on the retry topic (bad JSON, bad envelope, unparseable original) goes to `retry.jobs.v1.dlq` as `RETRY_FAILED` and is committed.
+- `KAFKA_TOPIC_RETRY`, `RETRY_DELAY_SECONDS`, `RETRY_MAX_ATTEMPTS` env overrides (bad values fail startup); `POSTGRES_DSN` connects as `checkpoint_worker`. Deletion coupling: `retry_jobs` is purged by ingestion's account-deletion worker.
+
 ## Test / verify
 
 Each Go service is its own module — run from the service dir:
@@ -142,6 +153,7 @@ go test ./internal/config/ -run TestTopicSingleSourceOfTruth -v   # after any to
 TEST_DATABASE_URL=postgres://... go test ./internal/repository/postgres/ -v   # integration
 TEST_MINIO_ENDPOINT=... TEST_MINIO_ACCESS_KEY=... TEST_MINIO_SECRET_KEY=... TEST_MINIO_BUCKET=... go test ./internal/storage/minio/ -v
 TEST_DATABASE_URL=postgres://... go test ./internal/storage/ -v   # notification-service integration
+TEST_DATABASE_URL=postgres://... go test ./internal/storage/ -v   # retry-service integration (from retry-service/)
 TEST_DATABASE_URL=postgres://... TEST_MCP_DATABASE_URL=postgres://checkpoint_mcp:... python -m unittest discover -s tests -v   # mcp-service integration (from mcp-service/)
 ```
 
