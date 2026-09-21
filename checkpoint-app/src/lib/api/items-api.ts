@@ -5,6 +5,7 @@ export const ITEMS_PAGE_SIZE = 50;
 export interface ItemPage<T> {
   items: T[];
   next_offset: number | null;
+  total: number;
 }
 
 export interface Todo {
@@ -60,6 +61,18 @@ export async function setTodoDone(token: string, id: number, isDone: boolean): P
   );
 }
 
+export async function updateTodo(
+  token: string,
+  id: number,
+  patch: { text?: string; is_done?: boolean },
+): Promise<Todo> {
+  return apiFetch<Todo>(
+    `/v1/me/todos/${id}`,
+    { method: 'PATCH', body: JSON.stringify(patch) },
+    token,
+  );
+}
+
 export async function deleteTodo(token: string, id: number): Promise<void> {
   await apiFetch<{ deleted: boolean }>(`/v1/me/todos/${id}`, { method: 'DELETE' }, token);
 }
@@ -77,6 +90,18 @@ export async function deleteReminder(token: string, id: number): Promise<void> {
   await apiFetch<{ deleted: boolean }>(`/v1/me/reminders/${id}`, { method: 'DELETE' }, token);
 }
 
+export async function updateReminder(
+  token: string,
+  id: number,
+  patch: { text?: string; remind_at?: string | null; important?: boolean },
+): Promise<Reminder> {
+  return apiFetch<Reminder>(
+    `/v1/me/reminders/${id}`,
+    { method: 'PATCH', body: JSON.stringify(patch) },
+    token,
+  );
+}
+
 export function listInsights(token: string, offset: number): Promise<ItemPage<Insight>> {
   const query = pageQuery({ limit: ITEMS_PAGE_SIZE, offset });
   return apiFetch<ItemPage<Insight>>(`/v1/me/insights?${query}`, {}, token);
@@ -84,4 +109,12 @@ export function listInsights(token: string, offset: number): Promise<ItemPage<In
 
 export async function deleteInsight(token: string, id: number): Promise<void> {
   await apiFetch<{ deleted: boolean }>(`/v1/me/insights/${id}`, { method: 'DELETE' }, token);
+}
+
+export async function updateInsight(token: string, id: number, text: string): Promise<Insight> {
+  return apiFetch<Insight>(
+    `/v1/me/insights/${id}`,
+    { method: 'PATCH', body: JSON.stringify({ text }) },
+    token,
+  );
 }

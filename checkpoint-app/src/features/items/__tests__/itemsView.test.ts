@@ -4,11 +4,16 @@ import { describe, it } from 'node:test';
 import {
   CATEGORIES,
   emptyMessage,
+  emptyTitle,
   formatItemDate,
   formatReminderTime,
+  groupByDay,
+  groupDate,
   itemDate,
   mergePage,
   REMINDER_WINDOWS,
+  sectionTitle,
+  summaryLabel,
   TODO_STATUSES,
 } from '../itemsView.ts';
 
@@ -60,6 +65,36 @@ describe('itemDate', () => {
   });
 });
 
+describe('groupDate', () => {
+  it('groups a reminder by its due time when set', () => {
+    assert.equal(
+      groupDate({
+        id: 1,
+        text: 'call',
+        remind_at: RECORDED,
+        important: true,
+        audio_id: 'a',
+        created_at: CREATED,
+      }),
+      RECORDED,
+    );
+  });
+
+  it('falls back to created_at when a reminder has no due time', () => {
+    assert.equal(
+      groupDate({
+        id: 1,
+        text: 'call',
+        remind_at: null,
+        important: true,
+        audio_id: 'a',
+        created_at: CREATED,
+      }),
+      CREATED,
+    );
+  });
+});
+
 describe('formatItemDate', () => {
   it('renders a dash for missing or invalid values', () => {
     assert.equal(formatItemDate(null), '—');
@@ -81,9 +116,58 @@ describe('formatReminderTime', () => {
   });
 });
 
+describe('sectionTitle', () => {
+  const now = new Date('2026-09-22T12:00:00');
+
+  it('names the nearby days', () => {
+    assert.equal(sectionTitle('2026-09-22T06:00:00', now), 'Today');
+    assert.equal(sectionTitle('2026-09-21T06:00:00', now), 'Yesterday');
+    assert.equal(sectionTitle('2026-09-23T06:00:00', now), 'Tomorrow');
+  });
+
+  it('falls back to a calendar date for older days', () => {
+    const title = sectionTitle('2026-09-18T06:00:00', now);
+    assert.notEqual(title, 'Today');
+    assert.notEqual(title, 'Yesterday');
+    assert.notEqual(title, 'Tomorrow');
+  });
+});
+
+describe('groupByDay', () => {
+  it('groups consecutive items by day, preserving order', () => {
+    const items = [
+      { at: '2026-09-22T09:00:00' },
+      { at: '2026-09-22T08:00:00' },
+      { at: '2026-09-21T09:00:00' },
+    ];
+    const sections = groupByDay(items, (item) => item.at, new Date('2026-09-22T12:00:00'));
+    assert.deepEqual(
+      sections.map((section) => section.title),
+      ['Today', 'Yesterday'],
+    );
+    assert.equal(sections[0]?.data.length, 2);
+    assert.equal(sections[1]?.data.length, 1);
+  });
+});
+
+describe('summaryLabel', () => {
+  it('pluralizes each category', () => {
+    assert.equal(summaryLabel('todos', 1, 'all'), '1 to-do');
+    assert.equal(summaryLabel('todos', 4, 'open'), '4 to-dos');
+    assert.equal(summaryLabel('insights', 7, 'all'), '7 insights');
+  });
+
+  it('names the reminder window', () => {
+    assert.equal(summaryLabel('reminders', 1, 'upcoming'), '1 upcoming reminder');
+    assert.equal(summaryLabel('reminders', 2, 'upcoming'), '2 upcoming reminders');
+    assert.equal(summaryLabel('reminders', 3, 'past'), '3 past reminders');
+    assert.equal(summaryLabel('reminders', 3, 'all'), '3 reminders');
+  });
+});
+
 describe('mergePage', () => {
   it('appends the next page to the current items', () => {
-    const page = { items: [{ id: 2 }, { id: 3 }], next_offset: 4 };
+    const page = { items: [{ id: 2 }, { id: 3 }], next_offset: 4, total: 3 };
     assert.deepEqual(mergePage([{ id: 1 }], page), [{ id: 1 }, { id: 2 }, { id: 3 }]);
   });
 });
@@ -106,6 +190,7 @@ describe('filter catalogs', () => {
 
   it('describes an empty list for every category', () => {
     for (const { key } of CATEGORIES) {
+      assert.ok(emptyTitle(key).length > 0);
       assert.ok(emptyMessage(key).length > 0);
     }
   });

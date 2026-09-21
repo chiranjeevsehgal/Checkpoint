@@ -10,12 +10,14 @@ interface FeedState<T> {
   key: string;
   items: T[];
   nextOffset: number | null;
+  total: number;
   loading: boolean;
   error: string | null;
 }
 
 export interface PagedItems<T> {
   items: T[];
+  total: number;
   loading: boolean;
   refreshing: boolean;
   error: string | null;
@@ -39,6 +41,7 @@ export function usePagedItems<T>(
     key,
     items: [],
     nextOffset: 0,
+    total: 0,
     loading: true,
     error: null,
   });
@@ -60,6 +63,7 @@ export function usePagedItems<T>(
             key: targetKey,
             items: mode === 'more' ? mergePage(base, page) : page.items,
             nextOffset: page.next_offset,
+            total: page.total,
             loading: false,
             error: null,
           };
@@ -114,6 +118,7 @@ export function usePagedItems<T>(
 
   return {
     items: current ? state.items : [],
+    total: current ? state.total : 0,
     loading: current ? state.loading : true,
     refreshing,
     error: current ? state.error : null,
