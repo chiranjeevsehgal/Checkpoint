@@ -16,7 +16,7 @@ import { startSyncService, stopSyncService } from '../backgroundService.ts';
 import { CTRL_OK } from '../config.ts';
 import { networkMonitor } from '../networkMonitor.ts';
 import type { HealthProbe } from '../networkStatus.ts';
-import { ctrlStatusText, formatBytes } from '../parsers.ts';
+import { formatBytes } from '../parsers.ts';
 import {
   clearReminderSubscription,
   configureReminders,
@@ -218,7 +218,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     async (path: string) => {
       const code = await syncEngine.deleteFile(path);
       if (code === CTRL_OK) showToast('File deleted.');
-      else if (code !== null) showToast(`Delete failed: ${ctrlStatusText(code)}`);
+      else if (code !== null) showToast('Could not delete that file. Try again.');
     },
     [showToast],
   );
@@ -305,7 +305,7 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
     async (path: string) => {
       const code = await syncEngine.previewStorageFile(path);
       if (code !== null && code !== CTRL_OK) {
-        showToast(`Could not fetch preview: ${ctrlStatusText(code)}`);
+        showToast('Could not load the preview. Try again.');
       }
       return code;
     },
@@ -443,6 +443,15 @@ export function CheckpointProvider({ children }: PropsWithChildren) {
         }
         requireText={dialog?.kind === 'erase' ? 'ERASE' : undefined}
         requirePassword={dialog?.kind === 'release'}
+        errorFallback={
+          dialog?.kind === 'erase'
+            ? 'Could not erase the recordings. Try again.'
+            : dialog?.kind === 'forget'
+              ? 'Could not forget the pendant. Try again.'
+              : dialog?.kind === 'release'
+                ? 'Could not release the pendant. Try again.'
+                : 'Could not delete that file. Try again.'
+        }
         onCancel={cancelDialog}
         onConfirm={confirmDialog}
       />

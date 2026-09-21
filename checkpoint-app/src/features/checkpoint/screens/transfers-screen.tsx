@@ -26,6 +26,7 @@ import { Icon } from '@/components/ui/icon';
 import { ProgressBar } from '@/components/ui/progress-bar';
 import { Text } from '@/components/ui/text';
 import { cn } from '@/lib/utils';
+import { describeUserError } from '@/lib/user-errors';
 import { useToast } from '@/providers/toast-provider';
 
 const STEPS = ['Receive', 'Analyze', 'Upload'] as const;
@@ -68,7 +69,7 @@ function PlayButton({ uri, label }: { uri: string; label: string }) {
       return;
     }
     void playback.play(uri, label).catch((error: unknown) => {
-      showToast(error instanceof Error ? error.message : 'Playback failed.');
+      showToast(describeUserError(error, 'Could not play this recording.'));
     });
   };
 

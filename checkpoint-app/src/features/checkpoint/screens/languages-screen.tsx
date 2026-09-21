@@ -14,6 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
 import { getUserSettings, putUserSettings, type LanguageOption } from '@/lib/api/settings-api';
 import { getSessionToken } from '@/lib/session';
+import { describeUserError } from '@/lib/user-errors';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/providers/toast-provider';
 
@@ -69,7 +70,7 @@ export function LanguagesScreen() {
       const token = getSessionToken();
       if (!token) {
         if (!cancelled) {
-          setError('Not signed in.');
+          setError('Please sign in to continue.');
           setLoading(false);
         }
         return;
@@ -81,7 +82,7 @@ export function LanguagesScreen() {
         setSelected(settings.languages);
         setBaseline(settings.languages);
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load languages.');
+        if (!cancelled) setError(describeUserError(err, 'Could not load languages.'));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -100,7 +101,7 @@ export function LanguagesScreen() {
   const save = useCallback(async () => {
     const token = getSessionToken();
     if (!token) {
-      showToast('Not signed in.');
+      showToast('Please sign in to continue.');
       return;
     }
     setSaving(true);
@@ -110,7 +111,7 @@ export function LanguagesScreen() {
       setBaseline(saved.languages);
       showToast('Languages saved.');
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Could not save languages.');
+      showToast(describeUserError(err, 'Could not save languages.'));
     } finally {
       setSaving(false);
     }

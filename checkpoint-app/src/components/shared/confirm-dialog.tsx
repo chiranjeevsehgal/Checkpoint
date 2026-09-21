@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Text } from '@/components/ui/text';
+import { describeUserError } from '@/lib/user-errors';
 
 interface ConfirmDialogProps {
   visible: boolean;
@@ -13,6 +14,7 @@ interface ConfirmDialogProps {
   confirmLabel: string;
   requireText?: string;
   requirePassword?: boolean;
+  errorFallback?: string;
   onCancel: () => void;
   onConfirm: (password?: string) => void | Promise<void>;
 }
@@ -25,6 +27,7 @@ function DialogBody({
   confirmLabel,
   requireText,
   requirePassword,
+  errorFallback = 'Something went wrong.',
   onCancel,
   onConfirm,
 }: DialogBodyProps) {
@@ -44,7 +47,7 @@ function DialogBody({
       await onConfirm(requirePassword ? password : undefined);
     } catch (err) {
       setPassword('');
-      setError(err instanceof Error ? err.message : 'Something went wrong.');
+      setError(describeUserError(err, errorFallback));
     } finally {
       setBusy(false);
     }

@@ -74,7 +74,7 @@ export class IngestionUploader {
 
   private requireToken(): string {
     const token = getSessionToken();
-    if (!token) throw new Error('Not signed in.');
+    if (!token) throw new Error('Please sign in to upload.');
     return token;
   }
 
@@ -120,10 +120,10 @@ export class IngestionUploader {
     options: UploadOptions = {},
   ): Promise<CompletedUpload> {
     if (data.length > INGEST_MAX_BYTES) {
-      throw new Error(`too-large: ${data.length} > ${INGEST_MAX_BYTES}`);
+      throw new Error('That recording is too large to upload.');
     }
     if (!isValidDeviceId(this.deviceId)) {
-      throw new Error('no cloud-owned pendant — set up the pendant before uploading');
+      throw new Error('Set up your pendant before uploading.');
     }
     const headers: Record<string, string> = {};
     if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey.slice(0, 128);
