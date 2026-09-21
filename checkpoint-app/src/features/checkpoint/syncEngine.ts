@@ -624,10 +624,6 @@ class SyncEngine {
       CheckpointClient.deleteLocalCopy(file.fileIdHex);
       return;
     }
-    if (!current.ingestEnabled) {
-      this.reportIngest(file.fileIdHex, '', 'disabled', '', 'disabled', '0.00');
-      return;
-    }
     this.patchRecord(file.fileIdHex, {
       localUri: receivedFile(file.fileIdHex, '.ogg').uri,
       vad,

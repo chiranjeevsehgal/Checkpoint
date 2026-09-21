@@ -26,6 +26,9 @@ kafka:
   consume_topic: transcription.jobs.v1
   produce_topic1: embedding.jobs.v1
   produce_topic2: extraction.jobs.v1
+  # Transient failures are handed off to this topic for delayed,
+  # attempt-bounded re-delivery instead of a hot redelivery loop.
+  retry_topic: retry.jobs.v1
   consumer_group: transcription-service
 
 minio:

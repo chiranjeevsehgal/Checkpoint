@@ -30,6 +30,7 @@ type KafkaConfig struct {
 	ConsumeTopic  string   `yaml:"consume_topic"`
 	ConsumerGroup string   `yaml:"consumer_group"`
 	DLQTopic      string   `yaml:"dlq_topic"`
+	RetryTopic    string   `yaml:"retry_topic"`
 }
 
 type PostgresConfig struct {
@@ -125,6 +126,14 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Kafka.DLQTopic == "" {
 		cfg.Kafka.DLQTopic = cfg.Kafka.ConsumeTopic + ".dlq"
+	}
+	// Handoffs go to the central retry service; same env override the other
+	// services honor so compose can point them at one place.
+	if topic := os.Getenv("KAFKA_TOPIC_RETRY"); topic != "" {
+		cfg.Kafka.RetryTopic = topic
+	}
+	if cfg.Kafka.RetryTopic == "" {
+		cfg.Kafka.RetryTopic = "retry.jobs.v1"
 	}
 	// Same override the other services honor for container flexibility.
 	if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {

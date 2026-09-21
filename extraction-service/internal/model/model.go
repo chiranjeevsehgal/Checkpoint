@@ -21,6 +21,7 @@ const (
 	SchemaVersion                = 2
 	EventTypeExtractionRequested = "EXTRACTION_REQUESTED"
 	EventTypeExtractionFailed    = "EXTRACTION_FAILED"
+	EventTypeRetryRequested      = "RETRY_REQUESTED"
 )
 
 // ExtractionJobRequestedEvent is what transcription publishes to
@@ -57,6 +58,23 @@ type ExtractionFailedEvent struct {
 
 type ExtractionFailedData struct {
 	SourceTopic   string          `json:"source_topic"`
+	ErrorCode     string          `json:"error_code"`
+	ErrorMessage  string          `json:"error_message"`
+	OriginalEvent json.RawMessage `json:"original_event"`
+}
+
+// RetryRequestedEvent is the handoff to the central retry service
+// (retry.jobs.v1). The original trigger event rides along unmodified inside
+// data.original_event so retry republishes it exactly.
+type RetryRequestedEvent struct {
+	Envelope
+	Data RetryRequestedData `json:"data"`
+}
+
+type RetryRequestedData struct {
+	SourceService string          `json:"source_service"`
+	SourceTopic   string          `json:"source_topic"`
+	Stage         string          `json:"stage"`
 	ErrorCode     string          `json:"error_code"`
 	ErrorMessage  string          `json:"error_message"`
 	OriginalEvent json.RawMessage `json:"original_event"`
@@ -105,6 +123,9 @@ type Job struct {
 	RecordedAt     string
 	// Attempts is the value after claiming (claim increments before use).
 	Attempts int
+	// SourceEvent is the raw trigger event, kept only for the retry handoff;
+	// NULL once the job reaches a terminal success.
+	SourceEvent []byte
 }
 
 // TypeAll is the single extraction_jobs.extraction_type value: one combined

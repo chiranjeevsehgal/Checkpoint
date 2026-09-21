@@ -49,6 +49,13 @@ func (s *HealthServer) Inc(name string) {
 	s.counts[name]++
 }
 
+// Add increments the named counter by delta.
+func (s *HealthServer) Add(name string, delta int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.counts[name] += delta
+}
+
 // Start serves until ctx ends. It never fails the process: a bind error is
 // logged and the worker keeps running without metrics.
 func (s *HealthServer) Start(ctx context.Context) {

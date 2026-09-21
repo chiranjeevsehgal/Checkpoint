@@ -45,6 +45,9 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if cfg.Kafka.DLQTopic != "extraction.jobs.v1.dlq" {
 		t.Fatalf("dlq default wrong: %s", cfg.Kafka.DLQTopic)
 	}
+	if cfg.Kafka.RetryTopic != "retry.jobs.v1" {
+		t.Fatalf("retry topic default wrong: %s", cfg.Kafka.RetryTopic)
+	}
 	if cfg.Kafka.ConsumerGroup != "extraction-service" {
 		t.Fatalf("consumer group default wrong: %s", cfg.Kafka.ConsumerGroup)
 	}
@@ -72,6 +75,20 @@ func TestLoadEnvOverridesBrokers(t *testing.T) {
 	}
 	if len(cfg.Kafka.Brokers) != 1 || cfg.Kafka.Brokers[0] != "kafka2:9092" {
 		t.Fatalf("broker override not applied: %v", cfg.Kafka.Brokers)
+	}
+}
+
+func TestLoadEnvOverridesRetryTopic(t *testing.T) {
+	t.Setenv("POSTGRES_DSN", "postgres://x")
+	t.Setenv("GROQ_API_KEY", "gsk_test")
+	t.Setenv("KAFKA_TOPIC_RETRY", "retry.jobs.v2")
+
+	cfg, err := Load(writeConfig(t))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Kafka.RetryTopic != "retry.jobs.v2" {
+		t.Fatalf("retry topic override not applied: %s", cfg.Kafka.RetryTopic)
 	}
 }
 

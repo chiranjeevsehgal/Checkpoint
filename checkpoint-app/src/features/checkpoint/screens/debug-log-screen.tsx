@@ -82,7 +82,6 @@ export function DebugLogScreen() {
       <AppHeader
         title="Debug Log"
         subtitle={`${logs.length} events`}
-        showDebugLog={false}
         onBack={() => router.back()}
       />
       <FlatList

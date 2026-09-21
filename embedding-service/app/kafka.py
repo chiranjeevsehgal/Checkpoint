@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 
 from confluent_kafka import Consumer, Producer, TopicPartition
 
+from .retry import build_retry_event
+
 
 class Kafka:
     """Offsets commit only after a message is fully processed (embedded + stored);
@@ -12,8 +14,9 @@ class Kafka:
     kafka-init) with the same envelope shape as every other event on the bus.
     """
 
-    def __init__(self, brokers: str, topic: str, consumer_group: str) -> None:
+    def __init__(self, brokers: str, topic: str, consumer_group: str, retry_topic: str = "retry.jobs.v1") -> None:
         self._topic = topic
+        self._retry_topic = retry_topic
         self._consumer = Consumer(
             {
                 "bootstrap.servers": brokers,
@@ -62,6 +65,34 @@ class Kafka:
         self._producer.produce(
             self.dlq_topic,
             key=None,
+            value=json.dumps(event).encode("utf-8"),
+        )
+        self._producer.flush(10.0)
+
+    def send_to_retry(
+        self,
+        source_service: str,
+        stage: str,
+        error_code: str,
+        error_message: str,
+        original_payload: bytes,
+        key: str | None = None,
+    ) -> None:
+        """Hand a failed event to the central retry service for delayed,
+        attempt-bounded re-delivery. Keyed by the original event id so every
+        handoff for one original lands on the same retry partition, keeping
+        the attempt history in order."""
+        event = build_retry_event(
+            source_service,
+            self._topic,
+            stage,
+            error_code,
+            error_message,
+            original_payload,
+        )
+        self._producer.produce(
+            self._retry_topic,
+            key=key,
             value=json.dumps(event).encode("utf-8"),
         )
         self._producer.flush(10.0)

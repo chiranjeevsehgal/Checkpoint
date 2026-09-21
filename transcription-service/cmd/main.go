@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	kafkago "github.com/segmentio/kafka-go"
 	"github.com/google/uuid"
 
 	"transcription-service/internal/config"
@@ -28,6 +30,21 @@ var errStaleDeletedUser = errors.New("stale event for deleted user")
 // errOmitTranscript means the transcript is blank or in a language the user
 // did not select. The message is committed and dropped rather than retried.
 var errOmitTranscript = errors.New("transcript omitted")
+
+// stageError carries where in the pipeline a failure happened so the retry
+// service's audit log records the failure point.
+type stageError struct {
+	stage string
+	code  string
+	err   error
+}
+
+func (e *stageError) Error() string { return e.stage + ": " + e.err.Error() }
+func (e *stageError) Unwrap() error { return e.err }
+
+func staged(stage, code string, err error) error {
+	return &stageError{stage: stage, code: code, err: err}
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -127,11 +144,20 @@ func main() {
 				}
 				continue
 			}
-			// Not committing here means this message will be redelivered on
-			// restart — intentional, so a failed transcription isn't silently
-			// lost.
+			// Transient failure: hand the original event to the central
+			// retry service instead of hot-looping redelivery at fetch
+			// speed. The handoff owns re-delivery from here.
 			slog.Error("failed to process", "audio_id", event.Data.AudioID, "error", err)
 			health.Inc("transcription_processed_failed_total")
+			if herr := handoffToRetry(ctx, producer, cfg.Kafka, event, msg, err); herr != nil {
+				// The handoff itself is not durable yet — leave the
+				// message uncommitted so redelivery retries both.
+				slog.Error("retry handoff failed, will redeliver", "audio_id", event.Data.AudioID, "error", herr)
+				continue
+			}
+			if cerr := consumer.Commit(ctx, msg); cerr != nil {
+				slog.Error("commit error", "audio_id", event.Data.AudioID, "error", cerr)
+			}
 			continue
 		}
 
@@ -156,7 +182,7 @@ func handleMessage(
 
 	deleting, err := pgStore.IsUserDeleting(ctx, data.UserID)
 	if err != nil {
-		return err
+		return staged("check_deletion", "DB_ERROR", err)
 	}
 	if deleting {
 		return errStaleDeletedUser
@@ -164,12 +190,12 @@ func handleMessage(
 
 	languages, err := pgStore.AllowedLanguages(ctx, data.UserID)
 	if err != nil {
-		return err
+		return staged("load_languages", "DB_ERROR", err)
 	}
 
 	audio, fetchedContentType, err := minioClient.FetchObject(ctx, data.Bucket, data.ObjectKey)
 	if err != nil {
-		return err
+		return staged("fetch_audio", "STORAGE_ERROR", err)
 	}
 	contentType := data.ContentType
 	if contentType == "" {
@@ -178,7 +204,7 @@ func handleMessage(
 
 	result, err := transcriber.Transcribe(ctx, audio, contentType, languages)
 	if err != nil {
-		return err
+		return staged("transcribe", "PROVIDER_ERROR", err)
 	}
 	if reason := language.OmitReason(result.Text, result.Language, languages); reason != "" {
 		return fmt.Errorf("%w: %s", errOmitTranscript, reason)
@@ -191,25 +217,54 @@ func handleMessage(
 	// deleted while the expensive transcription ran.
 	deleting, err = pgStore.IsUserDeleting(ctx, data.UserID)
 	if err != nil {
-		return err
+		return staged("recheck_deletion", "DB_ERROR", err)
 	}
 	if deleting {
 		return errStaleDeletedUser
 	}
 
 	if err := pgStore.SaveTranscript(ctx, result); err != nil {
-		return err
+		return staged("persist_transcript", "DB_ERROR", err)
 	}
 
 	if err := publishEmbeddingJob(ctx, producer, kafkaCfg.ProduceTopicEmbedding, result); err != nil {
-		return err
+		return staged("publish_embedding", "PUBLISH_ERROR", err)
 	}
 	if err := publishExtractionJob(ctx, producer, kafkaCfg.ProduceTopicExtraction, result); err != nil {
-		return err
+		return staged("publish_extraction", "PUBLISH_ERROR", err)
 	}
 
 	slog.Info("completed", "audio_id", data.AudioID, "duration_seconds", result.DurationSeconds)
 	return nil
+}
+
+// handoffToRetry publishes a RETRY_REQUESTED handoff for a failed message.
+// Keyed by the original event id so every handoff for one original lands on
+// the same retry partition, keeping the attempt history in order.
+func handoffToRetry(ctx context.Context, producer *kafka.Producer, kafkaCfg config.KafkaConfig, event model.TranscriptionRequestedEvent, msg kafkago.Message, err error) error {
+	stage, code := "unknown", "PROCESSING_ERROR"
+	var se *stageError
+	if errors.As(err, &se) {
+		stage, code = se.stage, se.code
+	}
+	handoff := buildRetryHandoff(kafkaCfg.ConsumeTopic, stage, code, err.Error(), json.RawMessage(msg.Value))
+	return producer.Publish(ctx, kafkaCfg.RetryTopic, event.EventID, handoff)
+}
+
+// buildRetryHandoff is the pure handoff envelope, kept producer-free so it can
+// be unit-tested without a broker.
+func buildRetryHandoff(sourceTopic, stage, code, message string, originalEvent json.RawMessage) model.RetryRequestedEvent {
+	return model.RetryRequestedEvent{
+		Envelope: newEnvelope(model.EventTypeRetryRequested),
+		Data: model.RetryRequestedData{
+			SourceService: "transcription-service",
+			SourceTopic:   sourceTopic,
+			Stage:         stage,
+			ErrorCode:     code,
+			ErrorMessage:  message,
+			OriginalEvent: originalEvent,
+		},
+	}
 }
 
 func publishEmbeddingJob(ctx context.Context, producer *kafka.Producer, topic string, result *model.TranscriptResult) error {

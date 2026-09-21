@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -88,4 +89,28 @@ type ExtractionJobData struct {
 	Language        string           `json:"language"`
 	SpeakerSegments []SpeakerSegment `json:"speaker_segments"`
 	RecordedAt      string           `json:"recorded_at,omitempty"`
+}
+
+// EventTypeRetryRequested marks a handoff to the central retry service
+// (retry.jobs.v1): a transient failure is parked there for delayed,
+// attempt-bounded re-delivery of the original event to this topic.
+const EventTypeRetryRequested = "RETRY_REQUESTED"
+
+// RetryRequestedEvent is the handoff envelope. The original event rides
+// along unmodified inside data.original_event, exactly like the DLQ
+// convention, so re-delivery republishes byte-identical payloads.
+type RetryRequestedEvent struct {
+	Envelope
+	Data RetryRequestedData `json:"data"`
+}
+
+type RetryRequestedData struct {
+	SourceService string          `json:"source_service"`
+	SourceTopic   string          `json:"source_topic"`
+	// Stage is where in the pipeline the failure happened, so operators
+	// can see not just that a retry failed but at which point.
+	Stage         string          `json:"stage"`
+	ErrorCode     string          `json:"error_code"`
+	ErrorMessage  string          `json:"error_message"`
+	OriginalEvent json.RawMessage `json:"original_event"`
 }

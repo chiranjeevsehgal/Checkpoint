@@ -21,11 +21,17 @@ fail the batch, retryable) and persisted with a `model@prompt-version` tag
 (`internal/extractor.PromptVersion`). Reminder times resolve in the user's
 `user_settings.timezone`.
 
+Terminal failures (`batch.max_attempts` exhausted) are handed to the central
+retry service, carrying the raw trigger event stored in
+`extraction_jobs.source_event`; a retry redelivery resets the failed row to
+`pending`/`attempts=0`. The handoff is best-effort: a publish failure leaves
+the row `failed` for manual requeue.
+
 ## Config
 
-`CONFIG_PATH`, `GROQ_API_KEY`, `POSTGRES_DSN`, `METRICS_ADDR` (default
-`:9082`). Requeue a failed batch with
-`UPDATE extraction_jobs SET status='pending', attempts=0 WHERE ...`.
+`CONFIG_PATH`, `GROQ_API_KEY`, `POSTGRES_DSN`, `KAFKA_TOPIC_RETRY` (default
+`retry.jobs.v1`), `METRICS_ADDR` (default `:9082`). Requeue a failed batch
+with `UPDATE extraction_jobs SET status='pending', attempts=0 WHERE ...`.
 
 ## Probes
 

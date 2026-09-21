@@ -17,7 +17,7 @@ func TestPurgeDownstreamRemovesExtractionData(t *testing.T) {
 	audioID := uuid.NewString()
 
 	t.Cleanup(func() {
-		for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos", "reminders", "insights", "summaries", "oauth_tokens", "oauth_authorization_codes"} {
+		for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos", "reminders", "insights", "summaries", "oauth_tokens", "oauth_authorization_codes", "retry_jobs"} {
 			_, _ = p.inner.Exec(ctx, `DELETE FROM `+table+` WHERE user_id = $1`, userID)
 		}
 	})
@@ -82,12 +82,20 @@ func TestPurgeDownstreamRemovesExtractionData(t *testing.T) {
 			t.Fatalf("seed oauth_tokens: %v", err)
 		}
 	}
+	if hasTable(t, p, "retry_jobs") {
+		if _, err := p.inner.Exec(ctx,
+			`INSERT INTO retry_jobs (original_event_id, source_service, source_topic, user_id, original_payload)
+			 VALUES ($1, 'transcription-service', 'transcription.jobs.v1', $2, '{}'::bytea)`,
+			uuid.NewString(), userID); err != nil {
+			t.Fatalf("seed retry_jobs: %v", err)
+		}
+	}
 
 	if err := p.PurgeDownstream(ctx, userID); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
 
-	for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos", "reminders", "insights", "summaries", "oauth_tokens"} {
+	for _, table := range []string{"transcripts", "embeddings", "extraction_jobs", "todos", "reminders", "insights", "summaries", "oauth_tokens", "retry_jobs"} {
 		if !hasTable(t, p, table) {
 			continue
 		}

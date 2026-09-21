@@ -16,7 +16,6 @@ export interface CheckpointSettings {
   deviceName: string;
   vadThreshold: number;
   minSpeechS: number;
-  ingestEnabled: boolean;
   vadEnabled: boolean;
   autoSyncEnabled: boolean;
   remindersEnabled: boolean;
@@ -29,7 +28,6 @@ const KEYS = {
   deviceName: settingsKey('deviceName'),
   vadThreshold: settingsKey('vadThreshold'),
   minSpeechS: settingsKey('minSpeechS'),
-  ingestEnabled: settingsKey('ingestEnabled'),
   vadEnabled: settingsKey('vadEnabled'),
   autoSyncEnabled: settingsKey('autoSyncEnabled'),
   remindersEnabled: settingsKey('remindersEnabled'),
@@ -67,7 +65,6 @@ export function defaultSettings(): CheckpointSettings {
     deviceName: DEVICE_NAME,
     vadThreshold: VAD_THRESHOLD_DEFAULT,
     minSpeechS: VAD_MIN_SPEECH_S_DEFAULT,
-    ingestEnabled: true,
     vadEnabled: true,
     autoSyncEnabled: true,
     remindersEnabled: true,
@@ -91,7 +88,6 @@ export async function loadSettings(): Promise<CheckpointSettings> {
     deviceName,
     vadThreshold,
     minSpeechS,
-    ingestEnabled,
     vadEnabled,
     autoSyncEnabled,
     remindersEnabled,
@@ -102,7 +98,6 @@ export async function loadSettings(): Promise<CheckpointSettings> {
     storage.get(KEYS.deviceName),
     storage.get(KEYS.vadThreshold),
     storage.get(KEYS.minSpeechS),
-    storage.get(KEYS.ingestEnabled),
     storage.get(KEYS.vadEnabled),
     storage.get(KEYS.autoSyncEnabled),
     storage.get(KEYS.remindersEnabled),
@@ -118,7 +113,6 @@ export async function loadSettings(): Promise<CheckpointSettings> {
     deviceName: (deviceName ?? '').trim() || defaults.deviceName,
     vadThreshold: toNumber(vadThreshold, defaults.vadThreshold),
     minSpeechS: toNumber(minSpeechS, defaults.minSpeechS),
-    ingestEnabled: ingestEnabled !== '0',
     vadEnabled: vadEnabled !== '0',
     autoSyncEnabled: autoSyncEnabled !== '0',
     remindersEnabled: remindersEnabled !== '0',
@@ -144,7 +138,6 @@ export async function saveSettings(settings: CheckpointSettings): Promise<void> 
     storage.set(KEYS.deviceName, settings.deviceName.trim()),
     storage.set(KEYS.vadThreshold, String(settings.vadThreshold)),
     storage.set(KEYS.minSpeechS, String(settings.minSpeechS)),
-    storage.set(KEYS.ingestEnabled, settings.ingestEnabled ? '1' : '0'),
     storage.set(KEYS.vadEnabled, settings.vadEnabled ? '1' : '0'),
     storage.set(KEYS.autoSyncEnabled, settings.autoSyncEnabled ? '1' : '0'),
     storage.set(KEYS.remindersEnabled, settings.remindersEnabled ? '1' : '0'),

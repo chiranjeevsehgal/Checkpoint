@@ -9,8 +9,8 @@ import (
 	kafkago "github.com/segmentio/kafka-go"
 	"github.com/google/uuid"
 
-	"extraction-service/internal/config"
-	"extraction-service/internal/model"
+	"retry-service/internal/config"
+	"retry-service/internal/model"
 )
 
 // MalformedMessageError marks a message whose JSON could not be unmarshalled.
@@ -60,9 +60,11 @@ func (c *Consumer) Close() error {
 	return c.reader.Close()
 }
 
+// Producer re-delivers retry payloads to their original source topics and
+// writes poison handoffs to the retry topic's DLQ.
 type Producer struct {
-	writer *kafkago.Writer
-	topic  string
+	writer   *kafkago.Writer
+	dlqTopic string
 }
 
 func NewProducer(cfg config.KafkaConfig) *Producer {
@@ -71,37 +73,40 @@ func NewProducer(cfg config.KafkaConfig) *Producer {
 			Addr:     kafkago.TCP(cfg.Brokers...),
 			Balancer: &kafkago.LeastBytes{},
 		},
-		topic: cfg.DLQTopic,
+		dlqTopic: cfg.DLQTopic,
 	}
 }
 
-// Publish writes value to topic, preserving key for traceability.
-func (p *Producer) Publish(ctx context.Context, topic, key string, value interface{}) error {
-	payload, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Errorf("marshalling message: %w", err)
+// Publish re-delivers a retry job's original payload to its source topic,
+// byte-identical to what the failing service consumed, with the original
+// message key preserved for traceability. Source-topic consumers are
+// idempotent upserters keyed on event_id, so an at-least-once re-delivery
+// can neither duplicate nor corrupt work.
+func (p *Producer) Publish(ctx context.Context, topic, key string, payload []byte) error {
+	msg := kafkago.Message{
+		Topic: topic,
+		Value: payload,
 	}
-	msg := kafkago.Message{Topic: topic, Value: payload}
 	if key != "" {
 		msg.Key = []byte(key)
 	}
 	if err := p.writer.WriteMessages(ctx, msg); err != nil {
-		return fmt.Errorf("publishing message to %s: %w", topic, err)
+		return fmt.Errorf("publishing retry payload to %s: %w", topic, err)
 	}
 	return nil
 }
 
 // SendToDLQ publishes the standard failure envelope to the DLQ topic. The
-// original payload rides along unmodified inside data.original_event.
+// poison handoff rides along unmodified inside data.original_event.
 func (p *Producer) SendToDLQ(ctx context.Context, sourceTopic, errorCode, errorMessage string, original json.RawMessage) error {
-	event := model.ExtractionFailedEvent{
+	event := model.RetryFailedEvent{
 		Envelope: model.Envelope{
 			SchemaVersion: model.SchemaVersion,
 			EventID:       uuid.NewString(),
-			EventType:     model.EventTypeExtractionFailed,
+			EventType:     model.EventTypeRetryFailed,
 			OccurredAt:    time.Now().UTC().Format(time.RFC3339),
 		},
-		Data: model.ExtractionFailedData{
+		Data: model.RetryFailedData{
 			SourceTopic:   sourceTopic,
 			ErrorCode:     errorCode,
 			ErrorMessage:  errorMessage,
@@ -113,10 +118,10 @@ func (p *Producer) SendToDLQ(ctx context.Context, sourceTopic, errorCode, errorM
 		return fmt.Errorf("marshalling dlq event: %w", err)
 	}
 	if err := p.writer.WriteMessages(ctx, kafkago.Message{
-		Topic: p.topic,
+		Topic: p.dlqTopic,
 		Value: payload,
 	}); err != nil {
-		return fmt.Errorf("publishing dlq event to %s: %w", p.topic, err)
+		return fmt.Errorf("publishing dlq event to %s: %w", p.dlqTopic, err)
 	}
 	return nil
 }

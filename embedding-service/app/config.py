@@ -6,6 +6,7 @@ from dataclasses import dataclass
 class Config:
     kafka_brokers: str
     kafka_topic: str
+    kafka_retry_topic: str
     kafka_consumer_group: str
     database_url: str
     embedding_model: str
@@ -48,6 +49,9 @@ def load() -> Config:
     cfg = Config(
         kafka_brokers=os.getenv("KAFKA_BROKERS", "kafka:9092"),
         kafka_topic=os.getenv("KAFKA_TOPIC_EMBEDDING", "embedding.jobs.v1"),
+        # Transient failures are handed off to this topic for delayed,
+        # attempt-bounded re-delivery once the local fast retries give up.
+        kafka_retry_topic=os.getenv("KAFKA_TOPIC_RETRY", "retry.jobs.v1"),
         kafka_consumer_group=os.getenv("KAFKA_CONSUMER_GROUP", "embedding-service"),
         database_url=database_url,
         embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
