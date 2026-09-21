@@ -38,26 +38,48 @@ type Insight struct {
 	CreatedAt time.Time
 }
 
+// TodoUpdate carries the optional fields of a to-do edit. A nil field is left
+// unchanged.
+type TodoUpdate struct {
+	Text   *string
+	IsDone *bool
+}
+
+// ReminderUpdate carries the optional fields of a reminder edit. A nil field is
+// left unchanged; RemindAt is only applied when RemindAtSet is true, so a nil
+// RemindAt with RemindAtSet true clears the due time.
+type ReminderUpdate struct {
+	Text        *string
+	RemindAt    *time.Time
+	RemindAtSet bool
+	Important   *bool
+}
+
 // ItemsRepository reads and mutates the extraction worker's output tables.
 // Every method runs under the RLS user context, so a caller can only touch
 // their own rows.
 type ItemsRepository interface {
-	// ListTodos returns the user's to-dos, open first then newest. status is
-	// "all", "open" or "done".
-	ListTodos(ctx context.Context, userID, status string, limit, offset int) ([]Todo, error)
-	// SetTodoDone flips one to-do's completion. Unknown ids are a no-op.
-	SetTodoDone(ctx context.Context, userID string, id int64, done bool) error
+	// ListTodos returns the user's to-dos, open first then newest, plus the
+	// total number matching the filter. status is "all", "open" or "done".
+	ListTodos(ctx context.Context, userID, status string, limit, offset int) ([]Todo, int, error)
+	// UpdateTodo edits one to-do and returns it. Missing rows report
+	// ErrItemNotFound; duplicate text reports ErrItemConflict.
+	UpdateTodo(ctx context.Context, userID string, id int64, update TodoUpdate) (*Todo, error)
 	// DeleteTodo removes one to-do. Unknown ids are a no-op.
 	DeleteTodo(ctx context.Context, userID string, id int64) error
 
-	// ListReminders returns the user's reminders for the given window, which
-	// is "upcoming", "past" or "all".
-	ListReminders(ctx context.Context, userID, window string, limit, offset int) ([]Reminder, error)
+	// ListReminders returns the user's reminders for the given window, plus the
+	// total number matching it. window is "upcoming", "past" or "all".
+	ListReminders(ctx context.Context, userID, window string, limit, offset int) ([]Reminder, int, error)
+	// UpdateReminder edits one reminder and returns it.
+	UpdateReminder(ctx context.Context, userID string, id int64, update ReminderUpdate) (*Reminder, error)
 	// DeleteReminder removes one reminder. Unknown ids are a no-op.
 	DeleteReminder(ctx context.Context, userID string, id int64) error
 
-	// ListInsights returns the user's insights, newest first.
-	ListInsights(ctx context.Context, userID string, limit, offset int) ([]Insight, error)
+	// ListInsights returns the user's insights, newest first, plus the total.
+	ListInsights(ctx context.Context, userID string, limit, offset int) ([]Insight, int, error)
+	// UpdateInsight edits one insight's text and returns it.
+	UpdateInsight(ctx context.Context, userID string, id int64, text string) (*Insight, error)
 	// DeleteInsight removes one insight. Unknown ids are a no-op.
 	DeleteInsight(ctx context.Context, userID string, id int64) error
 }

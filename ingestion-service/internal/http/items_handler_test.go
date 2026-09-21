@@ -15,33 +15,35 @@ import (
 )
 
 type fakeItems struct {
-	todos     []repository.Todo
-	reminders []repository.Reminder
-	insights  []repository.Insight
-	status    string
-	window    string
-	limit     int
-	offset    int
-	doneID    int64
-	doneValue bool
-	deleted   int64
-	err       error
+	todos          []repository.Todo
+	reminders      []repository.Reminder
+	insights       []repository.Insight
+	total          int
+	status         string
+	window         string
+	limit          int
+	offset         int
+	updateTodo     repository.TodoUpdate
+	updateReminder repository.ReminderUpdate
+	updateText     string
+	deleted        int64
+	err            error
 }
 
-func (f *fakeItems) ListTodos(_ context.Context, _, status string, limit, offset int) ([]repository.Todo, error) {
+func (f *fakeItems) ListTodos(_ context.Context, _, status string, limit, offset int) ([]repository.Todo, int, error) {
+	if f.err != nil {
+		return nil, 0, f.err
+	}
+	f.status, f.limit, f.offset = status, limit, offset
+	return f.todos, f.total, nil
+}
+
+func (f *fakeItems) UpdateTodo(_ context.Context, _ string, _ int64, update repository.TodoUpdate) (*repository.Todo, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	f.status, f.limit, f.offset = status, limit, offset
-	return f.todos, nil
-}
-
-func (f *fakeItems) SetTodoDone(_ context.Context, _ string, id int64, done bool) error {
-	if f.err != nil {
-		return f.err
-	}
-	f.doneID, f.doneValue = id, done
-	return nil
+	f.updateTodo = update
+	return &repository.Todo{ID: 42, Text: "updated"}, nil
 }
 
 func (f *fakeItems) DeleteTodo(_ context.Context, _ string, id int64) error {
@@ -52,12 +54,20 @@ func (f *fakeItems) DeleteTodo(_ context.Context, _ string, id int64) error {
 	return nil
 }
 
-func (f *fakeItems) ListReminders(_ context.Context, _, window string, limit, offset int) ([]repository.Reminder, error) {
+func (f *fakeItems) ListReminders(_ context.Context, _, window string, limit, offset int) ([]repository.Reminder, int, error) {
+	if f.err != nil {
+		return nil, 0, f.err
+	}
+	f.window, f.limit, f.offset = window, limit, offset
+	return f.reminders, f.total, nil
+}
+
+func (f *fakeItems) UpdateReminder(_ context.Context, _ string, _ int64, update repository.ReminderUpdate) (*repository.Reminder, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	f.window, f.limit, f.offset = window, limit, offset
-	return f.reminders, nil
+	f.updateReminder = update
+	return &repository.Reminder{ID: 42, Text: "updated"}, nil
 }
 
 func (f *fakeItems) DeleteReminder(_ context.Context, _ string, id int64) error {
@@ -68,12 +78,20 @@ func (f *fakeItems) DeleteReminder(_ context.Context, _ string, id int64) error 
 	return nil
 }
 
-func (f *fakeItems) ListInsights(_ context.Context, _ string, limit, offset int) ([]repository.Insight, error) {
+func (f *fakeItems) ListInsights(_ context.Context, _ string, limit, offset int) ([]repository.Insight, int, error) {
+	if f.err != nil {
+		return nil, 0, f.err
+	}
+	f.limit, f.offset = limit, offset
+	return f.insights, f.total, nil
+}
+
+func (f *fakeItems) UpdateInsight(_ context.Context, _ string, _ int64, text string) (*repository.Insight, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	f.limit, f.offset = limit, offset
-	return f.insights, nil
+	f.updateText = text
+	return &repository.Insight{ID: 42, Text: text}, nil
 }
 
 func (f *fakeItems) DeleteInsight(_ context.Context, _ string, id int64) error {
@@ -104,8 +122,20 @@ func doItems(t *testing.T, r http.Handler, method, target, body string) *httptes
 	return rec
 }
 
+func decodeError(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var env errorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return env.Error.Code
+}
+
 func TestListTodosDefaults(t *testing.T) {
-	items := &fakeItems{todos: []repository.Todo{{ID: 1, Text: "buy milk"}, {ID: 2, Text: "call bank"}}}
+	items := &fakeItems{
+		todos: []repository.Todo{{ID: 1, Text: "buy milk"}, {ID: 2, Text: "call bank"}},
+		total: 9,
+	}
 	rec := doItems(t, itemsRouter(items), "GET", "/v1/me/todos", "")
 
 	if rec.Code != http.StatusOK {
@@ -118,7 +148,7 @@ func TestListTodosDefaults(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(resp.Items) != 2 || resp.NextOffset != nil {
+	if len(resp.Items) != 2 || resp.NextOffset != nil || resp.Total != 9 {
 		t.Fatalf("unexpected body: %+v", resp)
 	}
 }
@@ -169,18 +199,13 @@ func TestListTodosTimestampViews(t *testing.T) {
 }
 
 func TestListItemsRejectsBadFilter(t *testing.T) {
-	items := &fakeItems{err: domain.ErrInvalidItemFilter}
-	rec := doItems(t, itemsRouter(items), "GET", "/v1/me/todos?status=bogus", "")
+	rec := doItems(t, itemsRouter(&fakeItems{err: domain.ErrInvalidItemFilter}), "GET", "/v1/me/todos?status=bogus", "")
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", rec.Code)
 	}
-	var env errorEnvelope
-	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if env.Error.Code != CodeInvalidRequest {
-		t.Fatalf("code: got %q, want %q", env.Error.Code, CodeInvalidRequest)
+	if code := decodeError(t, rec); code != CodeInvalidRequest {
+		t.Fatalf("code: got %q, want %q", code, CodeInvalidRequest)
 	}
 }
 
@@ -225,21 +250,24 @@ func TestListInsights(t *testing.T) {
 	}
 }
 
-func TestSetTodoDone(t *testing.T) {
+func TestUpdateTodo(t *testing.T) {
 	items := &fakeItems{}
-	rec := doItems(t, itemsRouter(items), "PATCH", "/v1/me/todos/42", `{"is_done":true}`)
+	rec := doItems(t, itemsRouter(items), "PATCH", "/v1/me/todos/42", `{"text":"buy oat milk","is_done":true}`)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
 	}
-	if items.doneID != 42 || !items.doneValue {
-		t.Fatalf("toggle: id=%d done=%v", items.doneID, items.doneValue)
+	if items.updateTodo.Text == nil || *items.updateTodo.Text != "buy oat milk" {
+		t.Fatalf("text: %+v", items.updateTodo.Text)
+	}
+	if items.updateTodo.IsDone == nil || !*items.updateTodo.IsDone {
+		t.Fatalf("is_done: %+v", items.updateTodo.IsDone)
 	}
 }
 
-func TestSetTodoDoneRejectsBadBody(t *testing.T) {
+func TestUpdateTodoRejectsBadBody(t *testing.T) {
 	for _, tc := range []struct{ name, target, body string }{
-		{"missing is_done", "/v1/me/todos/1", `{}`},
+		{"no fields", "/v1/me/todos/1", `{}`},
 		{"malformed json", "/v1/me/todos/1", `{bad`},
 		{"bad id", "/v1/me/todos/abc", `{"is_done":true}`},
 	} {
@@ -247,6 +275,87 @@ func TestSetTodoDoneRejectsBadBody(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("%s: got %d, want 400", tc.name, rec.Code)
 		}
+	}
+}
+
+func TestUpdateReminder(t *testing.T) {
+	items := &fakeItems{}
+	rec := doItems(t, itemsRouter(items), "PATCH", "/v1/me/reminders/7",
+		`{"text":"call mom","remind_at":"2026-09-25T09:00:00Z","important":true}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !items.updateReminder.RemindAtSet || items.updateReminder.RemindAt == nil {
+		t.Fatalf("remind_at not set: %+v", items.updateReminder)
+	}
+	if items.updateReminder.RemindAt.UTC().Format(time.RFC3339) != "2026-09-25T09:00:00Z" {
+		t.Fatalf("remind_at: %v", items.updateReminder.RemindAt)
+	}
+	if items.updateReminder.Important == nil || !*items.updateReminder.Important {
+		t.Fatalf("important: %+v", items.updateReminder.Important)
+	}
+}
+
+func TestUpdateReminderClearsTime(t *testing.T) {
+	items := &fakeItems{}
+	rec := doItems(t, itemsRouter(items), "PATCH", "/v1/me/reminders/7", `{"remind_at":null}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !items.updateReminder.RemindAtSet || items.updateReminder.RemindAt != nil {
+		t.Fatalf("clear: set=%v at=%v", items.updateReminder.RemindAtSet, items.updateReminder.RemindAt)
+	}
+}
+
+func TestUpdateReminderRejectsBadTime(t *testing.T) {
+	rec := doItems(t, itemsRouter(&fakeItems{}), "PATCH", "/v1/me/reminders/7", `{"remind_at":"tomorrow"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", rec.Code)
+	}
+}
+
+func TestUpdateInsight(t *testing.T) {
+	items := &fakeItems{}
+	rec := doItems(t, itemsRouter(items), "PATCH", "/v1/me/insights/9", `{"text":"you focus best in the morning"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	if items.updateText != "you focus best in the morning" {
+		t.Fatalf("text: %q", items.updateText)
+	}
+}
+
+func TestUpdateInsightRequiresText(t *testing.T) {
+	rec := doItems(t, itemsRouter(&fakeItems{}), "PATCH", "/v1/me/insights/9", `{}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", rec.Code)
+	}
+}
+
+func TestUpdateItemErrorMapping(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		wantCode int
+		wantErr  string
+	}{
+		{"not found", repository.ErrItemNotFound, http.StatusNotFound, CodeItemNotFound},
+		{"conflict", repository.ErrItemConflict, http.StatusConflict, CodeItemConflict},
+		{"invalid text", domain.ErrInvalidItemText, http.StatusBadRequest, CodeInvalidRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doItems(t, itemsRouter(&fakeItems{err: tc.err}), "PATCH", "/v1/me/insights/9", `{"text":"x"}`)
+			if rec.Code != tc.wantCode {
+				t.Fatalf("got %d (%s), want %d", rec.Code, rec.Body.String(), tc.wantCode)
+			}
+			if code := decodeError(t, rec); code != tc.wantErr {
+				t.Fatalf("code: got %q, want %q", code, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -274,8 +383,10 @@ func TestItemsRequireAuth(t *testing.T) {
 		{"PATCH", "/v1/me/todos/1", `{"is_done":true}`},
 		{"DELETE", "/v1/me/todos/1", ""},
 		{"GET", "/v1/me/reminders", ""},
+		{"PATCH", "/v1/me/reminders/1", `{"important":true}`},
 		{"DELETE", "/v1/me/reminders/1", ""},
 		{"GET", "/v1/me/insights", ""},
+		{"PATCH", "/v1/me/insights/1", `{"text":"x"}`},
 		{"DELETE", "/v1/me/insights/1", ""},
 	} {
 		req := httptest.NewRequest(tc.method, tc.target, strings.NewReader(tc.body))

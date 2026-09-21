@@ -31,6 +31,8 @@ const (
 	CodeDeviceClaimFailed    = "DEVICE_CLAIM_FAILED"
 	CodeDeviceStateConflict  = "DEVICE_STATE_CONFLICT"
 	CodeRateLimited          = "RATE_LIMITED"
+	CodeItemNotFound         = "ITEM_NOT_FOUND"
+	CodeItemConflict         = "ITEM_CONFLICT"
 )
 
 type errorBody struct {
@@ -73,6 +75,10 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusConflict, CodeDeviceClaimFailed, "The pendant could not be claimed.")
 	case errors.Is(err, repository.ErrDeviceNotFound):
 		writeError(w, r, http.StatusNotFound, CodeDeviceNotFound, "Device was not found.")
+	case errors.Is(err, repository.ErrItemNotFound):
+		writeError(w, r, http.StatusNotFound, CodeItemNotFound, "Item was not found.")
+	case errors.Is(err, repository.ErrItemConflict):
+		writeError(w, r, http.StatusConflict, CodeItemConflict, "Another item already has that text.")
 	case errors.Is(err, storage.ErrObjectNotFound):
 		writeError(w, r, http.StatusConflict, CodeObjectNotFound, "No uploaded object found. Upload the file first.")
 	case errors.Is(err, service.ErrSizeMismatch):
@@ -91,7 +97,8 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
 		errors.Is(err, domain.ErrInvalidTimezone),
 		errors.Is(err, domain.ErrInvalidAdvance),
 		errors.Is(err, domain.ErrInvalidKeyName),
-		errors.Is(err, domain.ErrInvalidItemFilter):
+		errors.Is(err, domain.ErrInvalidItemFilter),
+		errors.Is(err, domain.ErrInvalidItemText):
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, err.Error())
 	default:
 		writeError(w, r, http.StatusInternalServerError, CodeInternal, "Unexpected internal error.")

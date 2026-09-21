@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -13,12 +14,14 @@ import (
 
 // itemsService is the subset of service.ItemsService used by HTTP.
 type itemsService interface {
-	ListTodos(ctx context.Context, userID, status string, limit, offset int) ([]repository.Todo, error)
-	SetTodoDone(ctx context.Context, userID string, id int64, done bool) error
+	ListTodos(ctx context.Context, userID, status string, limit, offset int) ([]repository.Todo, int, error)
+	UpdateTodo(ctx context.Context, userID string, id int64, update repository.TodoUpdate) (*repository.Todo, error)
 	DeleteTodo(ctx context.Context, userID string, id int64) error
-	ListReminders(ctx context.Context, userID, window string, limit, offset int) ([]repository.Reminder, error)
+	ListReminders(ctx context.Context, userID, window string, limit, offset int) ([]repository.Reminder, int, error)
+	UpdateReminder(ctx context.Context, userID string, id int64, update repository.ReminderUpdate) (*repository.Reminder, error)
 	DeleteReminder(ctx context.Context, userID string, id int64) error
-	ListInsights(ctx context.Context, userID string, limit, offset int) ([]repository.Insight, error)
+	ListInsights(ctx context.Context, userID string, limit, offset int) ([]repository.Insight, int, error)
+	UpdateInsight(ctx context.Context, userID string, id int64, text string) (*repository.Insight, error)
 	DeleteInsight(ctx context.Context, userID string, id int64) error
 }
 
@@ -57,15 +60,27 @@ type insightView struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// itemList is the paged shape shared by every list endpoint. NextOffset is
-// nil once the last page has been returned.
+// itemList is the paged shape shared by every list endpoint. NextOffset is nil
+// once the last page has been returned; Total is the count matching the filter.
 type itemList[T any] struct {
 	Items      []T  `json:"items"`
 	NextOffset *int `json:"next_offset"`
+	Total      int  `json:"total"`
 }
 
-type setTodoDoneRequest struct {
-	IsDone *bool `json:"is_done"`
+type updateTodoRequest struct {
+	Text   *string `json:"text"`
+	IsDone *bool   `json:"is_done"`
+}
+
+type updateReminderRequest struct {
+	Text      *string         `json:"text"`
+	RemindAt  json.RawMessage `json:"remind_at"`
+	Important *bool           `json:"important"`
+}
+
+type updateInsightRequest struct {
+	Text *string `json:"text"`
 }
 
 // ListTodos handles GET /v1/me/todos.
@@ -76,7 +91,7 @@ func (h *ItemsHandler) ListTodos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, offset := service.ClampPage(intParam(r, "limit"), intParam(r, "offset"))
-	todos, err := h.items.ListTodos(r.Context(), principal.UserID, r.URL.Query().Get("status"), limit, offset)
+	todos, total, err := h.items.ListTodos(r.Context(), principal.UserID, r.URL.Query().Get("status"), limit, offset)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -85,11 +100,14 @@ func (h *ItemsHandler) ListTodos(w http.ResponseWriter, r *http.Request) {
 	for i := range todos {
 		views = append(views, toTodoView(&todos[i]))
 	}
-	writeJSON(w, http.StatusOK, itemList[todoView]{Items: views, NextOffset: nextOffset(offset, len(views), limit)})
+	writeJSON(w, http.StatusOK, itemList[todoView]{
+		Items: views, NextOffset: nextOffset(offset, len(views), limit), Total: total,
+	})
 }
 
-// SetTodoDone handles PATCH /v1/me/todos/{id}.
-func (h *ItemsHandler) SetTodoDone(w http.ResponseWriter, r *http.Request) {
+// UpdateTodo handles PATCH /v1/me/todos/{id}. Only the fields present in the
+// body are written, so text and completion save independently.
+func (h *ItemsHandler) UpdateTodo(w http.ResponseWriter, r *http.Request) {
 	principal, ok := PrincipalFrom(r.Context())
 	if !ok {
 		writeError(w, r, http.StatusUnauthorized, CodeUnauthorized, "Missing or invalid authorization.")
@@ -103,20 +121,23 @@ func (h *ItemsHandler) SetTodoDone(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var req setTodoDoneRequest
+	var req updateTodoRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Malformed JSON request body.")
 		return
 	}
-	if req.IsDone == nil {
-		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "is_done is required.")
+	if req.Text == nil && req.IsDone == nil {
+		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Provide text or is_done.")
 		return
 	}
-	if err := h.items.SetTodoDone(r.Context(), principal.UserID, id, *req.IsDone); err != nil {
+	todo, err := h.items.UpdateTodo(r.Context(), principal.UserID, id, repository.TodoUpdate{
+		Text: req.Text, IsDone: req.IsDone,
+	})
+	if err != nil {
 		writeServiceError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"is_done": *req.IsDone})
+	writeJSON(w, http.StatusOK, toTodoView(todo))
 }
 
 // DeleteTodo handles DELETE /v1/me/todos/{id}.
@@ -145,7 +166,7 @@ func (h *ItemsHandler) ListReminders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, offset := service.ClampPage(intParam(r, "limit"), intParam(r, "offset"))
-	reminders, err := h.items.ListReminders(r.Context(), principal.UserID, r.URL.Query().Get("window"), limit, offset)
+	reminders, total, err := h.items.ListReminders(r.Context(), principal.UserID, r.URL.Query().Get("window"), limit, offset)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -154,7 +175,59 @@ func (h *ItemsHandler) ListReminders(w http.ResponseWriter, r *http.Request) {
 	for i := range reminders {
 		views = append(views, toReminderView(&reminders[i]))
 	}
-	writeJSON(w, http.StatusOK, itemList[reminderView]{Items: views, NextOffset: nextOffset(offset, len(views), limit)})
+	writeJSON(w, http.StatusOK, itemList[reminderView]{
+		Items: views, NextOffset: nextOffset(offset, len(views), limit), Total: total,
+	})
+}
+
+// UpdateReminder handles PATCH /v1/me/reminders/{id}. A null remind_at clears
+// the due time.
+func (h *ItemsHandler) UpdateReminder(w http.ResponseWriter, r *http.Request) {
+	principal, ok := PrincipalFrom(r.Context())
+	if !ok {
+		writeError(w, r, http.StatusUnauthorized, CodeUnauthorized, "Missing or invalid authorization.")
+		return
+	}
+	id, ok := itemID(w, r)
+	if !ok {
+		return
+	}
+	raw, ok := readRawBody(w, r, 1<<20)
+	if !ok {
+		return
+	}
+	var req updateReminderRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Malformed JSON request body.")
+		return
+	}
+	if req.Text == nil && req.RemindAt == nil && req.Important == nil {
+		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Provide text, remind_at or important.")
+		return
+	}
+	update := repository.ReminderUpdate{Text: req.Text, Important: req.Important}
+	if req.RemindAt != nil {
+		update.RemindAtSet = true
+		if !isJSONNull(req.RemindAt) {
+			var rawTime string
+			if err := json.Unmarshal(req.RemindAt, &rawTime); err != nil {
+				writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "remind_at must be an RFC3339 string or null.")
+				return
+			}
+			remindAt, err := time.Parse(time.RFC3339, rawTime)
+			if err != nil {
+				writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "remind_at must be an RFC3339 string or null.")
+				return
+			}
+			update.RemindAt = &remindAt
+		}
+	}
+	reminder, err := h.items.UpdateReminder(r.Context(), principal.UserID, id, update)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toReminderView(reminder))
 }
 
 // DeleteReminder handles DELETE /v1/me/reminders/{id}.
@@ -183,7 +256,7 @@ func (h *ItemsHandler) ListInsights(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, offset := service.ClampPage(intParam(r, "limit"), intParam(r, "offset"))
-	insights, err := h.items.ListInsights(r.Context(), principal.UserID, limit, offset)
+	insights, total, err := h.items.ListInsights(r.Context(), principal.UserID, limit, offset)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -192,7 +265,41 @@ func (h *ItemsHandler) ListInsights(w http.ResponseWriter, r *http.Request) {
 	for i := range insights {
 		views = append(views, toInsightView(&insights[i]))
 	}
-	writeJSON(w, http.StatusOK, itemList[insightView]{Items: views, NextOffset: nextOffset(offset, len(views), limit)})
+	writeJSON(w, http.StatusOK, itemList[insightView]{
+		Items: views, NextOffset: nextOffset(offset, len(views), limit), Total: total,
+	})
+}
+
+// UpdateInsight handles PATCH /v1/me/insights/{id}.
+func (h *ItemsHandler) UpdateInsight(w http.ResponseWriter, r *http.Request) {
+	principal, ok := PrincipalFrom(r.Context())
+	if !ok {
+		writeError(w, r, http.StatusUnauthorized, CodeUnauthorized, "Missing or invalid authorization.")
+		return
+	}
+	id, ok := itemID(w, r)
+	if !ok {
+		return
+	}
+	raw, ok := readRawBody(w, r, 1<<20)
+	if !ok {
+		return
+	}
+	var req updateInsightRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "Malformed JSON request body.")
+		return
+	}
+	if req.Text == nil {
+		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "text is required.")
+		return
+	}
+	insight, err := h.items.UpdateInsight(r.Context(), principal.UserID, id, *req.Text)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toInsightView(insight))
 }
 
 // DeleteInsight handles DELETE /v1/me/insights/{id}.
@@ -235,6 +342,11 @@ func intParam(r *http.Request, name string) int {
 		return 0
 	}
 	return value
+}
+
+// isJSONNull reports whether a raw JSON field was an explicit null.
+func isJSONNull(raw json.RawMessage) bool {
+	return string(bytes.TrimSpace(raw)) == "null"
 }
 
 // nextOffset returns the offset for the following page, or nil at the end.
