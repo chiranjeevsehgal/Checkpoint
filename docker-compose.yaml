@@ -184,6 +184,7 @@ services:
       KAFKA_TOPIC_TRANSCRIPTION: ${KAFKA_TOPIC_TRANSCRIPTION:-transcription.jobs.v1}
       KAFKA_TOPIC_EMBEDDING: ${KAFKA_TOPIC_EMBEDDING:-embedding.jobs.v1}
       KAFKA_TOPIC_EXTRACTION: ${KAFKA_TOPIC_EXTRACTION:-extraction.jobs.v1}
+      KAFKA_TOPIC_RETRY: ${KAFKA_TOPIC_RETRY:-retry.jobs.v1}
     command: >
       /bin/bash -c "
       /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_TRANSCRIPTION} --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
@@ -192,6 +193,8 @@ services:
       /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_EMBEDDING}.dlq --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
       /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_EXTRACTION} --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
       /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_EXTRACTION}.dlq --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_RETRY} --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic $${KAFKA_TOPIC_RETRY}.dlq --bootstrap-server kafka:9092 --partitions 6 --replication-factor 1;
       "
 
   transcription-migrate:
@@ -446,6 +449,47 @@ services:
       MCP_OAUTH_REFRESH_TTL_SECONDS: ${MCP_OAUTH_REFRESH_TTL_SECONDS:-2592000}
       MCP_OAUTH_ALLOWED_REDIRECT_HOSTS: ${MCP_OAUTH_ALLOWED_REDIRECT_HOSTS:-claude.ai,chatgpt.com}
     restart: unless-stopped
+
+  retry-migrate:
+    build:
+      context: ./retry-service
+      target: migrate
+    container_name: retry-migrate
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mcp-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+
+  retry:
+    build:
+      context: ./retry-service
+      target: worker
+    container_name: retry
+    networks:
+      - backend
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      retry-migrate:
+        condition: service_completed_successfully
+    environment:
+      CONFIG_PATH: /app/config.yaml
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_RETRY: ${KAFKA_TOPIC_RETRY:-retry.jobs.v1}
+      RETRY_DELAY_SECONDS: ${RETRY_DELAY_SECONDS:-1800}
+      RETRY_MAX_ATTEMPTS: ${RETRY_MAX_ATTEMPTS:-2}
+      POSTGRES_DSN: postgres://checkpoint_worker:${CHECKPOINT_WORKER_PASSWORD:-checkpoint_worker_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    restart: unless-stopped
+
 
   ntfy:
     image: binwiederhier/ntfy:v2.28.0
