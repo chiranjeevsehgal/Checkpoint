@@ -8,6 +8,7 @@ yields None so whoami never fails on Kratos.
 
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -15,6 +16,8 @@ import uuid
 log = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS = 5
+_MAX_ATTEMPTS = 3
+_RETRY_BACKOFFS = (0.5, 1.0, 2.0)
 
 
 def fetch_name(admin_url: str, user_id: str, timeout: int = _TIMEOUT_SECONDS) -> str | None:
@@ -28,11 +31,18 @@ def fetch_name(admin_url: str, user_id: str, timeout: int = _TIMEOUT_SECONDS) ->
         admin_url.rstrip("/") + "/admin/identities/" + user_id, method="GET"
     )
     request.add_header("Accept", "application/json")
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            identity = json.loads(response.read() or b"{}")
-    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
-        log.warning("kratos identity lookup failed", extra={"error": str(exc)})
+    last_error: Exception | None = None
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                identity = json.loads(response.read() or b"{}")
+            break
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+            last_error = exc
+            if attempt < _MAX_ATTEMPTS:
+                time.sleep(_RETRY_BACKOFFS[attempt - 1])
+    else:
+        log.warning("kratos identity lookup failed", extra={"error": str(last_error)})
         return None
     name = (identity.get("traits") or {}).get("name")
     return name if isinstance(name, str) and name.strip() else None

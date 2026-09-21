@@ -82,6 +82,16 @@ type Config struct {
 	WriteTimeout      time.Duration
 	IdleTimeout       time.Duration
 	ShutdownTimeout   time.Duration
+
+	// RateLimitRPS/Burst bound per-user request rate (RATE_LIMIT_RPS,
+	// RATE_LIMIT_BURST). Non-positive values disable limiting.
+	RateLimitRPS   int
+	RateLimitBurst int
+
+	// PoolMaxConns/MinConns size the Postgres pools (POOL_MAX_CONNS,
+	// POOL_MIN_CONNS).
+	PoolMaxConns int
+	PoolMinConns int
 }
 
 // Load reads configuration from the environment. Development keeps
@@ -126,6 +136,22 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	rateRPS, err := parsePositiveIntStrict("RATE_LIMIT_RPS", 10)
+	if err != nil {
+		return Config{}, err
+	}
+	rateBurst, err := parsePositiveIntStrict("RATE_LIMIT_BURST", 20)
+	if err != nil {
+		return Config{}, err
+	}
+	poolMax, err := parsePositiveIntStrict("POOL_MAX_CONNS", 20)
+	if err != nil {
+		return Config{}, err
+	}
+	poolMin, err := parsePositiveIntStrict("POOL_MIN_CONNS", 5)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		Port:                    envOr("PORT", defaultPort),
 		Env:                     envOr("ENV", defaultEnv),
@@ -157,6 +183,10 @@ func Load() (Config, error) {
 		WriteTimeout:            15 * time.Second,
 		IdleTimeout:             60 * time.Second,
 		ShutdownTimeout:         defaultShutdownTimeout,
+		RateLimitRPS:            rateRPS,
+		RateLimitBurst:          rateBurst,
+		PoolMaxConns:            poolMax,
+		PoolMinConns:            poolMin,
 	}
 
 	if v := os.Getenv("SHUTDOWN_TIMEOUT_SECONDS"); v != "" {
@@ -289,14 +319,6 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-func envBool(key string, fallback bool) bool {
-	v, err := parseBoolStrict(key, fallback)
-	if err != nil {
-		return fallback
-	}
-	return v
-}
-
 func parseBoolStrict(key string, fallback bool) (bool, error) {
 	v := os.Getenv(key)
 	if v == "" {
@@ -307,14 +329,6 @@ func parseBoolStrict(key string, fallback bool) (bool, error) {
 		return false, fmt.Errorf("invalid %s %q: must be true/false", key, v)
 	}
 	return b, nil
-}
-
-func envDuration(key string, fallback int) time.Duration {
-	v, err := parsePositiveIntStrict(key, fallback)
-	if err != nil {
-		return time.Duration(fallback)
-	}
-	return time.Duration(v)
 }
 
 func parsePositiveIntStrict(key string, fallback int) (int, error) {

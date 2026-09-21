@@ -90,7 +90,7 @@ func TestWeeklySkipsEmptyDaysAndLabelsDates(t *testing.T) {
 		t.Fatalf("weekly: %v", err)
 	}
 	prompt := fake.users[0]
-	for _, want := range []string{"Weekly recap for the week of 2026-09-14", "2026-09-14: first day", "2026-09-17: fourth day", "2026-09-20: last day"} {
+	for _, want := range []string{"Weekly recap for the week of 2026-09-14", "(based on 3 of 7 days with recordings)", "2026-09-14: first day", "2026-09-17: fourth day", "2026-09-20: last day"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %q", want, prompt)
 		}

@@ -165,3 +165,46 @@ func TestDueCandidatesAndClaim(t *testing.T) {
 		t.Fatalf("status = %q, want sent", status)
 	}
 }
+
+func TestReclaimAfterReleasesStaleProcessing(t *testing.T) {
+	store, pool := newTestStore(t)
+	ctx := context.Background()
+	userID := "f1e2d3c4-0000-4000-8000-00000000c0b1"
+	audioID := "f1e2d3c4-0000-4000-8000-00000000c0b2"
+
+	for _, table := range []string{"notification_deliveries"} {
+		if !hasTable(t, pool, table) {
+			t.Skip("app schema not migrated")
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM notification_deliveries WHERE user_id = $1`, userID)
+	})
+
+	candidate := model.Candidate{
+		UserID: userID, AudioID: audioID, ReminderText: "reclaim me", Kind: model.KindDue,
+		FireAt: time.Now().Add(-time.Minute), Topic: "cp-test",
+	}
+	id, _, claimed, err := store.ClaimDelivery(ctx, candidate, 5, time.Minute)
+	if err != nil || !claimed {
+		t.Fatalf("first claim: id=%d claimed=%v err=%v", id, claimed, err)
+	}
+	// A live processing row cannot be claimed twice.
+	if _, _, claimed, err = store.ClaimDelivery(ctx, candidate, 5, time.Minute); err != nil || claimed {
+		t.Fatalf("fresh processing row must not be reclaimed: claimed=%v err=%v", claimed, err)
+	}
+	// Age the row past the reclaim window: it becomes claimable again.
+	if _, err := pool.Exec(ctx, `UPDATE notification_deliveries SET updated_at = now() - interval '2 minutes' WHERE id = $1`, id); err != nil {
+		t.Fatalf("age row: %v", err)
+	}
+	id2, attempts, claimed, err := store.ClaimDelivery(ctx, candidate, 5, time.Minute)
+	if err != nil || !claimed {
+		t.Fatalf("stale row must be reclaimed: claimed=%v err=%v", claimed, err)
+	}
+	if id2 != id {
+		t.Fatalf("reclaimed id = %d, want %d", id2, id)
+	}
+	if attempts != 1 {
+		t.Fatalf("reclaimed attempts = %d, want 1", attempts)
+	}
+}

@@ -21,6 +21,7 @@ from .logging_setup import setup
 from .oauth import CheckpointOAuthProvider
 from .oauth_store import OAuthStore
 from .oauth_web import register_oauth_routes
+from .ratelimit import RateLimiter
 from .store import ReadStore
 
 log = logging.getLogger("mcp-service")
@@ -72,7 +73,9 @@ def build_server(cfg, store: ReadStore, index, embedder: Embedder,
             instructions=tools.GROUNDING,
         )
     tools.register(server, store, index, embedder, cfg.fallback_timezone, cfg.kratos_admin_url,
-                   cfg.max_text_chars, as_of=as_of)
+                   cfg.max_text_chars, as_of=as_of, hybrid_enabled=cfg.hybrid_enabled,
+                   oversample=cfg.oversample,
+                   search_limiter=RateLimiter(cfg.search_per_minute, cfg.search_burst))
     return server
 
 

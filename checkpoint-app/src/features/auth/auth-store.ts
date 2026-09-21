@@ -70,6 +70,40 @@ function resetToAnonymous(): void {
   setState({ status: 'anonymous', identityId: null, email: null, name: null });
 }
 
+/** Backoff schedule for reconnect attempts after a transient outage. */
+const RECONNECT_DELAYS_MS = [2000, 4000, 8000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Retries the session check with backoff while the app is offline. The UI
+ * shows `reconnecting` so the outage is visible; the stored token is kept so
+ * a short outage never signs the user out. At most one run proceeds at a time.
+ */
+export async function reconnectAuth(): Promise<void> {
+  if (getAuthState().status !== 'unavailable') return;
+  const session = await loadSession();
+  if (!session) {
+    resetToAnonymous();
+    return;
+  }
+  setState({ status: 'reconnecting', identityId: session.identityId, email: null, name: null });
+  for (const delay of RECONNECT_DELAYS_MS) {
+    await sleep(delay);
+    if (getAuthState().status !== 'reconnecting') return;
+    await initializeAuth();
+    const next = getAuthState().status;
+    if (next !== 'unavailable') return;
+    setState({ status: 'reconnecting', identityId: session.identityId, email: null, name: null });
+  }
+  // Attempts exhausted: park on unavailable so a later foregrounding retries.
+  if (getAuthState().status === 'reconnecting') {
+    setState({ status: 'unavailable', identityId: session.identityId, email: null, name: null });
+  }
+}
+
 function isNetworkError(error: unknown): boolean {
   return !(error instanceof KratosError);
 }

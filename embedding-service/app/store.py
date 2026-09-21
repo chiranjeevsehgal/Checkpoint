@@ -1,4 +1,8 @@
+import logging
+
 import psycopg
+
+log = logging.getLogger("embedding")
 
 _UPSERT = """
     INSERT INTO embeddings (user_id, audio_id, chunk_index, chunk_text, language, model, embedding)
@@ -14,6 +18,8 @@ _DELETE_STALE = """
     DELETE FROM embeddings
     WHERE user_id = %(user_id)s AND audio_id = %(audio_id)s AND chunk_index >= %(chunk_count)s
 """
+
+_warned_missing_tombstones = False
 
 
 class Store:
@@ -46,6 +52,7 @@ class Store:
         The read runs in its own committed transaction: psycopg3 opens an
         implicit transaction on the first statement, and leaving one open would
         turn save()'s transaction into a savepoint that never commits."""
+        global _warned_missing_tombstones
         if self._conn is None:
             self.connect()
         assert self._conn is not None
@@ -60,6 +67,9 @@ class Store:
             return bool(row and row[0])
         except psycopg.errors.UndefinedTable:
             self._conn.rollback()
+            if not _warned_missing_tombstones:
+                _warned_missing_tombstones = True
+                log.warning("account_deletions table missing, tombstone check disabled")
             return False
 
     def save(

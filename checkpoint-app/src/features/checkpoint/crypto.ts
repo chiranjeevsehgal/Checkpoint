@@ -1,3 +1,4 @@
+import { ecb } from '@noble/ciphers/aes.js';
 import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 
@@ -44,7 +45,8 @@ export function newId(): Uint8Array {
   if (typeof webCrypto?.getRandomValues === 'function') {
     return webCrypto.getRandomValues(new Uint8Array(16));
   }
-  // Hermes builds without WebCrypto fall back to the native module.
+  // Hermes builds without WebCrypto fall back to the native module. This stays
+  // a lazy require (not a static import) so node unit tests never load native code.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const expoCrypto = require('expo-crypto') as {
     getRandomBytes(byteCount: number): Uint8Array;
@@ -169,108 +171,18 @@ export function buildNonce(sessionId: number, fileId: bigint, seq: number): Uint
   return sha256(msg).slice(0, CRYPTO_NONCE_BYTES);
 }
 
-function xtime(a: number): number {
-  return ((a << 1) ^ (a & 0x80 ? 0x1b : 0)) & 0xff;
-}
+type AesBlock = ReturnType<typeof ecb>;
 
-function gfMultiply(a: number, b: number): number {
-  let result = 0;
-  let x = a;
-  let y = b;
-  while (y > 0) {
-    if (y & 1) result ^= x;
-    x = xtime(x);
-    y >>>= 1;
-  }
-  return result;
-}
-
-const SBOX: Uint8Array = (() => {
-  const box = new Uint8Array(256);
-  for (let x = 0; x < 256; x++) {
-    let inverse = 0;
-    if (x !== 0) {
-      inverse = 1;
-      for (let i = 0; i < 254; i++) inverse = gfMultiply(inverse, x);
-    }
-    const rot = (v: number, n: number) => ((v << n) | (v >>> (8 - n))) & 0xff;
-    box[x] = inverse ^ rot(inverse, 1) ^ rot(inverse, 2) ^ rot(inverse, 3) ^ rot(inverse, 4) ^ 0x63;
-  }
-  return box;
-})();
-
-function aesKeyExpand(key: Uint8Array): Uint8Array {
-  const expanded = new Uint8Array(176);
-  expanded.set(key, 0);
-  let rcon = 1;
-  for (let i = 16; i < 176; i += 4) {
-    let t0 = expanded[i - 4]!;
-    let t1 = expanded[i - 3]!;
-    let t2 = expanded[i - 2]!;
-    let t3 = expanded[i - 1]!;
-    if (i % 16 === 0) {
-      const u = SBOX[t1]! ^ rcon;
-      const v = SBOX[t2]!;
-      const w = SBOX[t3]!;
-      const z = SBOX[t0]!;
-      t0 = u;
-      t1 = v;
-      t2 = w;
-      t3 = z;
-      rcon = xtime(rcon);
-    }
-    expanded[i] = expanded[i - 16]! ^ t0;
-    expanded[i + 1] = expanded[i - 15]! ^ t1;
-    expanded[i + 2] = expanded[i - 14]! ^ t2;
-    expanded[i + 3] = expanded[i - 13]! ^ t3;
-  }
-  return expanded;
+/** Expands an AES-128 key using the vetted @noble/ciphers primitive. */
+function expandKey(key: Uint8Array): AesBlock {
+  if (key.length !== 16) throw new Error('AES-128 key must be 16 bytes');
+  // CCM frames its own 16-byte blocks, so the padding layer stays off.
+  return ecb(key, { disablePadding: true });
 }
 
 export function aesEncryptBlock(key: Uint8Array, block: Uint8Array): Uint8Array {
-  const expanded = aesKeyExpand(key);
-  const s = new Uint8Array(16);
-  for (let i = 0; i < 16; i++) s[i] = block[i]! ^ expanded[i]!;
-  for (let round = 1; round <= 10; round++) {
-    for (let i = 0; i < 16; i++) s[i] = SBOX[s[i]!]!;
-    for (let row = 1; row < 4; row++) {
-      const a = s[row]!;
-      const b = s[row + 4]!;
-      const c = s[row + 8]!;
-      const d = s[row + 12]!;
-      if (row === 1) {
-        s[row] = b;
-        s[row + 4] = c;
-        s[row + 8] = d;
-        s[row + 12] = a;
-      } else if (row === 2) {
-        s[row] = c;
-        s[row + 4] = d;
-        s[row + 8] = a;
-        s[row + 12] = b;
-      } else {
-        s[row] = d;
-        s[row + 4] = a;
-        s[row + 8] = b;
-        s[row + 12] = c;
-      }
-    }
-    if (round < 10) {
-      for (let col = 0; col < 4; col++) {
-        const a = s[col * 4]!;
-        const b = s[col * 4 + 1]!;
-        const c = s[col * 4 + 2]!;
-        const d = s[col * 4 + 3]!;
-        s[col * 4] = gfMultiply(a, 2) ^ gfMultiply(b, 3) ^ c ^ d;
-        s[col * 4 + 1] = a ^ gfMultiply(b, 2) ^ gfMultiply(c, 3) ^ d;
-        s[col * 4 + 2] = a ^ b ^ gfMultiply(c, 2) ^ gfMultiply(d, 3);
-        s[col * 4 + 3] = gfMultiply(a, 3) ^ b ^ c ^ gfMultiply(d, 2);
-      }
-    }
-    const offset = round * 16;
-    for (let i = 0; i < 16; i++) s[i] = s[i]! ^ expanded[offset + i]!;
-  }
-  return s;
+  if (block.length !== 16) throw new Error('AES block must be 16 bytes');
+  return expandKey(key).encrypt(block);
 }
 
 function ccmCounterBlock(nonce: Uint8Array, counter: number): Uint8Array {
@@ -354,14 +266,14 @@ export function openCloudSecret(
   const nonce = envelope.slice(0, CRYPTO_NONCE_BYTES);
   if (!constantTimeEqual(nonce, buildCloudNonce(sessionId, seq))) return null;
   const body = envelope.slice(CRYPTO_NONCE_BYTES);
-  const cipher = body.slice(0, AUTH_CLOUD_SECRET_BYTES);
+  const cipherBytes = body.slice(0, AUTH_CLOUD_SECRET_BYTES);
   const receivedTag = body.slice(AUTH_CLOUD_SECRET_BYTES);
   const aad = new Uint8Array(4);
   aad[0] = PROTO_VER;
   aad[1] = CTRL_CMD_GET_CLOUD_SECRET;
   aad[2] = seq & 0xff;
   aad[3] = (seq >> 8) & 0xff;
-  const plain = ccmCrypt(sessionKey, nonce, cipher);
+  const plain = ccmCrypt(sessionKey, nonce, cipherBytes);
   const mac = ccmMac(sessionKey, nonce, aad, plain);
   const mask = aesEncryptBlock(sessionKey, ccmCounterBlock(nonce, 0));
   const expectedTag = new Uint8Array(CRYPTO_TAG_BYTES);
@@ -387,9 +299,9 @@ export function decryptFragment(
   aadView.setUint8(1, PKT_DATA);
   aadView.setUint16(2, seq & 0xffff, true);
   aadView.setUint16(4, fragLen, true);
-  const cipher = cipherAndTag.slice(0, fragLen);
+  const cipherBytes = cipherAndTag.slice(0, fragLen);
   const receivedTag = cipherAndTag.slice(fragLen);
-  const plain = ccmCrypt(key, nonce, cipher);
+  const plain = ccmCrypt(key, nonce, cipherBytes);
   const mac = ccmMac(key, nonce, aad, plain);
   const mask = aesEncryptBlock(key, ccmCounterBlock(nonce, 0));
   const expectedTag = new Uint8Array(CRYPTO_TAG_BYTES);

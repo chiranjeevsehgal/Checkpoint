@@ -6,10 +6,12 @@ providers:
     model_id: scribe_v2
     diarize: true
     tag_audio_events: true
+    max_attempts: 5
   deepgram:
     api_key_env: DEEPGRAM_API_KEY
     model: nova-3
     language: multi
+    max_attempts: 5
     options:
       diarize_model: latest
       smart_format: "true"

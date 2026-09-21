@@ -2,47 +2,26 @@ import logging
 import signal
 import time
 
+import psycopg
+
+from .batching import collect_batch, parse_valid, split_vectors
 from .config import load
 from .chunker import TokenChunker
 from .embedder import Embedder
-from .events import EmbeddingJobEvent, InvalidEvent
+from .health import HealthServer
 from .kafka import Kafka
 from .logging_setup import setup
 from .store import Store
 
 log = logging.getLogger("embedding")
 
-RETRY_BACKOFFS = [1, 5, 15, 60]
 
-
-class StaleDeletedUser(Exception):
-    """The event belongs to an account being deleted; commit and drop it."""
-
-
-def process(event: EmbeddingJobEvent, embedder: Embedder, chunker: TokenChunker, store: Store) -> None:
-    if store.is_user_deleting(event.user_id):
-        raise StaleDeletedUser(event.user_id)
-
-    chunks = chunker.chunk(event.text)
-    if not chunks:
-        raise InvalidEvent("text is empty after normalization")
-    vectors = embedder.embed(chunks)
-
-    if store.is_user_deleting(event.user_id):
-        raise StaleDeletedUser(event.user_id)
-
-    store.save(
-        user_id=event.user_id,
-        audio_id=event.audio_id,
-        language=event.language,
-        model=embedder.model_name,
-        chunks=chunks,
-        vectors=vectors,
-    )
-    log.info(
-        "embedded",
-        extra={"audio_id": event.audio_id, "user_id": event.user_id, "chunks": len(chunks)},
-    )
+def reject(message, kafka: Kafka, health: HealthServer, error: str, audio_id=None) -> None:
+    kafka.send_to_dlq("INVALID_EVENT", error, message.value())
+    log.error("dlq", extra={"offset": message.offset(), "partition": message.partition(),
+                            "audio_id": audio_id, "error": error})
+    kafka.commit(message)
+    health.inc("embedding_events_invalid_total")
 
 
 def main() -> None:
@@ -72,73 +51,118 @@ def main() -> None:
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
+    health = HealthServer(cfg.metrics_addr, cfg.metrics_port)
+    health.start()
+    health.set_ready()
+
     retry_attempt = 0
 
     while not stop:
-        msg = kafka.poll(1.0)
-        if msg is None:
+        batch = collect_batch(kafka, cfg.batch_max)
+        if not batch:
             continue
-        if Kafka.error(msg):
-            if msg.error().fatal():
-                log.error("fatal kafka error", extra={"error": str(msg.error())})
-                break
-            log.warning("kafka error", extra={"error": str(msg.error())})
+
+        live: list = []
+        for msg in batch:
+            if Kafka.error(msg):
+                if msg.error().fatal():
+                    log.error("fatal kafka error", extra={"error": str(msg.error())})
+                    stop = True
+                    break
+                log.warning("kafka error", extra={"error": str(msg.error())})
+                continue
+            live.append(msg)
+        if stop:
+            break
+        if not live:
+            continue
+
+        valid, invalid = parse_valid(live)
+        for msg in invalid:
+            reject(msg, kafka, health, "unparseable event")
+        if not valid:
+            retry_attempt = 0
+            continue
+
+        jobs: list = []
+        for msg, event in valid:
+            if store.is_user_deleting(event.user_id):
+                log.info("stale_deleted_user_event", extra={"audio_id": event.audio_id})
+                kafka.commit(msg)
+                health.inc("embedding_events_stale_total")
+                continue
+            chunks = chunker.chunk(event.text)
+            if not chunks:
+                reject(msg, kafka, health, "text is empty after normalization", event.audio_id)
+                continue
+            jobs.append((msg, event, chunks))
+        if not jobs:
+            retry_attempt = 0
             continue
 
         try:
-            event = EmbeddingJobEvent.from_raw(msg.value())
-        except InvalidEvent as exc:
-            kafka.send_to_dlq("INVALID_EVENT", str(exc), msg.value())
-            log.error(
-                "dlq",
-                extra={"offset": msg.offset(), "partition": msg.partition(), "error": str(exc)},
-            )
-            kafka.commit(msg)
-            retry_attempt = 0
-            continue
-
-        try:
-            process(event, embedder, chunker, store)
-        except InvalidEvent as exc:
-            kafka.send_to_dlq("INVALID_EVENT", str(exc), msg.value())
-            log.error("dlq", extra={"audio_id": event.audio_id, "error": str(exc)})
-            kafka.commit(msg)
-            retry_attempt = 0
-            continue
-        except StaleDeletedUser:
-            log.info("stale_deleted_user_event", extra={"audio_id": event.audio_id})
-            kafka.commit(msg)
-            retry_attempt = 0
-            continue
+            all_chunks = [chunk for _, _, chunks in jobs for chunk in chunks]
+            vectors = embedder.embed(all_chunks)
+            grouped = split_vectors([len(chunks) for _, _, chunks in jobs], vectors)
+            for (msg, event, chunks), event_vectors in zip(jobs, grouped):
+                if store.is_user_deleting(event.user_id):
+                    log.info("stale_deleted_user_event", extra={"audio_id": event.audio_id})
+                    kafka.commit(msg)
+                    health.inc("embedding_events_stale_total")
+                    continue
+                store.save(
+                    user_id=event.user_id,
+                    audio_id=event.audio_id,
+                    language=event.language,
+                    model=embedder.model_name,
+                    chunks=chunks,
+                    vectors=event_vectors,
+                )
+                log.info(
+                    "embedded",
+                    extra={"audio_id": event.audio_id, "user_id": event.user_id,
+                           "chunks": len(chunks)},
+                )
+                kafka.commit(msg)
+                health.inc("embedding_events_ok_total")
         except Exception as exc:
+            # Only InvalidEvent and StaleDeletedUser are terminal (committed
+            # above). Everything else — psycopg.Error, Kafka errors, model
+            # failures — retries with backoff by design, mirroring the Go
+            # workers' redelivery model. The class name is logged so new
+            # terminal cases can be split out when they appear.
             retry_attempt += 1
-            backoff = RETRY_BACKOFFS[min(retry_attempt - 1, len(RETRY_BACKOFFS) - 1)]
+            backoff = cfg.retry_backoffs[min(retry_attempt - 1, len(cfg.retry_backoffs) - 1)]
             log.error(
                 "transient failure; retrying",
                 extra={
                     "attempt": retry_attempt,
-                    "audio_id": event.audio_id,
+                    "events": len(jobs),
                     "error": str(exc),
+                    "error_type": type(exc).__name__,
                     "retry_seconds": backoff,
                 },
             )
+            health.inc("embedding_events_failed_total")
             # Drop the pooled pg connection: if the failure was a broken
             # socket, reusing it would fail every subsequent attempt.
             try:
                 store.reset()
-            except Exception:
+            except psycopg.Error:
                 log.warning("pg reconnect failed; will retry next attempt")
             time.sleep(backoff)
-            # Seek back so the same message is redelivered after the pause;
-            # the offset is only committed once processing succeeds.
-            kafka.seek(msg.partition(), msg.offset())
+            # Seek every uncommitted message back so the batch is redelivered
+            # after the pause; offsets commit only once saving succeeds.
+            # Saves are upserts, so redelivered events are no-ops.
+            for msg, _, _ in jobs:
+                kafka.seek(msg.partition(), msg.offset())
             continue
 
         retry_attempt = 0
-        kafka.commit(msg)
 
     kafka.close()
     store.close()
+    health.stop()
     log.info("shut down cleanly")
 
 

@@ -9,8 +9,7 @@ import (
 )
 
 // Config is the full service configuration, loaded from config.yaml and overridden by environment variables where noted.
-type Config struct {
-	Provider  string          `yaml:"provider"`
+type Config struct {	Provider  string          `yaml:"provider"`
 	Providers ProvidersConfig `yaml:"providers"`
 	Kafka     KafkaConfig     `yaml:"kafka"`
 	MinIO     MinIOConfig     `yaml:"minio"`
@@ -22,12 +21,16 @@ type ProvidersConfig struct {
 	ElevenLabs ElevenLabsConfig `yaml:"elevenlabs"`
 }
 
+// defaultMaxAttempts applies when max_attempts is unset in config.yaml.
+const defaultMaxAttempts = 5
+
 type DeepgramConfig struct {
-	APIKeyEnv string            `yaml:"api_key_env"`
-	Model     string            `yaml:"model"`
-	Language  string            `yaml:"language"`
-	Options   map[string]string `yaml:"options"`
-	apiKey    string
+	APIKeyEnv   string            `yaml:"api_key_env"`
+	Model       string            `yaml:"model"`
+	Language    string            `yaml:"language"`
+	Options     map[string]string `yaml:"options"`
+	MaxAttempts int               `yaml:"max_attempts"`
+	apiKey      string
 }
 
 func (d *DeepgramConfig) APIKey() string {
@@ -39,6 +42,7 @@ type ElevenLabsConfig struct {
 	ModelID        string `yaml:"model_id"`
 	Diarize        bool   `yaml:"diarize"`
 	TagAudioEvents bool   `yaml:"tag_audio_events"`
+	MaxAttempts    int    `yaml:"max_attempts"`
 	apiKey         string
 }
 
@@ -95,6 +99,13 @@ func Load(path string) (*Config, error) {
 
 	cfg.Providers.Deepgram.apiKey = os.Getenv(cfg.Providers.Deepgram.APIKeyEnv)
 	cfg.Providers.ElevenLabs.apiKey = os.Getenv(cfg.Providers.ElevenLabs.APIKeyEnv)
+
+	if cfg.Providers.Deepgram.MaxAttempts <= 0 {
+		cfg.Providers.Deepgram.MaxAttempts = defaultMaxAttempts
+	}
+	if cfg.Providers.ElevenLabs.MaxAttempts <= 0 {
+		cfg.Providers.ElevenLabs.MaxAttempts = defaultMaxAttempts
+	}
 
 	switch cfg.Provider {
 	case "elevenlabs":

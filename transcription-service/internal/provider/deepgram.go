@@ -17,23 +17,27 @@ import (
 
 const deepgramURL = "https://api.deepgram.com/v1/listen"
 
-const maxAttempts = 5
-
 type DeepgramProvider struct {
-	apiKey   string
-	model    string
-	language string
-	options  map[string]string
-	client   *http.Client
+	apiKey      string
+	model       string
+	language    string
+	options     map[string]string
+	maxAttempts int
+	client      *http.Client
 }
 
 func NewDeepgramProvider(cfg config.DeepgramConfig) *DeepgramProvider {
+	attempts := cfg.MaxAttempts
+	if attempts <= 0 {
+		attempts = 5
+	}
 	return &DeepgramProvider{
-		apiKey:   cfg.APIKey(),
-		model:    cfg.Model,
-		language: cfg.Language,
-		options:  cfg.Options,
-		client:   &http.Client{Timeout: 10 * time.Minute},
+		apiKey:      cfg.APIKey(),
+		model:       cfg.Model,
+		language:    cfg.Language,
+		options:     cfg.Options,
+		maxAttempts: attempts,
+		client:      &http.Client{Timeout: 10 * time.Minute},
 	}
 }
 
@@ -116,7 +120,7 @@ func (d *DeepgramProvider) Transcribe(ctx context.Context, audio []byte, content
 	params := deepgramParams(d.model, d.language, d.options, languages)
 
 	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	for attempt := 1; attempt <= d.maxAttempts; attempt++ {
 		result, retryable, err := d.attempt(ctx, audio, contentType, params)
 		if err == nil {
 			return result, nil
@@ -125,7 +129,7 @@ func (d *DeepgramProvider) Transcribe(ctx context.Context, audio []byte, content
 		if !retryable {
 			return nil, err
 		}
-		if attempt == maxAttempts {
+		if attempt == d.maxAttempts {
 			break
 		}
 		backoff := time.Duration(1<<(attempt-1)) * time.Second
@@ -135,7 +139,7 @@ func (d *DeepgramProvider) Transcribe(ctx context.Context, audio []byte, content
 		case <-time.After(backoff):
 		}
 	}
-	return nil, fmt.Errorf("deepgram failed after %d attempts: %w", maxAttempts, lastErr)
+	return nil, fmt.Errorf("deepgram failed after %d attempts: %w", d.maxAttempts, lastErr)
 }
 
 // attempt makes a single request. The bool return indicates whether the error (if any) is worth retrying — 4xx errors are not, 5xx/network errors are.

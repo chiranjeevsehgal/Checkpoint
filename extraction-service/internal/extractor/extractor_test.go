@@ -142,6 +142,20 @@ func TestParseRejectsMalformedJSON(t *testing.T) {
 	}
 }
 
+func TestParseRejectsUnknownFields(t *testing.T) {
+	cases := map[string]string{
+		"top level": `{"todos":[],"reminders":[],"insights":[],"summary":"x"}`,
+		"todo item": `{"todos":[{"item":1,"text":"x","priority":"high"}]}`,
+		"reminder":  `{"reminders":[{"item":1,"text":"x","remind_at":null,"snooze":true}]}`,
+		"insight":   `{"insights":[{"item":1,"text":"x","confidence":0.9}]}`,
+	}
+	for name, content := range cases {
+		if _, err := New(time.UTC).Parse(content, jobs(1)); err == nil {
+			t.Fatalf("expected unknown-field %s payload to fail", name)
+		}
+	}
+}
+
 func TestParseRejectsUnparseableRemindAt(t *testing.T) {
 	if _, err := New(time.UTC).Parse(`{"reminders":[{"item":1,"text":"x","remind_at":"tomorrow"}]}`, jobs(1)); err == nil {
 		t.Fatal("expected unparseable remind_at to fail")

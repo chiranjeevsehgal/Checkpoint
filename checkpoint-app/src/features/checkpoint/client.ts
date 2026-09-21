@@ -15,10 +15,7 @@ import {
   COMPLETED_CACHE_SIZE,
   CONNECT_ATTEMPT_LIMIT,
   CRYPTO_TAG_BYTES,
-  CTRL_CMD_CLEAR_TRUSTED_SLOTS,
-  CTRL_CMD_FORGET_SELF,
   CTRL_CMD_GET_CLOUD_SECRET,
-  CTRL_ERR_NOT_READY,
   CTRL_UUID,
   DATA_UUID,
   DEVICE_NAME,
@@ -26,7 +23,6 @@ import {
   MIN_MTU_REQUIRED,
   PKT_ACK,
   PKT_AUTH,
-  PKT_CMD,
   PKT_DATA,
   PKT_ERROR,
   PKT_FILE_ANNOUNCE,
@@ -42,10 +38,7 @@ import {
   PKT_STORAGE_RESP,
   PKT_LIST_RESP,
   PKT_KEEPALIVE,
-  PKT_LIST_REQ,
   PKT_READY,
-  PKT_STATUS_REQ,
-  PKT_STORAGE_REQ,
   READY_RETRIES,
   RECONNECT_DELAY_MS,
   RECONNECT_DELAY_MAX_MS,
@@ -76,13 +69,6 @@ import {
 } from './crypto.ts';
 import { decodeUtf8, isOggOpus } from './ogg.ts';
 import {
-  buildFileDeletePayload,
-  buildFileFetchPayload,
-  buildLedSetPayload,
-  buildListReqPayload,
-  buildStorageErasePayload,
-  buildSyncSetPayload,
-  buildTimeSetPayload,
   parseCmdResp,
   parseFileDoneTime,
   parseFileList,
@@ -90,6 +76,25 @@ import {
   parseStorage,
   type CmdResponse,
 } from './parsers.ts';
+import {
+  clearTrustedSlots,
+  cmdFileDelete,
+  cmdFileFetch,
+  cmdLedGet,
+  cmdLedSet,
+  cmdRecStart,
+  cmdRecStop,
+  cmdStorageErase,
+  cmdSyncGet,
+  cmdSyncSet,
+  cmdTimeSet,
+  forgetSelf,
+  getCloudSecret,
+  reqList,
+  reqStatus,
+  reqStorage,
+  type CommandTransport,
+} from './client-commands.ts';
 import { describeScanError } from './permissionPolicy.ts';
 import {
   buildAnnounceAckPayload,
@@ -1007,105 +1012,76 @@ export class CheckpointClient {
     if (this.currentFile?.fileId === fileId) this.currentFile = null;
   }
 
+  private get commands(): CommandTransport {
+    return {
+      roundtrip: (type, payload, timeoutMs) => this.ctrlRoundtrip(type, payload, timeoutMs),
+    };
+  }
+
   async cmdRecStart(): Promise<number> {
-    const res = (await this.ctrlRoundtrip(PKT_CMD, new Uint8Array([0x01]))) as CmdResponse;
-    return res.status ?? CTRL_ERR_NOT_READY;
+    return cmdRecStart(this.commands);
   }
 
   async cmdRecStop(): Promise<number> {
-    const res = (await this.ctrlRoundtrip(PKT_CMD, new Uint8Array([0x02]))) as CmdResponse;
-    return res.status ?? CTRL_ERR_NOT_READY;
+    return cmdRecStop(this.commands);
   }
 
   async cmdLedSet(muted: boolean, brightness: number): Promise<number> {
-    const res = (await this.ctrlRoundtrip(
-      PKT_CMD,
-      buildLedSetPayload(muted, brightness),
-    )) as CmdResponse;
-    return res.status ?? CTRL_ERR_NOT_READY;
+    return cmdLedSet(this.commands, muted, brightness);
   }
 
   async cmdLedGet(): Promise<CmdResponse> {
-    return (await this.ctrlRoundtrip(PKT_CMD, new Uint8Array([0x11]))) as CmdResponse;
+    return cmdLedGet(this.commands);
   }
 
   async cmdSyncSet(enabled: boolean): Promise<number> {
-    const res = (await this.ctrlRoundtrip(PKT_CMD, buildSyncSetPayload(enabled))) as CmdResponse;
-    return res.status ?? CTRL_ERR_NOT_READY;
+    return cmdSyncSet(this.commands, enabled);
   }
 
   async cmdSyncGet(): Promise<CmdResponse> {
-    return (await this.ctrlRoundtrip(PKT_CMD, new Uint8Array([0x13]))) as CmdResponse;
+    return cmdSyncGet(this.commands);
   }
 
   async cmdTimeSet(unixSeconds: number): Promise<number> {
-    const res = (await this.ctrlRoundtrip(
-      PKT_CMD,
-      buildTimeSetPayload(unixSeconds),
-    )) as CmdResponse;
-    return res.status ?? CTRL_ERR_NOT_READY;
+    return cmdTimeSet(this.commands, unixSeconds);
   }
 
   async reqStatus(): Promise<DeviceStatus> {
-    const res = await this.ctrlRoundtrip(PKT_STATUS_REQ, new Uint8Array(0));
-    if (!('recording' in res)) throw new Error('Bad STATUS_RESP');
-    return res as DeviceStatus;
+    return reqStatus(this.commands);
   }
 
   async reqStorage(): Promise<StorageInfo> {
-    const res = await this.ctrlRoundtrip(PKT_STORAGE_REQ, new Uint8Array(0));
-    if (!('total' in res)) throw new Error('Bad STORAGE_RESP');
-    return res as StorageInfo;
+    return reqStorage(this.commands);
   }
 
   async reqList(start = 0): Promise<DeviceFileList> {
-    const res = await this.ctrlRoundtrip(PKT_LIST_REQ, buildListReqPayload(start));
-    if (!('entries' in res)) throw new Error('Bad LIST_RESP');
-    return res as DeviceFileList;
+    return reqList(this.commands, start);
   }
 
   async cmdFileDelete(path: string): Promise<number> {
-    const res = (await this.ctrlRoundtrip(PKT_CMD, buildFileDeletePayload(path))) as CmdResponse;
-    return res.status ?? CTRL_ERR_NOT_READY;
+    return cmdFileDelete(this.commands, path);
   }
 
   async cmdFileFetch(path: string): Promise<number> {
-    const res = (await this.ctrlRoundtrip(PKT_CMD, buildFileFetchPayload(path))) as CmdResponse;
-    return res.status ?? CTRL_ERR_NOT_READY;
+    return cmdFileFetch(this.commands, path);
   }
 
   async cmdStorageErase(step: number): Promise<CmdResponse> {
-    return (await this.ctrlRoundtrip(
-      PKT_CMD,
-      buildStorageErasePayload(step),
-      10000,
-    )) as CmdResponse;
+    return cmdStorageErase(this.commands, step);
   }
 
   async getCloudSecret(): Promise<Uint8Array | null> {
-    const res = (await this.ctrlRoundtrip(
-      PKT_CMD,
-      new Uint8Array([CTRL_CMD_GET_CLOUD_SECRET]),
-    )) as CmdResponse;
-    return res.status === 0 ? (res.secret ?? null) : null;
+    return getCloudSecret(this.commands);
   }
 
   async clearTrustedSlots(): Promise<number> {
-    const res = (await this.ctrlRoundtrip(
-      PKT_CMD,
-      new Uint8Array([CTRL_CMD_CLEAR_TRUSTED_SLOTS]),
-    )) as CmdResponse;
-    return res.status ?? CTRL_ERR_NOT_READY;
+    return clearTrustedSlots(this.commands);
   }
 
   // Drops this phone's own trusted slot on the pendant (used when the backend
   // refuses ownership). Older firmware acks BAD_ARG; callers treat it best-effort.
   async forgetSelf(): Promise<number> {
-    const res = (await this.ctrlRoundtrip(
-      PKT_CMD,
-      new Uint8Array([CTRL_CMD_FORGET_SELF]),
-    )) as CmdResponse;
-    return res.status ?? CTRL_ERR_NOT_READY;
+    return forgetSelf(this.commands);
   }
 
   private async adapterPoweredOn(): Promise<boolean> {

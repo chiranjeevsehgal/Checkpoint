@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -47,6 +48,7 @@ type RouterDeps struct {
 	DB            Pinger
 	Storage       Pinger
 	Metrics       *metrics.Registry
+	Limiter       *RateLimiter
 }
 
 // NewRouter builds the full route tree. Health and metrics endpoints
@@ -71,7 +73,11 @@ func NewRouter(deps RouterDeps) http.Handler {
 	mux.HandleFunc("GET /metrics", r.serveMetrics)
 
 	protected := func(h http.HandlerFunc) http.Handler {
-		return RequestID(Observe(deps.Metrics, Auth(deps.Auth, deps.Accounts, h)))
+		inner := http.Handler(h)
+		if deps.Limiter != nil {
+			inner = RateLimit(deps.Limiter, inner)
+		}
+		return RequestID(Observe(deps.Metrics, Auth(deps.Auth, deps.Accounts, inner)))
 	}
 	mux.Handle("POST /v1/uploads", protected(r.handler.CreateUpload))
 	mux.Handle("POST /v1/uploads/{id}/complete", protected(r.handler.CompleteUpload))
@@ -105,7 +111,9 @@ func (r *Router) serveMetrics(w http.ResponseWriter, _ *http.Request) {
 	var b strings.Builder
 	r.reg.Write(&b)
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	_, _ = w.Write([]byte(b.String()))
+	if _, err := w.Write([]byte(b.String())); err != nil {
+		slog.Error("metrics write failed", "error", err)
+	}
 }
 
 // ready checks PostgreSQL and object storage only. The transcription

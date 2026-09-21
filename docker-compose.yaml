@@ -243,7 +243,8 @@ services:
 
   embedding-migrate:
     build:
-      context: ./embedding-service
+      context: .
+      dockerfile: embedding-service/Dockerfile
       target: migrate
     container_name: embedding-migrate
     networks:
@@ -258,7 +259,8 @@ services:
 
   embedding:
     build:
-      context: ./embedding-service
+      context: .
+      dockerfile: embedding-service/Dockerfile
       target: worker
     container_name: embedding
     networks:
@@ -394,7 +396,8 @@ services:
 
   mcp-migrate:
     build:
-      context: ./mcp-service
+      context: .
+      dockerfile: mcp-service/Dockerfile
       target: migrate
     container_name: mcp-migrate
     networks:
@@ -410,7 +413,8 @@ services:
 
   mcp-service:
     build:
-      context: ./mcp-service
+      context: .
+      dockerfile: mcp-service/Dockerfile
       target: worker
     container_name: mcp-service
     networks:
@@ -457,8 +461,10 @@ services:
       # Must match the client-facing host; override with the LAN IP for phones.
       NTFY_BASE_URL: ${NTFY_BASE_URL:-http://localhost:8085}
       # Provision the publisher/admin tokens from .env so ntfy and the app
-      # services share one source of truth. Users/ACL stay in server.yml.
+      # services share one source of truth. Password hashes come from the env
+      # too (dev defaults below are throwaway; set NTFY_*_PASS_HASH in prod).
       NTFY_AUTH_TOKENS: "checkpoint-admin:${NTFY_ADMIN_TOKEN:-tk_checkpointdevadmintoken000001},checkpoint-publisher:${NTFY_TOKEN:-tk_checkpointdevpublishtoken0001}"
+      NTFY_AUTH_USERS: "checkpoint-admin:${NTFY_ADMIN_PASS_HASH:-$$2a$$10$$aQfjxeRdUQpcBTcPwotk/eAG02jiNi3Tv2hUi8rf6bCymkp7i7rYC}:admin,checkpoint-publisher:${NTFY_PUBLISHER_PASS_HASH:-$$2a$$10$$n0vDs6FF40KneoOAhNcVF.u5JU/4IJNLToo.PCCL8ykhq56Es2ZrK}:user"
     command: serve
     restart: unless-stopped
 

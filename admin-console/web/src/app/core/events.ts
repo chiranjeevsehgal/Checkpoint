@@ -1,6 +1,7 @@
 import { Injectable, signal } from '@angular/core';
 
 import type { SerialEvent, TaskEvent } from './models';
+import { eventsUrl } from './auth-token';
 
 const MAX_TASK_EVENTS = 500;
 const MAX_SERIAL_EVENTS = 1000;
@@ -20,8 +21,7 @@ export class EventsService {
 
   connectTasks(): void {
     if (this.taskSource || typeof EventSource === 'undefined') return;
-    this.taskSource = new EventSource('/events?channel=tasks');
-    this.taskSource.onmessage = (message: MessageEvent<string>) => {
+    this.taskSource = new EventSource(eventsUrl('tasks'));    this.taskSource.onmessage = (message: MessageEvent<string>) => {
       const event = JSON.parse(message.data) as TaskEvent;
       this.taskEvents.update((events) => appendBounded(events, event, MAX_TASK_EVENTS));
     };
@@ -29,7 +29,7 @@ export class EventsService {
 
   connectSerial(): void {
     if (this.serialSource || typeof EventSource === 'undefined') return;
-    this.serialSource = new EventSource('/events?channel=serial');
+    this.serialSource = new EventSource(eventsUrl('serial'));
     this.serialSource.onmessage = (message: MessageEvent<string>) => {
       const event = JSON.parse(message.data) as SerialEvent;
       this.serialEvents.update((events) => appendBounded(events, event, MAX_SERIAL_EVENTS));
@@ -39,6 +39,12 @@ export class EventsService {
   disconnectSerial(): void {
     this.serialSource?.close();
     this.serialSource = undefined;
+  }
+
+  reconnectTasks(): void {
+    this.taskSource?.close();
+    this.taskSource = undefined;
+    this.connectTasks();
   }
 
   clearTasks(): void {

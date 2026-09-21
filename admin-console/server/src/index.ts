@@ -6,6 +6,7 @@ import Fastify from 'fastify';
 
 import { loadConfig } from './config';
 import { createContext } from './context';
+import { assertBindAllowed, requireApiAuth } from './auth';
 import { HttpError } from './httpError';
 import { registerRoutes } from './routes';
 import { TaskBusyError } from './task';
@@ -29,6 +30,7 @@ async function main(): Promise<void> {
   });
 
   registerRoutes(app, context);
+  app.addHook('onRequest', requireApiAuth);
 
   if (existsSync(webDist)) {
     await app.register(fastifyStatic, { root: webDist, prefix: '/', index: ['index.html'] });
@@ -50,9 +52,9 @@ async function main(): Promise<void> {
       );
   });
 
+  assertBindAllowed(config.host);
   await app.listen({ host: config.host, port: config.port });
-  console.log(`admin-console agent listening on http://${config.host}:${config.port}`);
-}
+  console.log(`admin-console agent listening on http://${config.host}:${config.port}`);}
 
 void main().catch((error: unknown) => {
   console.error(error);

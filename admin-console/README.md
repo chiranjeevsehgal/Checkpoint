@@ -84,7 +84,12 @@ Firmware flashing and serial always use the local USB device.
 
 ## Security
 
-- The agent has no authentication and binds `127.0.0.1` only. Do not set
-  `ADMIN_HOST=0.0.0.0` unless you add an auth layer in front of it.
+- The agent binds `127.0.0.1` by default. Binding anywhere else requires
+  `ADMIN_TOKEN`: the agent refuses a non-loopback bind without it, and every
+  `/api` + `/events` route then requires `Authorization: Bearer <token>` (the
+  web UI asks for it once per browser session; `/api/health` stays open).
+- `ADMIN_SETTINGS_KEY` encrypts `server/data/settings.json` at rest
+  (AES-256-GCM). Without it the file stays plaintext; an encrypted file
+  without the key reads as empty rather than exposing secrets.
 - The Kratos admin API has no auth of its own; expose it on loopback only.
 - Secrets (`DATABASE_URL` password) are redacted in `/api/config`.

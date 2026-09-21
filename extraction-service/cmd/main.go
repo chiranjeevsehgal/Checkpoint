@@ -76,11 +76,15 @@ func main() {
 		"batch_size", cfg.Batch.Size,
 		"outputs", "todos+reminders+insights")
 
+	health := observability.NewHealthServer(":9082")
+	health.Start(ctx)
+	health.SetReady(true)
+
 	var wg sync.WaitGroup
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		runConsumer(ctx, consumer, store, dlq, cfg)
+		runConsumer(ctx, consumer, store, dlq, cfg, health)
 	}()
 	go func() {
 		defer wg.Done()
@@ -88,7 +92,7 @@ func main() {
 	}()
 	go func() {
 		defer wg.Done()
-		runBatcher(ctx, store, client, cfg)
+		runBatcher(ctx, store, client, cfg, health)
 	}()
 
 	<-ctx.Done()
@@ -100,7 +104,7 @@ func main() {
 // runConsumer is the fast path: event → pending queue row → commit. No LLM
 // work happens here — that is entirely the batcher's job. A poison message
 // goes to the DLQ and is committed so it never comes back.
-func runConsumer(ctx context.Context, consumer *kafka.Consumer, store *storage.PostgresStore, dlq *kafka.Producer, cfg *config.Config) {
+func runConsumer(ctx context.Context, consumer *kafka.Consumer, store *storage.PostgresStore, dlq *kafka.Producer, cfg *config.Config, health *observability.HealthServer) {
 	for {
 		var event model.ExtractionJobRequestedEvent
 		msg, err := consumer.ReadMessage(ctx, &event)
@@ -143,6 +147,7 @@ func runConsumer(ctx context.Context, consumer *kafka.Consumer, store *storage.P
 		}
 		if deleting {
 			slog.Info("stale_deleted_user_event", "audio_id", event.Data.AudioID)
+			health.Inc("extraction_consumer_stale_total")
 			if err := consumer.Commit(ctx, msg); err != nil {
 				slog.Error("commit error for stale event", "error", err)
 			}
@@ -163,8 +168,10 @@ func runConsumer(ctx context.Context, consumer *kafka.Consumer, store *storage.P
 			// Not committing means redelivery on restart — the event is
 			// never silently lost.
 			slog.Error("enqueue failed", "audio_id", event.Data.AudioID, "error", err)
+			health.Inc("extraction_consumer_failed_total")
 			continue
 		}
+		health.Inc("extraction_consumer_enqueued_total")
 
 		if err := consumer.Commit(ctx, msg); err != nil {
 			slog.Error("commit error", "audio_id", event.Data.AudioID, "error", err)
@@ -199,7 +206,7 @@ func runReclaimer(ctx context.Context, store *storage.PostgresStore, cfg *config
 // runBatcher polls the queue for users with a full batch and runs each
 // batch on a bounded worker pool. One batch = one user; batches for different
 // users run in parallel, never mixed.
-func runBatcher(ctx context.Context, store *storage.PostgresStore, client *llm.Client, cfg *config.Config) {
+func runBatcher(ctx context.Context, store *storage.PostgresStore, client *llm.Client, cfg *config.Config, health *observability.HealthServer) {
 	sem := make(chan struct{}, cfg.Batch.WorkerConcurrency)
 	var wg sync.WaitGroup
 
@@ -227,7 +234,7 @@ func runBatcher(ctx context.Context, store *storage.PostgresStore, client *llm.C
 			go func(userID string) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				processBatch(ctx, store, client, userID, cfg)
+				processBatch(ctx, store, client, userID, cfg, health)
 			}(u)
 		}
 	}
@@ -236,32 +243,38 @@ func runBatcher(ctx context.Context, store *storage.PostgresStore, client *llm.C
 // processBatch claims one user's rows and extracts them. A claimed batch
 // larger than max_batch_chars is split into multiple LLM calls; all groups
 // must succeed before their jobs are marked done.
-func processBatch(ctx context.Context, store *storage.PostgresStore, client *llm.Client, userID string, cfg *config.Config) {
+func processBatch(ctx context.Context, store *storage.PostgresStore, client *llm.Client, userID string, cfg *config.Config, health *observability.HealthServer) {
 	jobs, err := store.ClaimBatch(ctx, userID, model.TypeAll, cfg.Batch.Size)
 	if err != nil {
 		slog.Error("claim error", "user_id", userID, "error", err)
+		health.Inc("extraction_batches_failed_total")
 		return
 	}
 	if len(jobs) == 0 {
 		return
 	}
 	ext := extractor.New(userLocation(ctx, store, userID, cfg))
+	modelTag := client.Model() + "@" + extractor.PromptVersion
 
 	for _, group := range splitByChars(jobs, cfg.Batch.MaxBatchChars) {
 		content, err := client.Chat(ctx, ext.Messages(group))
 		if err != nil {
 			handleBatchFailure(ctx, store, group, err, cfg)
+			health.Inc("extraction_batches_failed_total")
 			return
 		}
 		results, err := ext.Parse(content, group)
 		if err != nil {
 			handleBatchFailure(ctx, store, group, err, cfg)
+			health.Inc("extraction_batches_failed_total")
 			return
 		}
-		if err := store.CompleteBatch(ctx, results, client.Model()); err != nil {
+		if err := store.CompleteBatch(ctx, results, modelTag); err != nil {
 			handleBatchFailure(ctx, store, group, err, cfg)
+			health.Inc("extraction_batches_failed_total")
 			return
 		}
+		health.Inc("extraction_batches_ok_total")
 		skipped := 0
 		entries := 0
 		for _, r := range results {

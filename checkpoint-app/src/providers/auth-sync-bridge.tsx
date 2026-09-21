@@ -56,7 +56,7 @@ export function AuthSyncBridge({ children }: PropsWithChildren) {
   useEffect(() => {
     if (status === 'loading') return;
     if (status !== 'authenticated') {
-      if (status !== 'unavailable') {
+      if (status !== 'unavailable' && status !== 'reconnecting') {
         syncEngine.setOwnedDevice(null);
         void syncEngine.stopForAuthLoss();
         void stopSyncService();

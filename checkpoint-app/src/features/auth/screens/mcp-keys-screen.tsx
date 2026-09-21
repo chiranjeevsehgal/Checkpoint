@@ -30,6 +30,7 @@ import {
 } from '@/lib/api/mcp-keys-api';
 import { resolveMcpUrl } from '@/lib/server-config';
 import { getSessionToken } from '@/lib/session';
+import { requireDeviceCheck } from '@/lib/biometric';
 import { useToast } from '@/providers/toast-provider';
 
 type Copy = (value: string, label: string) => void;
@@ -168,6 +169,8 @@ export function McpKeysScreen() {
     setBusy(true);
     setError(null);
     try {
+      const allowed = await requireDeviceCheck('Confirm it is you to reveal a new access key.');
+      if (!allowed) return;
       const result = await createMcpKey(token, trimmed);
       setCreated(result);
       setName(defaultKeyName(Device.modelName, Platform.OS));

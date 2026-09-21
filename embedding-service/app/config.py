@@ -11,6 +11,10 @@ class Config:
     embedding_model: str
     chunk_tokens: int
     chunk_overlap_tokens: int
+    retry_backoffs: tuple[int, ...]
+    batch_max: int
+    metrics_addr: str
+    metrics_port: int
 
 
 def _int_env(name: str, default: int) -> int:
@@ -21,6 +25,19 @@ def _int_env(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         raise ValueError(f"{name} must be an integer, got {raw!r}")
+
+
+def _csv_int_env(name: str, default: tuple[int, ...]) -> tuple[int, ...]:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        values = tuple(int(part) for part in raw.split(",") if part.strip())
+    except ValueError:
+        raise ValueError(f"{name} must be comma-separated integers, got {raw!r}")
+    if not values:
+        raise ValueError(f"{name} must not be empty")
+    return values
 
 
 def load() -> Config:
@@ -36,10 +53,16 @@ def load() -> Config:
         embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
         chunk_tokens=_int_env("EMBEDDING_CHUNK_TOKENS", 2048),
         chunk_overlap_tokens=_int_env("EMBEDDING_CHUNK_OVERLAP_TOKENS", 100),
+        retry_backoffs=_csv_int_env("EMBEDDING_RETRY_BACKOFFS", (1, 5, 15, 60)),
+        batch_max=_int_env("EMBEDDING_BATCH_MAX", 8),
+        metrics_addr=os.getenv("METRICS_ADDR", "0.0.0.0"),
+        metrics_port=_int_env("METRICS_PORT", 9085),
     )
 
     if cfg.chunk_tokens <= 0:
         raise ValueError("EMBEDDING_CHUNK_TOKENS must be positive")
     if cfg.chunk_overlap_tokens < 0 or cfg.chunk_overlap_tokens >= cfg.chunk_tokens:
         raise ValueError("EMBEDDING_CHUNK_OVERLAP_TOKENS must be in [0, EMBEDDING_CHUNK_TOKENS)")
+    if cfg.batch_max <= 0:
+        raise ValueError("EMBEDDING_BATCH_MAX must be positive")
     return cfg

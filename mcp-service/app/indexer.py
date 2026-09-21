@@ -24,14 +24,22 @@ from . import documents, search
 
 log = logging.getLogger(__name__)
 
+_tombstone_table_known: bool | None = None
 
-def _plain_embedding(value):
-    """pgvector may hand back a Vector, ndarray or list; normalise to a list."""
-    if value is None or isinstance(value, list):
-        return value
-    if hasattr(value, "to_list"):
-        return value.to_list()
-    return list(value)
+
+def _tombstone_table_exists(conn) -> bool:
+    """Cache whether account_deletions exists (absent on pre-migration databases)."""
+    global _tombstone_table_known
+    if _tombstone_table_known is None:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = 'account_deletions')"
+            )
+            _tombstone_table_known = bool(cur.fetchone()[0])
+        if not _tombstone_table_known:
+            log.warning("account_deletions table missing, tombstone check disabled")
+    return _tombstone_table_known
 
 
 SOURCE_WATERMARK = "sources"
@@ -105,7 +113,7 @@ class Indexer:
                 f"SELECT {_ROW_COLUMNS}, embedding FROM search_documents WHERE embedding IS NOT NULL"
             )
             rows = cur.fetchall()
-        self._index.rebuild([search.row_to_document(row, _plain_embedding(row.get("embedding"))) for row in rows])
+        self._index.rebuild([search.row_to_document(row, search.plain_embedding(row.get("embedding"))) for row in rows])
 
     def run_once(self) -> None:
         cycle_now = self._now()
@@ -132,6 +140,17 @@ class Indexer:
 
     def _rebuild_audio(self, audio_id, to_index: list) -> list[int]:
         removed: list[int] = []
+        if self._audio_tombstoned(audio_id):
+            with self._conn.transaction():
+                with self._conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(
+                        "DELETE FROM search_documents WHERE audio_id = %s "
+                        "RETURNING id, (embedding IS NOT NULL) AS embedded",
+                        (audio_id,),
+                    )
+                    removed = [row["id"] for row in cur.fetchall() if row["embedded"]]
+            log.info("skipped tombstoned audio", extra={"audio_id": str(audio_id)})
+            return removed
         with self._conn.transaction():
             with self._conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
@@ -171,6 +190,33 @@ class Indexer:
                         None, False, to_index)
         return removed
 
+    def _audio_tombstoned(self, audio_id) -> bool:
+        """True when the audio's owner has a deletion tombstone pending purge."""
+        if not _tombstone_table_exists(self._conn):
+            return False
+        with self._conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT EXISTS(SELECT 1 FROM account_deletions d WHERE EXISTS("
+                "SELECT 1 FROM transcripts t WHERE t.audio_id = %(audio)s AND t.user_id = d.user_id) "
+                "OR EXISTS(SELECT 1 FROM todos t WHERE t.audio_id = %(audio)s AND t.user_id = d.user_id) "
+                "OR EXISTS(SELECT 1 FROM reminders t WHERE t.audio_id::uuid = %(audio)s "
+                "AND t.user_id::uuid = d.user_id) "
+                "OR EXISTS(SELECT 1 FROM insights t WHERE t.audio_id::uuid = %(audio)s "
+                "AND t.user_id::uuid = d.user_id)) AS tombstoned",
+                {"audio": audio_id},
+            )
+            row = cur.fetchone()
+        return bool(row["tombstoned"]) if row else False
+
+    def _user_tombstoned(self, user_id: str) -> bool:
+        if not _tombstone_table_exists(self._conn):
+            return False
+        with self._conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT EXISTS(SELECT 1 FROM account_deletions WHERE user_id = %s::uuid)",
+                        (user_id,))
+            row = cur.fetchone()
+        return bool(row["exists"]) if row else False
+
     def _sync_summaries(self, cycle_now: datetime) -> None:
         watermark = self._watermark(SUMMARY_WATERMARK)
         with self._conn.cursor(row_factory=dict_row) as cur:
@@ -195,6 +241,9 @@ class Indexer:
                         (user_id, source_id),
                     )
                     removed.extend(r["id"] for r in cur.fetchall() if r["embedded"])
+                    if self._user_tombstoned(user_id):
+                        log.info("skipped tombstoned summary", extra={"user_id": user_id})
+                        continue
                     self._insert(cur, documents.summary(
                         user_id, row["period"], row["period_start"], row["text"], row["model"]),
                         None, False, to_index)
@@ -228,12 +277,12 @@ class Indexer:
 
     def _insert(self, cur, doc: dict, embedding, indexed_now: bool, to_index: list) -> None:
         params = dict(doc)
-        params["embedding"] = Vector(_plain_embedding(embedding)) if embedding is not None else None
+        params["embedding"] = Vector(search.plain_embedding(embedding)) if embedding is not None else None
         params["indexed_at"] = self._now() if indexed_now else None
         cur.execute(_INSERT, params)
         row_id = cur.fetchone()["id"]
         if indexed_now and embedding is not None:
-            to_index.append(search.row_to_document({**doc, "id": row_id}, _plain_embedding(embedding)))
+            to_index.append(search.row_to_document({**doc, "id": row_id}, search.plain_embedding(embedding)))
 
     def _watermark(self, name: str) -> datetime:
         with self._conn.cursor(row_factory=dict_row) as cur:
