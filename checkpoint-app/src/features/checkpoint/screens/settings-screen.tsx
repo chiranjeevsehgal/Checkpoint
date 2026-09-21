@@ -149,12 +149,6 @@ function TransferSection({
           value={settings.autoSyncEnabled}
           onChange={(next) => apply({ autoSyncEnabled: next })}
         />
-        <Toggle
-          label="Upload recordings"
-          description="Send speech clips to the server for transcription."
-          value={settings.ingestEnabled}
-          onChange={(next) => apply({ ingestEnabled: next })}
-        />
         <ValueSlider
           label="Keep completed transfers"
           format={(value) => `${Math.round(value)}h`}
@@ -440,13 +434,15 @@ export function CheckpointSettingsScreen() {
           enabled={settings.remindersEnabled}
           onChange={(next) => void setRemindersEnabled(next)}
         />
-        <BackendSection
-          settings={settings}
-          onSave={onSaveServer}
-          onTest={() => void runTest()}
-          testing={testing}
-          probe={probe}
-        />
+        {env.devBuild ? (
+          <BackendSection
+            settings={settings}
+            onSave={onSaveServer}
+            onTest={() => void runTest()}
+            testing={testing}
+            probe={probe}
+          />
+        ) : null}
         <AppearanceSection />
         <Section title="Account">
           <Card>
