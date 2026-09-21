@@ -111,5 +111,10 @@ session:
 courier:
   smtp:
     connection_uri: smtp://mailpit:1025/?disable_starttls=true
+    # Sender identity for verification, recovery and deletion mails.
+    # Production overrides COURIER_SMTP_FROM_ADDRESS via compose; the
+    # example.com placeholder below is dev-only (Mailpit ignores it).
+    from_address: noreply@example.com
+    from_name: Checkpoint
   # Overrides live under infra/kratos/templates, mounted with the config dir.
   template_override_path: /etc/config/kratos/templates

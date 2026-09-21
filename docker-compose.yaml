@@ -510,6 +510,10 @@ services:
       # Public URL advertised in flow ui.action; must be reachable by the
       # client (a phone cannot resolve localhost). Override per environment.
       SERVE_PUBLIC_BASE_URL: ${KRATOS_PUBLIC_BASE_URL:-http://localhost:4433/}
+      # Outbound mail. Dev default stays Mailpit; production sets
+      # KRATOS_SMTP_URI (e.g. Gmail SMTP) and KRATOS_SMTP_FROM_ADDRESS in .env.
+      COURIER_SMTP_CONNECTION_URI: ${KRATOS_SMTP_URI:-smtp://mailpit:1025/?disable_starttls=true}
+      COURIER_SMTP_FROM_ADDRESS: ${KRATOS_SMTP_FROM_ADDRESS:-noreply@example.com}
     volumes:
       - ./infra/kratos:/etc/config/kratos:ro
     command: serve -c /etc/config/kratos/kratos.yml --watch-courier

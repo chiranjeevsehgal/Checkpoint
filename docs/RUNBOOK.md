@@ -77,6 +77,17 @@ success).
 - Grafana/ntfy alerts share `NTFY_TOKEN` via compose (`NTFY_AUTH_TOKENS`);
   rotate all three together.
 
+## Gmail SMTP operations
+
+- Rotation: revoke/regenerate the App Password in your Google Account,
+  update `KRATOS_SMTP_URI` in the VPS `.env`, `docker compose up -d kratos`.
+  Changing any Google security setting can silently invalidate it.
+- Cap: ~500/day. A stuck retry loop can exhaust it — courier failures show
+  in `docker compose logs kratos`.
+- "Code never arrived": check spam → confirm the App Password is still
+  valid → check kratos logs for courier errors. First send from a new VPS
+  IP may need one manual "yes, that was me" approval in Google.
+
 ## Prod hardening checklist
 
 Caddy still terminates `160-236-239-95.sslip.io` (dev convenience, third-party
