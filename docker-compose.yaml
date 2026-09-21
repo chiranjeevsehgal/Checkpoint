@@ -236,6 +236,7 @@ services:
     environment:
       CONFIG_PATH: /app/config.yaml
       KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_RETRY: ${KAFKA_TOPIC_RETRY:-retry.jobs.v1}
       TRANSCRIPTION_PROVIDER: ${TRANSCRIPTION_PROVIDER:-elevenlabs}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY}
       DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY}

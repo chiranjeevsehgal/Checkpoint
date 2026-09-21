@@ -55,6 +55,7 @@ type KafkaConfig struct {
 	ConsumeTopic           string   `yaml:"consume_topic"`
 	ProduceTopicEmbedding  string   `yaml:"produce_topic1"`
 	ProduceTopicExtraction string   `yaml:"produce_topic2"`
+	RetryTopic             string   `yaml:"retry_topic"`
 	ConsumerGroup          string   `yaml:"consumer_group"`
 }
 
@@ -128,6 +129,16 @@ func Load(path string) (*Config, error) {
 	// Allow overriding Kafka brokers via env for container/orchestration flexibility
 	if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {
 		cfg.Kafka.Brokers = []string{brokers}
+	}
+
+	// Retry handoffs go to the central retry service's topic; same env
+	// override the other services honor so compose can point them at one
+	// place.
+	if topic := os.Getenv("KAFKA_TOPIC_RETRY"); topic != "" {
+		cfg.Kafka.RetryTopic = topic
+	}
+	if cfg.Kafka.RetryTopic == "" {
+		cfg.Kafka.RetryTopic = "retry.jobs.v1"
 	}
 
 	return &cfg, nil
