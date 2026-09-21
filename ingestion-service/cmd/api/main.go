@@ -76,6 +76,7 @@ func main() {
 	ntfyAdmin := newNtfyAdmin(cfg)
 	notifications := service.NewNotificationService(requestPool, notificationProvisioner(ntfyAdmin))
 	mcpKeys := service.NewMcpKeyService(requestPool)
+	items := service.NewItemsService(requestPool)
 	reg := metrics.NewRegistry()
 	deps := apihttp.RouterDeps{
 		Auth:          authenticator,
@@ -86,6 +87,7 @@ func main() {
 		Settings:      settings,
 		Notifications: notifications,
 		McpKeys:       mcpKeys,
+		Items:         items,
 		NTFPPublicURL: cfg.NTFPPublicURL,
 		Idem:          requestPool,
 		DB:            requestPool,

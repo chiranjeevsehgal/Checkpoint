@@ -27,6 +27,12 @@ var (
 	// ErrDeviceClaimFailed is returned for every claim failure, so callers
 	// cannot distinguish nonexistent, foreign or quarantined devices.
 	ErrDeviceClaimFailed = errors.New("device claim failed")
+	// ErrItemNotFound is returned when an extracted item does not exist or
+	// belongs to another user. Both map to 404 to avoid leaking ownership.
+	ErrItemNotFound = errors.New("item not found")
+	// ErrItemConflict is returned when an edit would duplicate another item's
+	// text for the same recording, which the unique index forbids.
+	ErrItemConflict = errors.New("item text already exists")
 )
 
 // UploadRepository covers single-row upload reads and writes.
