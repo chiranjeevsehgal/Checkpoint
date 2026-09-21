@@ -26,6 +26,7 @@ type Router struct {
 	settings      *SettingsHandler
 	notifications *NotificationHandler
 	mcpKeys       *McpKeyHandler
+	items         *ItemsHandler
 	db            Pinger
 	storage       Pinger
 	reg           *metrics.Registry
@@ -42,6 +43,7 @@ type RouterDeps struct {
 	Settings      settingsService
 	Notifications notificationService
 	McpKeys       mcpKeyService
+	Items         itemsService
 	// NTFPPublicURL is returned to clients so they can reach the ntfy server.
 	NTFPPublicURL string
 	Idem          repository.IdempotencyRepository
@@ -62,6 +64,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 		settings:      NewSettingsHandler(deps.Settings),
 		notifications: NewNotificationHandler(deps.Notifications, deps.NTFPPublicURL),
 		mcpKeys:       NewMcpKeyHandler(deps.McpKeys),
+		items:         NewItemsHandler(deps.Items),
 		db:            deps.DB,
 		storage:       deps.Storage,
 		reg:           deps.Metrics,
@@ -95,6 +98,13 @@ func NewRouter(deps RouterDeps) http.Handler {
 	mux.Handle("GET /v1/me/mcp-keys", protected(r.mcpKeys.List))
 	mux.Handle("POST /v1/me/mcp-keys", protected(r.mcpKeys.Create))
 	mux.Handle("DELETE /v1/me/mcp-keys/{id}", protected(r.mcpKeys.Revoke))
+	mux.Handle("GET /v1/me/todos", protected(r.items.ListTodos))
+	mux.Handle("PATCH /v1/me/todos/{id}", protected(r.items.SetTodoDone))
+	mux.Handle("DELETE /v1/me/todos/{id}", protected(r.items.DeleteTodo))
+	mux.Handle("GET /v1/me/reminders", protected(r.items.ListReminders))
+	mux.Handle("DELETE /v1/me/reminders/{id}", protected(r.items.DeleteReminder))
+	mux.Handle("GET /v1/me/insights", protected(r.items.ListInsights))
+	mux.Handle("DELETE /v1/me/insights/{id}", protected(r.items.DeleteInsight))
 	mux.Handle("DELETE /v1/me/sessions", protected(r.sessions.Delete))
 	return mux
 }

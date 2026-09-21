@@ -90,7 +90,8 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
 		errors.Is(err, domain.ErrInvalidLanguage),
 		errors.Is(err, domain.ErrInvalidTimezone),
 		errors.Is(err, domain.ErrInvalidAdvance),
-		errors.Is(err, domain.ErrInvalidKeyName):
+		errors.Is(err, domain.ErrInvalidKeyName),
+		errors.Is(err, domain.ErrInvalidItemFilter):
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, err.Error())
 	default:
 		writeError(w, r, http.StatusInternalServerError, CodeInternal, "Unexpected internal error.")

@@ -107,9 +107,20 @@ func normalizeRoute(path string) string {
 		if len(parts) == 4 && parts[2] == "mcp-keys" {
 			return "/v1/me/mcp-keys/{id}"
 		}
+		if len(parts) == 3 && isItemResource(parts[2]) {
+			return "/v1/me/" + parts[2]
+		}
+		if len(parts) == 4 && isItemResource(parts[2]) {
+			return "/v1/me/" + parts[2] + "/{id}"
+		}
 		return "/v1/me"
 	}
 	return "other"
+}
+
+// isItemResource reports whether a path segment names an extracted-item list.
+func isItemResource(segment string) bool {
+	return segment == "todos" || segment == "reminders" || segment == "insights"
 }
 
 // statusWriter captures the response code for logs and metrics.
