@@ -228,7 +228,8 @@ only) and does not pull the model layers.
 Delivery semantics mirror the transcription service: offsets commit only
 after a message is embedded and stored; poison messages (bad JSON, empty
 text) go to `embedding.jobs.v1.dlq` with the standard envelope
-(`EMBEDDING_FAILED`); transient failures (pg down) retry with backoff.
+(`EMBEDDING_FAILED`); transient failures (pg down) retry with backoff and then
+hand off to the central retry service (`retry.jobs.v1`).
 
 Verify end-to-end after an upload flows through transcription:
 

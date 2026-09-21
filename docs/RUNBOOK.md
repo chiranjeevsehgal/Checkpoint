@@ -27,6 +27,17 @@ forever, so a backlog means Kafka is down or the dispatcher is wedged.
 - Extraction batches just wait; notification/rollup/MCP are Kafka-free and
   unaffected.
 
+## Retry backlog / dead letters
+
+- `retry_jobs` is the durable delayed-retry queue
+  (`pending|processing|dispatched|failed|skipped`); inspect with
+  `SELECT status, next_attempt_at, attempts, last_stage, last_error FROM
+  retry_jobs ORDER BY updated_at DESC`.
+- Rows stuck in `processing` are reclaimed after `retry.reclaim_after_seconds`
+  (default 300). Terminal `failed` rows carry the full `attempt_log`; set
+  `status='pending', next_attempt_at=now()` to force a redelivery.
+- Poison handoffs land on `retry.jobs.v1.dlq` as `RETRY_FAILED`.
+
 ## Kratos down
 
 - Ingestion returns `503 AUTH_UNAVAILABLE` (never a logout); the app shows

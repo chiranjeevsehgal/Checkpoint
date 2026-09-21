@@ -16,14 +16,17 @@ CONFIG_PATH=config.yaml go run ./cmd/main.go
 Provider abstraction over ElevenLabs (default) and Deepgram; retry budget is
 `providers.<name>.max_attempts` in `config.yaml`
 (`TRANSCRIPTION_PROVIDER` overrides the provider, matching `*_API_KEY` env
-must be set). Failed messages are deliberately not committed → redelivered
-on restart. Malformed ids and tombstoned accounts are dropped (committed).
+must be set). A transient failure is handed to the central retry service
+(`KAFKA_TOPIC_RETRY`, default `retry.jobs.v1`) and the message committed; a
+handoff-publish failure leaves the message uncommitted for redelivery.
+Malformed ids and tombstoned accounts are dropped (committed).
 
 ## Config
 
 `CONFIG_PATH` (default `config.yaml`), `TRANSCRIPTION_PROVIDER`,
-`ELEVENLABS_API_KEY`/`DEEPGRAM_API_KEY`, `POSTGRES_DSN`, MinIO + Kafka
-settings in yaml, `METRICS_ADDR` (default `:9081`).
+`ELEVENLABS_API_KEY`/`DEEPGRAM_API_KEY`, `POSTGRES_DSN`, `KAFKA_TOPIC_RETRY`
+(default `retry.jobs.v1`), MinIO + Kafka settings in yaml, `METRICS_ADDR`
+(default `:9081`).
 
 ## Probes
 
