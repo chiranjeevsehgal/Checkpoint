@@ -1,4 +1,3 @@
-import json
 import unittest
 
 from app.retry import build_retry_event

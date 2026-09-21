@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -89,5 +90,68 @@ func TestOriginalEventID(t *testing.T) {
 	}
 	if got := originalEventID([]byte("not json")); got != "" {
 		t.Fatalf("unparseable payload must yield empty key, got %q", got)
+	}
+}
+
+type fakePublisher struct {
+	topic string
+	key   string
+	value interface{}
+}
+
+func (f *fakePublisher) Publish(_ context.Context, topic, key string, value interface{}) error {
+	f.topic, f.key, f.value = topic, key, value
+	return nil
+}
+
+func TestHandoffToRetryUsesSourceTopicAndRetryTopic(t *testing.T) {
+	pub := &fakePublisher{}
+	eventID := "3f0f6b1e-0000-4000-8000-000000000001"
+	job := model.Job{
+		AudioID:     "3f0f6b1e-0000-4000-8000-000000000003",
+		SourceEvent: []byte(`{"schema_version":2,"event_id":"` + eventID + `","data":{"user_id":"u1"}}`),
+	}
+
+	err := handoffToRetry(context.Background(), pub, "extraction.jobs.v1", "retry.jobs.v1", job,
+		staged("llm_call", "PROVIDER_ERROR", errors.New("boom")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pub.topic != "retry.jobs.v1" {
+		t.Fatalf("published to %q, want retry.jobs.v1", pub.topic)
+	}
+	if pub.key != eventID {
+		t.Fatalf("key = %q, want %q", pub.key, eventID)
+	}
+	evt, ok := pub.value.(model.RetryRequestedEvent)
+	if !ok {
+		t.Fatalf("value type %T, want model.RetryRequestedEvent", pub.value)
+	}
+	if evt.Data.SourceTopic != "extraction.jobs.v1" {
+		t.Fatalf("source_topic = %q, want extraction.jobs.v1", evt.Data.SourceTopic)
+	}
+	if evt.Data.Stage != "llm_call" || evt.Data.ErrorCode != "PROVIDER_ERROR" || evt.Data.ErrorMessage != "boom" {
+		t.Fatalf("unexpected handoff data: %+v", evt.Data)
+	}
+}
+
+func TestHandoffToRetryRejectsMissingSourceEvent(t *testing.T) {
+	pub := &fakePublisher{}
+	err := handoffToRetry(context.Background(), pub, "extraction.jobs.v1", "retry.jobs.v1",
+		model.Job{AudioID: "x"}, errors.New("boom"))
+	if err == nil {
+		t.Fatal("expected an error for a missing source_event")
+	}
+	if pub.topic != "" {
+		t.Fatalf("nothing should be published, got topic %q", pub.topic)
+	}
+}
+
+func TestFailureMessageUnwrapsStage(t *testing.T) {
+	if got := failureMessage(staged("persist", "DB_ERROR", errors.New("connection reset"))); got != "connection reset" {
+		t.Fatalf("failureMessage = %q, want the unwrapped cause", got)
+	}
+	if got := failureMessage(errors.New("plain")); got != "plain" {
+		t.Fatalf("failureMessage = %q, want plain", got)
 	}
 }

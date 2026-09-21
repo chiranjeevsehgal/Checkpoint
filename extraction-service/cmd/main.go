@@ -357,16 +357,16 @@ func handleBatchFailure(ctx context.Context, store *storage.PostgresStore, produ
 		}
 	}
 	if len(release) > 0 {
-		if rErr := store.ReleaseJobs(ctx, jobIDs(release), err.Error()); rErr != nil {
+		if rErr := store.ReleaseJobs(ctx, jobIDs(release), failureMessage(err)); rErr != nil {
 			slog.Error("release error", "error", rErr)
 		}
 	}
 	if len(fail) > 0 {
-		if fErr := store.FailJobs(ctx, jobIDs(fail), err.Error()); fErr != nil {
+		if fErr := store.FailJobs(ctx, jobIDs(fail), failureMessage(err)); fErr != nil {
 			slog.Error("fail error", "error", fErr)
 		}
 		for _, j := range fail {
-			if hErr := handoffToRetry(ctx, producer, cfg.Kafka.RetryTopic, j, err); hErr != nil {
+			if hErr := handoffToRetry(ctx, producer, cfg.Kafka.ConsumeTopic, cfg.Kafka.RetryTopic, j, err); hErr != nil {
 				slog.Error("retry handoff failed", "audio_id", j.AudioID, "error", hErr)
 				handoffFailures++
 				continue
@@ -397,16 +397,33 @@ func jobIDs(jobs []model.Job) []int64 {
 	return ids
 }
 
-// handoffToRetry publishes one RETRY_REQUESTED handoff for a terminally failed
-// job so the central retry service can re-deliver its trigger event later.
-// Rows with no stored source_event (pre-migration) are skipped.
-func handoffToRetry(ctx context.Context, producer *kafka.Producer, retryTopic string, job model.Job, cause error) error {
+// messagePublisher is the subset of *kafka.Producer the retry handoff needs;
+// narrowed to an interface so tests can capture what was published.
+type messagePublisher interface {
+	Publish(ctx context.Context, topic, key string, value interface{}) error
+}
+
+// handoffToRetry publishes one RETRY_REQUESTED handoff to retryTopic so the
+// central retry service can re-deliver the job's trigger event to sourceTopic
+// later. A row with no stored source_event (pre-migration) is reported as a
+// handoff failure rather than published.
+func handoffToRetry(ctx context.Context, publisher messagePublisher, sourceTopic, retryTopic string, job model.Job, cause error) error {
 	if len(job.SourceEvent) == 0 {
 		return fmt.Errorf("missing source_event")
 	}
 	stage, code := stageAndCode(cause)
-	return producer.Publish(ctx, retryTopic, originalEventID(job.SourceEvent),
-		buildRetryHandoff(retryTopic, stage, code, cause.Error(), job.SourceEvent))
+	return publisher.Publish(ctx, retryTopic, originalEventID(job.SourceEvent),
+		buildRetryHandoff(sourceTopic, stage, code, failureMessage(cause), job.SourceEvent))
+}
+
+// failureMessage returns the underlying error text without the stage prefix,
+// which the handoff and the audit log already carry separately.
+func failureMessage(err error) string {
+	var se *stageError
+	if errors.As(err, &se) {
+		return se.err.Error()
+	}
+	return err.Error()
 }
 
 // buildRetryHandoff is the pure handoff envelope, kept producer-free so it can
