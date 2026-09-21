@@ -4,6 +4,7 @@ kafka:
   consume_topic: extraction.jobs.v1
   consumer_group: extraction-service
   dlq_topic: extraction.jobs.v1.dlq
+  retry_topic: retry.jobs.v1
 
 postgres:
   dsn_env: POSTGRES_DSN

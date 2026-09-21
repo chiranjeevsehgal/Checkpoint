@@ -323,6 +323,7 @@ services:
     environment:
       CONFIG_PATH: /app/config.yaml
       KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_RETRY: ${KAFKA_TOPIC_RETRY:-retry.jobs.v1}
       GROQ_API_KEY: ${GROQ_API_KEY}
       REMINDERS_TIMEZONE: ${REMINDERS_TIMEZONE:-}
       POSTGRES_DSN: postgres://checkpoint_worker:${CHECKPOINT_WORKER_PASSWORD:-checkpoint_worker_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable

@@ -95,14 +95,19 @@ func (p *PostgresStore) UserTimezone(ctx context.Context, userID string) (string
 }
 
 // EnqueueJob inserts the one pending row for (user, audio). Idempotent under
-// Kafka redelivery: a duplicate event is a no-op.
+// Kafka redelivery: a duplicate event is a no-op. A redelivery for a failed
+// row — a retry-service handoff — reactivates it with a fresh attempt budget.
 func (p *PostgresStore) EnqueueJob(ctx context.Context, j model.Job) error {
 	_, err := p.pool.Exec(ctx, `
-		INSERT INTO extraction_jobs (user_id, audio_id, extraction_type, text, language, recorded_at)
-		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::timestamptz)
+		INSERT INTO extraction_jobs (user_id, audio_id, extraction_type, text, language, recorded_at, source_event)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::timestamptz, $7)
 		ON CONFLICT (user_id, audio_id, extraction_type) DO UPDATE SET
-			recorded_at = COALESCE(extraction_jobs.recorded_at, EXCLUDED.recorded_at)`,
-		j.UserID, j.AudioID, j.ExtractionType, j.Text, j.Language, j.RecordedAt)
+			recorded_at = COALESCE(extraction_jobs.recorded_at, EXCLUDED.recorded_at),
+			source_event = CASE WHEN extraction_jobs.status = 'failed' THEN EXCLUDED.source_event ELSE extraction_jobs.source_event END,
+			status       = CASE WHEN extraction_jobs.status = 'failed' THEN 'pending' ELSE extraction_jobs.status END,
+			attempts     = CASE WHEN extraction_jobs.status = 'failed' THEN 0 ELSE extraction_jobs.attempts END,
+			last_error   = CASE WHEN extraction_jobs.status = 'failed' THEN NULL ELSE extraction_jobs.last_error END`,
+		j.UserID, j.AudioID, j.ExtractionType, j.Text, j.Language, j.RecordedAt, j.SourceEvent)
 	if err != nil {
 		return fmt.Errorf("enqueueing extraction job: %w", err)
 	}
@@ -180,7 +185,7 @@ func (p *PostgresStore) ClaimBatch(ctx context.Context, userID, extractionType s
 			LIMIT $3
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, user_id, audio_id, extraction_type, text, language, recorded_at, attempts`,
+		RETURNING id, user_id, audio_id, extraction_type, text, language, recorded_at, attempts, source_event`,
 		userID, extractionType, n)
 	if err != nil {
 		return nil, fmt.Errorf("claiming batch for user %s: %w", userID, err)
@@ -191,7 +196,7 @@ func (p *PostgresStore) ClaimBatch(ctx context.Context, userID, extractionType s
 	for rows.Next() {
 		var j model.Job
 		var recordedAt *time.Time
-		if err := rows.Scan(&j.ID, &j.UserID, &j.AudioID, &j.ExtractionType, &j.Text, &j.Language, &recordedAt, &j.Attempts); err != nil {
+		if err := rows.Scan(&j.ID, &j.UserID, &j.AudioID, &j.ExtractionType, &j.Text, &j.Language, &recordedAt, &j.Attempts, &j.SourceEvent); err != nil {
 			return nil, fmt.Errorf("scanning claimed job: %w", err)
 		}
 		if recordedAt != nil {
@@ -243,7 +248,7 @@ func (p *PostgresStore) CompleteBatch(ctx context.Context, results []model.Resul
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE extraction_jobs
-			SET status = $2, processed_at = now(), updated_at = now(), last_error = NULL
+			SET status = $2, processed_at = now(), updated_at = now(), last_error = NULL, source_event = NULL
 			WHERE id = $1`, r.JobID, status); err != nil {
 			return fmt.Errorf("marking job %d %s: %w", r.JobID, status, err)
 		}

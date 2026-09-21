@@ -75,6 +75,22 @@ func NewProducer(cfg config.KafkaConfig) *Producer {
 	}
 }
 
+// Publish writes value to topic, preserving key for traceability.
+func (p *Producer) Publish(ctx context.Context, topic, key string, value interface{}) error {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("marshalling message: %w", err)
+	}
+	msg := kafkago.Message{Topic: topic, Value: payload}
+	if key != "" {
+		msg.Key = []byte(key)
+	}
+	if err := p.writer.WriteMessages(ctx, msg); err != nil {
+		return fmt.Errorf("publishing message to %s: %w", topic, err)
+	}
+	return nil
+}
+
 // SendToDLQ publishes the standard failure envelope to the DLQ topic. The
 // original payload rides along unmodified inside data.original_event.
 func (p *Producer) SendToDLQ(ctx context.Context, sourceTopic, errorCode, errorMessage string, original json.RawMessage) error {

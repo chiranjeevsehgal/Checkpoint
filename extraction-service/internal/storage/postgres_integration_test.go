@@ -224,6 +224,137 @@ func TestCompleteBatchMarksEmptyResultSkippedAndClears(t *testing.T) {
 	}
 }
 
+// TestEnqueueJobReactivatesFailedRowForRetry verifies a retry-service
+// redelivery resets a failed job with a fresh budget and restores source_event.
+func TestEnqueueJobReactivatesFailedRowForRetry(t *testing.T) {
+	store, pool := newTestStore(t)
+	ctx := context.Background()
+	userID := "d1a2b3c4-0000-4000-8000-00000000f001"
+	audioID := "d1a2b3c4-0000-4000-8000-00000000f002"
+	source := []byte(`{"event_id":"e1","data":{"user_id":"d1a2b3c4-0000-4000-8000-00000000f001"}}`)
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM extraction_jobs WHERE user_id = $1`, userID)
+	})
+
+	if err := store.EnqueueJob(ctx, model.Job{
+		UserID: userID, AudioID: audioID, ExtractionType: model.TypeAll,
+		Text: "hello", SourceEvent: source,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE extraction_jobs SET status = 'failed', attempts = 5, last_error = 'boom'
+		WHERE user_id = $1 AND audio_id = $2`, userID, audioID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.EnqueueJob(ctx, model.Job{
+		UserID: userID, AudioID: audioID, ExtractionType: model.TypeAll,
+		Text: "hello", SourceEvent: source,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var status string
+	var attempts int
+	var storedSource []byte
+	if err := pool.QueryRow(ctx, `
+		SELECT status, attempts, source_event FROM extraction_jobs
+		WHERE user_id = $1 AND audio_id = $2`, userID, audioID).Scan(&status, &attempts, &storedSource); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" || attempts != 0 {
+		t.Fatalf("failed row not reactivated: status=%s attempts=%d", status, attempts)
+	}
+	if len(storedSource) == 0 {
+		t.Fatal("source_event must be restored for the next handoff")
+	}
+}
+
+// TestEnqueueJobLeavesCompletedRowUntouched guards against a duplicate
+// delivery resurrecting an already-done job.
+func TestEnqueueJobLeavesCompletedRowUntouched(t *testing.T) {
+	store, pool := newTestStore(t)
+	ctx := context.Background()
+	userID := "d1a2b3c4-0000-4000-8000-00000000f011"
+	audioID := "d1a2b3c4-0000-4000-8000-00000000f012"
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM extraction_jobs WHERE user_id = $1`, userID)
+	})
+
+	if err := store.EnqueueJob(ctx, model.Job{
+		UserID: userID, AudioID: audioID, ExtractionType: model.TypeAll, Text: "hello",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE extraction_jobs SET status = 'done', attempts = 1, source_event = NULL
+		WHERE user_id = $1 AND audio_id = $2`, userID, audioID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.EnqueueJob(ctx, model.Job{
+		UserID: userID, AudioID: audioID, ExtractionType: model.TypeAll, Text: "hello",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var status string
+	var source []byte
+	if err := pool.QueryRow(ctx, `
+		SELECT status, source_event FROM extraction_jobs
+		WHERE user_id = $1 AND audio_id = $2`, userID, audioID).Scan(&status, &source); err != nil {
+		t.Fatal(err)
+	}
+	if status != "done" {
+		t.Fatalf("completed row must stay done, got %s", status)
+	}
+	if len(source) != 0 {
+		t.Fatal("completed row must not regain source_event")
+	}
+}
+
+// TestCompleteBatchClearsSourceEvent verifies the raw trigger event is dropped
+// once a job reaches a terminal success.
+func TestCompleteBatchClearsSourceEvent(t *testing.T) {
+	store, pool := newTestStore(t)
+	ctx := context.Background()
+	userID := "d1a2b3c4-0000-4000-8000-00000000f021"
+	audioID := "d1a2b3c4-0000-4000-8000-00000000f022"
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM extraction_jobs WHERE user_id = $1`, userID)
+	})
+
+	if err := store.EnqueueJob(ctx, model.Job{
+		UserID: userID, AudioID: audioID, ExtractionType: model.TypeAll,
+		Text: "hello", SourceEvent: []byte(`{"event_id":"e2"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimBatch(ctx, userID, model.TypeAll, 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim: %v jobs=%d", err, len(claimed))
+	}
+
+	if err := store.CompleteBatch(ctx, []model.Result{{
+		JobID: claimed[0].ID, UserID: userID, AudioID: audioID,
+	}}, "test-model"); err != nil {
+		t.Fatal(err)
+	}
+
+	var source []byte
+	if err := pool.QueryRow(ctx,
+		`SELECT source_event FROM extraction_jobs WHERE id = $1`, claimed[0].ID).Scan(&source); err != nil {
+		t.Fatal(err)
+	}
+	if len(source) != 0 {
+		t.Fatal("source_event must be cleared after a terminal success")
+	}
+}
+
 func TestUserTimezoneReadsSettings(t *testing.T) {
 	store, pool := newTestStore(t)
 	ctx := context.Background()
