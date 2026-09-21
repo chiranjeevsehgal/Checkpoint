@@ -53,8 +53,8 @@ export const INGEST_MAX_BYTES = 10 * 1024 * 1024;
 export const INGEST_POLL_TIMEOUT_S = 30;
 export const INGEST_POLL_INTERVAL_S = 1.0;
 
-export const VAD_THRESHOLD_DEFAULT = 0.85;
-export const VAD_MIN_SPEECH_S_DEFAULT = 1.5;
+export const VAD_THRESHOLD_DEFAULT = 0.4;
+export const VAD_MIN_SPEECH_S_DEFAULT = 1.0;
 export const VAD_MIN_SPEECH_MS = 800;
 export const VAD_MIN_SILENCE_MS = 500;
 export const VAD_PAD_MS = 200;

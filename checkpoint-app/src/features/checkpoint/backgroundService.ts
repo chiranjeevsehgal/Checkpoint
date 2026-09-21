@@ -24,9 +24,8 @@ export interface SyncStatus {
   reminders: boolean;
 }
 
-function syncBody({ connected, recording, reminders }: SyncStatus): string {
+function syncBody({ connected, recording }: SyncStatus): string {
   if (connected) return recording ? "I'm all ears" : 'Pendant Mic is off';
-  if (reminders) return 'Reminders on';
   return 'Not Connected';
 }
 

@@ -9,7 +9,7 @@ import {
 import { env } from '@/lib/env';
 import { getDevHost, loadServerConfig, resolveApiUrl } from '@/lib/server-config';
 import { storage } from '@/lib/storage';
-import { settingsKey } from '@/lib/storage/keys';
+import { prefKey, settingsKey } from '@/lib/storage/keys';
 
 export interface CheckpointSettings {
   serverUrl: string;
@@ -37,6 +37,30 @@ const KEYS = {
   developerMode: settingsKey('developerMode'),
 } as const;
 
+// One-time migration to the current VAD defaults. Runs once per install;
+// a field is only rewritten when it still holds the previous default, so
+// values the user tuned themselves are left alone.
+const VAD_DEFAULTS_VERSION_KEY = prefKey('vadDefaultsV2');
+const PREVIOUS_VAD_THRESHOLD = 0.85;
+const PREVIOUS_VAD_MIN_SPEECH_S = 1.5;
+
+async function migrateVadDefaults(): Promise<void> {
+  if ((await storage.get(VAD_DEFAULTS_VERSION_KEY)) === '1') return;
+  const [threshold, minSpeechS] = await Promise.all([
+    storage.get(KEYS.vadThreshold),
+    storage.get(KEYS.minSpeechS),
+  ]);
+  await Promise.all([
+    threshold !== null && Number(threshold) === PREVIOUS_VAD_THRESHOLD
+      ? storage.set(KEYS.vadThreshold, String(VAD_THRESHOLD_DEFAULT))
+      : Promise.resolve(),
+    minSpeechS !== null && Number(minSpeechS) === PREVIOUS_VAD_MIN_SPEECH_S
+      ? storage.set(KEYS.minSpeechS, String(VAD_MIN_SPEECH_S_DEFAULT))
+      : Promise.resolve(),
+    storage.set(VAD_DEFAULTS_VERSION_KEY, '1'),
+  ]);
+}
+
 export function defaultSettings(): CheckpointSettings {
   return {
     serverUrl: resolveApiUrl(),
@@ -46,7 +70,7 @@ export function defaultSettings(): CheckpointSettings {
     ingestEnabled: true,
     vadEnabled: true,
     autoSyncEnabled: true,
-    remindersEnabled: false,
+    remindersEnabled: true,
     retentionHours: TRANSFER_RETENTION_HOURS,
     developerMode: env.devBuild,
   };
@@ -60,6 +84,7 @@ function toNumber(raw: string | null, fallback: number): number {
 
 export async function loadSettings(): Promise<CheckpointSettings> {
   await loadServerConfig();
+  await migrateVadDefaults();
   const defaults = defaultSettings();
   const [
     serverUrl,
@@ -96,10 +121,21 @@ export async function loadSettings(): Promise<CheckpointSettings> {
     ingestEnabled: ingestEnabled !== '0',
     vadEnabled: vadEnabled !== '0',
     autoSyncEnabled: autoSyncEnabled !== '0',
-    remindersEnabled: remindersEnabled === '1',
+    remindersEnabled: remindersEnabled !== '0',
     retentionHours: toNumber(retentionHours, defaults.retentionHours),
     developerMode: resolveDeveloperMode(developerMode, env.devBuild),
   };
+}
+
+/** Null when the user never made a choice (fresh install, pre-default era). */
+export async function loadReminderChoice(): Promise<boolean | null> {
+  const raw = await storage.get(KEYS.remindersEnabled);
+  if (raw === null) return null;
+  return raw === '1';
+}
+
+export async function saveReminderChoice(enabled: boolean): Promise<void> {
+  await storage.set(KEYS.remindersEnabled, enabled ? '1' : '0');
 }
 
 export async function saveSettings(settings: CheckpointSettings): Promise<void> {

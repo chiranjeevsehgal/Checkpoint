@@ -12,6 +12,7 @@ import {
   startReminders,
   stopReminders,
 } from '@/features/checkpoint/reminderSubscriber';
+import { loadReminderChoice, saveReminderChoice } from '@/features/checkpoint/settings';
 import { syncEngine } from '@/features/checkpoint/syncEngine';
 import { enableNotifications, getNotificationSettings } from '@/lib/api/notifications-api';
 import { putUserSettings } from '@/lib/api/settings-api';
@@ -103,13 +104,21 @@ export function AuthSyncBridge({ children }: PropsWithChildren) {
       const token = getSessionToken();
       if (!token) return;
       try {
-        const channel = await getNotificationSettings(token);
+        let channel = await getNotificationSettings(token);
         if (!channel.enabled || !channel.topic) {
           if (cancelled) return;
-          stopReminders();
-          configureReminders(null);
-          await clearReminderSubscription();
-          return;
+          if ((await loadReminderChoice()) !== null) {
+            stopReminders();
+            configureReminders(null);
+            await clearReminderSubscription();
+            return;
+          }
+          // No stored choice: reminders default on, so provision silently.
+          // Failures fall through to the catch below and retry later.
+          channel = await enableNotifications(token);
+          if (cancelled) return;
+          if (!channel.topic) return;
+          await saveReminderChoice(true);
         }
         // A channel that predates per-user auth has no token; enabling again
         // provisions the dedicated ntfy user and returns its read token.
