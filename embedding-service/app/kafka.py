@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 
 from confluent_kafka import Consumer, Producer, TopicPartition
 
+from .retry import build_retry_event
+
 
 class Kafka:
     """Offsets commit only after a message is fully processed (embedded + stored);
@@ -80,24 +82,14 @@ class Kafka:
         attempt-bounded re-delivery. Keyed by the original event id so every
         handoff for one original lands on the same retry partition, keeping
         the attempt history in order."""
-        try:
-            original = json.loads(original_payload)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            original = original_payload.decode("utf-8", errors="replace")
-        event = {
-            "schema_version": 2,
-            "event_id": str(uuid.uuid4()),
-            "event_type": "RETRY_REQUESTED",
-            "occurred_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-            "data": {
-                "source_service": source_service,
-                "source_topic": self._topic,
-                "stage": stage,
-                "error_code": error_code,
-                "error_message": error_message,
-                "original_event": original,
-            },
-        }
+        event = build_retry_event(
+            source_service,
+            self._topic,
+            stage,
+            error_code,
+            error_message,
+            original_payload,
+        )
         self._producer.produce(
             self._retry_topic,
             key=key,

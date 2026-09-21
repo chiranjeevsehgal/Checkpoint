@@ -247,18 +247,24 @@ func handoffToRetry(ctx context.Context, producer *kafka.Producer, kafkaCfg conf
 	if errors.As(err, &se) {
 		stage, code = se.stage, se.code
 	}
-	handoff := model.RetryRequestedEvent{
+	handoff := buildRetryHandoff(kafkaCfg.ConsumeTopic, stage, code, err.Error(), json.RawMessage(msg.Value))
+	return producer.Publish(ctx, kafkaCfg.RetryTopic, event.EventID, handoff)
+}
+
+// buildRetryHandoff is the pure handoff envelope, kept producer-free so it can
+// be unit-tested without a broker.
+func buildRetryHandoff(sourceTopic, stage, code, message string, originalEvent json.RawMessage) model.RetryRequestedEvent {
+	return model.RetryRequestedEvent{
 		Envelope: newEnvelope(model.EventTypeRetryRequested),
 		Data: model.RetryRequestedData{
 			SourceService: "transcription-service",
-			SourceTopic:   kafkaCfg.ConsumeTopic,
+			SourceTopic:   sourceTopic,
 			Stage:         stage,
 			ErrorCode:     code,
-			ErrorMessage:  err.Error(),
-			OriginalEvent: json.RawMessage(msg.Value),
+			ErrorMessage:  message,
+			OriginalEvent: originalEvent,
 		},
 	}
-	return producer.Publish(ctx, kafkaCfg.RetryTopic, event.EventID, handoff)
 }
 
 func publishEmbeddingJob(ctx context.Context, producer *kafka.Producer, topic string, result *model.TranscriptResult) error {
