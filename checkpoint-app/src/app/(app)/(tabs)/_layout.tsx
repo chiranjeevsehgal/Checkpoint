@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { ArrowDownUp, HardDrive, Settings } from 'lucide-react-native';
+import { ArrowDownUp, HardDrive, NotebookPen, Settings } from 'lucide-react-native';
 import { useColorScheme } from 'nativewind';
 
 import { PendantLogo } from '@/components/shared/pendant-logo';
@@ -32,6 +32,13 @@ export default function TabsLayout() {
         options={{
           title: 'Pendant',
           tabBarIcon: ({ color, size }) => <PendantLogo height={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="notes"
+        options={{
+          title: 'Notes',
+          tabBarIcon: ({ color, size }) => <Icon as={NotebookPen} color={color} size={size} />,
         }}
       />
       <Tabs.Screen
