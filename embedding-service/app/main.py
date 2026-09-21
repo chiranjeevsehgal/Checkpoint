@@ -32,7 +32,7 @@ def main() -> None:
     chunker = TokenChunker(embedder.tokenizer, cfg.chunk_tokens, cfg.chunk_overlap_tokens)
     store = Store(cfg.database_url)
     store.connect()
-    kafka = Kafka(cfg.kafka_brokers, cfg.kafka_topic, cfg.kafka_consumer_group)
+    kafka = Kafka(cfg.kafka_brokers, cfg.kafka_topic, cfg.kafka_consumer_group, cfg.kafka_retry_topic)
     log.info(
         "listening",
         extra={
@@ -126,13 +126,41 @@ def main() -> None:
                 kafka.commit(msg)
                 health.inc("embedding_events_ok_total")
         except Exception as exc:
-            # Only InvalidEvent and StaleDeletedUser are terminal (committed
-            # above). Everything else — psycopg.Error, Kafka errors, model
-            # failures — retries with backoff by design, mirroring the Go
-            # workers' redelivery model. The class name is logged so new
-            # terminal cases can be split out when they appear.
+            stage = getattr(exc, "stage", "process")
+            error_code = getattr(exc, "error_code", "PROCESSING_ERROR")
             retry_attempt += 1
-            backoff = cfg.retry_backoffs[min(retry_attempt - 1, len(cfg.retry_backoffs) - 1)]
+            if retry_attempt > len(cfg.retry_backoffs):
+                # Fast local retries exhausted: hand each event to the
+                # central delayed-retry service instead of looping forever.
+                log.error(
+                    "handing off to retry service",
+                    extra={
+                        "stage": stage,
+                        "events": len(jobs),
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                # Drop the pooled pg connection: if the failure was a
+                # broken socket, reusing it would fail every subsequent
+                # attempt.
+                try:
+                    store.reset()
+                except psycopg.Error:
+                    log.warning("pg reconnect failed; will retry next attempt")
+                for msg, event, _ in jobs:
+                    kafka.send_to_retry(
+                        "embedding-service",
+                        stage,
+                        error_code,
+                        str(exc),
+                        msg.value(),
+                        key=event.event_id,
+                    )
+                    kafka.commit(msg)
+                retry_attempt = 0
+                continue
+            backoff = cfg.retry_backoffs[retry_attempt - 1]
             log.error(
                 "transient failure; retrying",
                 extra={

@@ -281,6 +281,7 @@ services:
     environment:
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC_EMBEDDING: ${KAFKA_TOPIC_EMBEDDING:-embedding.jobs.v1}
+      KAFKA_TOPIC_RETRY: ${KAFKA_TOPIC_RETRY:-retry.jobs.v1}
       KAFKA_CONSUMER_GROUP: embedding-service
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
