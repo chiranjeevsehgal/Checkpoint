@@ -1,27 +1,19 @@
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Terminal } from 'lucide-react-native';
+import { ArrowLeft, CircleUser } from 'lucide-react-native';
 import { Pressable, View } from 'react-native';
 
 import { HeaderIconButton } from '@/components/shared/header-icon-button';
 import { Icon } from '@/components/ui/icon';
 import { Text } from '@/components/ui/text';
-import { env } from '@/lib/env';
 
 interface AppHeaderProps {
   title: string;
   subtitle?: string;
   onBack?: () => void;
-  showDebugLog?: boolean;
   action?: React.ReactNode;
 }
 
-export function AppHeader({
-  title,
-  subtitle,
-  onBack,
-  showDebugLog = env.devBuild,
-  action,
-}: AppHeaderProps) {
+export function AppHeader({ title, subtitle, onBack, action }: AppHeaderProps) {
   const router = useRouter();
 
   return (
@@ -44,11 +36,11 @@ export function AppHeader({
       </View>
       <View className="flex-row items-center gap-2">
         {action}
-        {showDebugLog ? (
+        {!onBack ? (
           <HeaderIconButton
-            icon={Terminal}
-            label="Open debug log"
-            onPress={() => router.push('/debug-log')}
+            icon={CircleUser}
+            label="Account"
+            onPress={() => router.push('/account')}
           />
         ) : null}
       </View>

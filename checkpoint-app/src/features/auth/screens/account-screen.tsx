@@ -1,9 +1,11 @@
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView } from 'react-native';
 
+import { AppHeader } from '@/components/shared/app-header';
 import { Screen } from '@/components/shared/screen';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Text } from '@/components/ui/text';
@@ -14,6 +16,18 @@ import { PasswordRules } from '@/features/auth/password-rules';
 import { deleteAccount } from '@/lib/api/account-api';
 import { requireDeviceCheck } from '@/lib/biometric';
 import { getSessionToken } from '@/lib/session';
+
+function McpAccessCard({ onPress }: { onPress: () => void }) {
+  return (
+    <Card className="mt-4">
+      <CardContent className="gap-4 pt-6">
+        <Button variant="outline" onPress={onPress}>
+          <Text>MCP access</Text>
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
 
 export function AccountScreen() {
   const {
@@ -33,6 +47,9 @@ export function AccountScreen() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const router = useRouter();
+  const accountLabel = name ?? email ?? 'Signed in';
+  const goBack = () => router.back();
 
   async function change() {
     setBusy(true);
@@ -83,16 +100,13 @@ export function AccountScreen() {
 
   return (
     <Screen className="px-6">
+      <AppHeader title="Account" subtitle={accountLabel} onBack={goBack} />
       <ScrollView
         contentContainerStyle={{ paddingVertical: 24 }}
         showsVerticalScrollIndicator={false}
       >
         <Card>
-          <CardHeader>
-            <CardTitle>Account</CardTitle>
-            <CardDescription>{name ?? email ?? 'Signed in'}</CardDescription>
-          </CardHeader>
-          <CardContent className="gap-4">
+          <CardContent className="gap-4 pt-6">
             <Text className="text-muted-foreground">
               {status === 'authenticated' ? 'Email verified' : 'Email not verified'}
             </Text>
@@ -120,6 +134,8 @@ export function AccountScreen() {
             {message ? <Text className="text-primary-text">{message}</Text> : null}
           </CardContent>
         </Card>
+
+        <McpAccessCard onPress={() => router.push('/mcp-keys')} />
 
         <Card className="mt-4">
           <CardContent className="gap-4 pt-6">
