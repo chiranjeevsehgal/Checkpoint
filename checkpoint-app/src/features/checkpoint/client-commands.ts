@@ -59,14 +59,8 @@ export async function cmdLedGet(transport: CommandTransport): Promise<CmdRespons
   return (await transport.roundtrip(PKT_CMD, new Uint8Array([0x11]))) as CmdResponse;
 }
 
-export async function cmdSyncSet(
-  transport: CommandTransport,
-  enabled: boolean,
-): Promise<number> {
-  const res = (await transport.roundtrip(
-    PKT_CMD,
-    buildSyncSetPayload(enabled),
-  )) as CmdResponse;
+export async function cmdSyncSet(transport: CommandTransport, enabled: boolean): Promise<number> {
+  const res = (await transport.roundtrip(PKT_CMD, buildSyncSetPayload(enabled))) as CmdResponse;
   return statusOf(res);
 }
 
@@ -78,10 +72,7 @@ export async function cmdTimeSet(
   transport: CommandTransport,
   unixSeconds: number,
 ): Promise<number> {
-  const res = (await transport.roundtrip(
-    PKT_CMD,
-    buildTimeSetPayload(unixSeconds),
-  )) as CmdResponse;
+  const res = (await transport.roundtrip(PKT_CMD, buildTimeSetPayload(unixSeconds))) as CmdResponse;
   return statusOf(res);
 }
 
@@ -97,34 +88,19 @@ export async function reqStorage(transport: CommandTransport): Promise<StorageIn
   return res as StorageInfo;
 }
 
-export async function reqList(
-  transport: CommandTransport,
-  start = 0,
-): Promise<DeviceFileList> {
+export async function reqList(transport: CommandTransport, start = 0): Promise<DeviceFileList> {
   const res = await transport.roundtrip(PKT_LIST_REQ, buildListReqPayload(start));
   if (!('entries' in res)) throw new Error('Bad LIST_RESP');
   return res as DeviceFileList;
 }
 
-export async function cmdFileDelete(
-  transport: CommandTransport,
-  path: string,
-): Promise<number> {
-  const res = (await transport.roundtrip(
-    PKT_CMD,
-    buildFileDeletePayload(path),
-  )) as CmdResponse;
+export async function cmdFileDelete(transport: CommandTransport, path: string): Promise<number> {
+  const res = (await transport.roundtrip(PKT_CMD, buildFileDeletePayload(path))) as CmdResponse;
   return statusOf(res);
 }
 
-export async function cmdFileFetch(
-  transport: CommandTransport,
-  path: string,
-): Promise<number> {
-  const res = (await transport.roundtrip(
-    PKT_CMD,
-    buildFileFetchPayload(path),
-  )) as CmdResponse;
+export async function cmdFileFetch(transport: CommandTransport, path: string): Promise<number> {
+  const res = (await transport.roundtrip(PKT_CMD, buildFileFetchPayload(path))) as CmdResponse;
   return statusOf(res);
 }
 
@@ -132,16 +108,10 @@ export async function cmdStorageErase(
   transport: CommandTransport,
   step: number,
 ): Promise<CmdResponse> {
-  return (await transport.roundtrip(
-    PKT_CMD,
-    buildStorageErasePayload(step),
-    10000,
-  )) as CmdResponse;
+  return (await transport.roundtrip(PKT_CMD, buildStorageErasePayload(step), 10000)) as CmdResponse;
 }
 
-export async function getCloudSecret(
-  transport: CommandTransport,
-): Promise<Uint8Array | null> {
+export async function getCloudSecret(transport: CommandTransport): Promise<Uint8Array | null> {
   const res = (await transport.roundtrip(
     PKT_CMD,
     new Uint8Array([CTRL_CMD_GET_CLOUD_SECRET]),
