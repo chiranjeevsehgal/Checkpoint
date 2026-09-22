@@ -147,7 +147,7 @@ class LoginRouteTest(unittest.TestCase):
         with mock.patch.object(oauth_web, "_kratos_call", side_effect=kratos_stub()):
             response = build_client().post("/login", data={"req": REQ_ID, "email": EMAIL})
         self.assertEqual(response.status_code, 200)
-        self.assertIn("We sent a sign-in code", response.text)
+        self.assertIn("We sent a one-time code", response.text)
         self.assertIn(FLOW_ID, response.text)
 
     def test_send_code_without_email_prompts(self):
@@ -166,7 +166,7 @@ class LoginRouteTest(unittest.TestCase):
         client = build_client()
         with mock.patch.object(oauth_web, "_kratos_call", side_effect=kratos_stub()):
             for _ in range(oauth_web._LOGIN_SEND_BURST):
-                self.assertIn("We sent a sign-in code",
+                self.assertIn("We sent a one-time code",
                               client.post("/login", data={"req": REQ_ID, "email": EMAIL}).text)
             response = client.post("/login", data={"req": REQ_ID, "email": EMAIL})
         self.assertIn("Too many code requests.", response.text)

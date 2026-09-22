@@ -3,7 +3,7 @@
 The MCP SDK serves the standard OAuth routes; this module adds the two
 human-facing steps. Login emails a one-time code through Kratos (native login
 API, `code` method), then a short-lived signed cookie carries the user into
-consent.
+consent. Markup and styling live in oauth_pages.
 """
 
 import asyncio
@@ -18,10 +18,18 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, urlunparse
 
 from mcp.server.auth.provider import construct_redirect_uri
-from starlette.responses import HTMLResponse, RedirectResponse, Response
+from starlette.responses import RedirectResponse, Response
 
 from .hashing import hash_secret
 from .oauth import CODE_TTL_SECONDS, CheckpointOAuthProvider
+from .oauth_pages import (
+    CODE_BODY,
+    CONSENT_BODY,
+    LOGIN_BODY,
+    error_block,
+    error_response,
+    render,
+)
 from .oauth_session import csrf_token, sign_session, verify_csrf, verify_session
 from .oauth_store import OAuthStore
 from .ratelimit import RateLimiter
@@ -32,56 +40,6 @@ _KRATOS_MAX_ATTEMPTS = 3
 _KRATOS_RETRY_BACKOFFS = (0.5, 1.0)
 _LOGIN_SEND_PER_MINUTE = 3
 _LOGIN_SEND_BURST = 3
-
-_LOGIN_HTML = """<!doctype html><html><head><meta charset="utf-8">
-<title>Checkpoint sign in</title></head><body>
-<h1>Sign in to Checkpoint</h1>
-{error}
-<form method="post" action="/login">
-<input type="hidden" name="req" value="{req}">
-<p><label>Email <input type="email" name="email" autocomplete="username" required></label></p>
-<p><button type="submit">Send me a code</button></p>
-</form></body></html>"""
-
-_CODE_HTML = """<!doctype html><html><head><meta charset="utf-8">
-<title>Checkpoint sign in</title></head><body>
-<h1>Check your email</h1>
-<p>We sent a sign-in code to <strong>{email}</strong>.</p>
-{error}
-<form method="post" action="/login">
-<input type="hidden" name="req" value="{req}">
-<input type="hidden" name="flow" value="{flow}">
-<input type="hidden" name="email" value="{email}">
-<p><label>Code <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" required></label></p>
-<p><button type="submit">Sign in</button></p>
-</form>
-<form method="post" action="/login">
-<input type="hidden" name="req" value="{req}">
-<input type="hidden" name="email" value="{email}">
-<p><button type="submit">Send a new code</button></p>
-</form>
-<p><a href="/login?req={req}">Use a different email</a></p>
-</body></html>"""
-
-_CONSENT_HTML = """<!doctype html><html><head><meta charset="utf-8">
-<title>Authorize {client}</title></head><body>
-<h1>Authorize {client}</h1>
-<p>{client} is requesting access to your Checkpoint recordings.</p>
-<p>Scope: <strong>{scopes}</strong></p>
-<form method="post" action="/consent">
-<input type="hidden" name="req" value="{req}">
-<input type="hidden" name="csrf" value="{csrf}">
-<p><button type="submit" name="decision" value="allow">Allow</button>
-<button type="submit" name="decision" value="deny">Deny</button></p>
-</form></body></html>"""
-
-
-def _error_block(message: str | None) -> str:
-    return f'<p role="alert">{html.escape(message)}</p>' if message else ""
-
-
-def _render(template: str, **values: str) -> HTMLResponse:
-    return HTMLResponse(template.format(**values))
 
 
 async def _form_value(request, name: str) -> str:
@@ -214,12 +172,13 @@ def register_oauth_routes(server, provider: CheckpointOAuthProvider, store: OAut
         request_id = (request.query_params.get("req") or await _form_value(request, "req")).strip()
         auth_request = await asyncio.to_thread(store.load_auth_request, request_id) if request_id else None
         if auth_request is None:
-            return _render(_LOGIN_HTML, req="", error=_error_block("This sign-in link has expired."))
+            return render("Sign in", LOGIN_BODY, req="",
+                          error=error_block("This sign-in link has expired."))
         if request.method == "GET":
             user_id = verify_session(secret, request.cookies.get(SESSION_COOKIE))
             if user_id:
                 return RedirectResponse(f"/consent?req={request_id}", status_code=303)
-            return _render(_LOGIN_HTML, req=html.escape(request_id), error="")
+            return render("Sign in", LOGIN_BODY, req=html.escape(request_id), error="")
         email = (await _form_value(request, "email")).strip()
         flow_id = (await _form_value(request, "flow")).strip()
         if flow_id:
@@ -227,21 +186,23 @@ def register_oauth_routes(server, provider: CheckpointOAuthProvider, store: OAut
             user_id, error = await asyncio.to_thread(
                 kratos_login_finish, kratos_url, flow_id, email, code)
             if error or not user_id:
-                return _render(_CODE_HTML, req=html.escape(request_id), flow=html.escape(flow_id),
-                               email=html.escape(email), error=_error_block(error))
+                return render("Check your email", CODE_BODY, req=html.escape(request_id),
+                              flow=html.escape(flow_id), email=html.escape(email),
+                              error=error_block(error))
         elif not email:
-            return _render(_LOGIN_HTML, req=html.escape(request_id),
-                           error=_error_block("Enter your email address."))
+            return render("Sign in", LOGIN_BODY, req=html.escape(request_id),
+                          error=error_block("Enter your email address."))
         else:
             allowed, _ = login_send_limiter.allow(email.lower())
             if not allowed:
-                return _render(_LOGIN_HTML, req=html.escape(request_id),
-                               error=_error_block("Too many code requests. Try again shortly."))
+                return render("Sign in", LOGIN_BODY, req=html.escape(request_id),
+                              error=error_block("Too many code requests. Try again shortly."))
             flow_id, error = await asyncio.to_thread(kratos_login_start, kratos_url, email)
             if error or not flow_id:
-                return _render(_LOGIN_HTML, req=html.escape(request_id), error=_error_block(error))
-            return _render(_CODE_HTML, req=html.escape(request_id), flow=html.escape(flow_id),
-                           email=html.escape(email), error="")
+                return render("Sign in", LOGIN_BODY, req=html.escape(request_id),
+                              error=error_block(error))
+            return render("Check your email", CODE_BODY, req=html.escape(request_id),
+                          flow=html.escape(flow_id), email=html.escape(email), error="")
         response = RedirectResponse(f"/consent?req={request_id}", status_code=303)
         response.set_cookie(SESSION_COOKIE, sign_session(secret, user_id), max_age=600,
                             httponly=True, secure=cookie_secure, samesite="lax", path="/")
@@ -255,14 +216,15 @@ def register_oauth_routes(server, provider: CheckpointOAuthProvider, store: OAut
             return RedirectResponse(f"/login?req={request_id}", status_code=303)
         auth_request = await asyncio.to_thread(store.load_auth_request, request_id) if request_id else None
         if auth_request is None:
-            return _error("This authorization request has expired.")
+            return error_response("This authorization request has expired.")
         if request.method == "GET":
             client = await _client_name(provider, auth_request.client_id)
-            return _render(_CONSENT_HTML, client=html.escape(client), scopes=html.escape(auth_request.scopes),
-                           req=html.escape(request_id), csrf=csrf_token(secret, request_id))
+            return render("Authorize", CONSENT_BODY, client=html.escape(client),
+                          scopes=html.escape(auth_request.scopes), req=html.escape(request_id),
+                          csrf=csrf_token(secret, request_id))
         csrf = await _form_value(request, "csrf")
         if not verify_csrf(secret, request_id, csrf):
-            return _error("Invalid consent submission. Start again from the client.")
+            return error_response("Invalid consent submission. Start again from the client.")
         if await _form_value(request, "decision") != "allow":
             return RedirectResponse(
                 construct_redirect_uri(auth_request.redirect_uri, error="access_denied",
@@ -285,7 +247,3 @@ def register_oauth_routes(server, provider: CheckpointOAuthProvider, store: OAut
 async def _client_name(provider: CheckpointOAuthProvider, client_id: str) -> str:
     client = await provider.get_client(client_id)
     return client.client_name if client and client.client_name else "An AI assistant"
-
-
-def _error(message: str) -> HTMLResponse:
-    return HTMLResponse(f"<!doctype html><html><body><p>{html.escape(message)}</p></body></html>", status_code=400)
