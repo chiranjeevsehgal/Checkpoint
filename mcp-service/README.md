@@ -27,8 +27,8 @@ dense-only. Search is per-account rate limited (`MCP_SEARCH_PER_MINUTE`,
 
 Static `cp_mcp_` keys (mint via ingestion `POST /v1/me/mcp-keys`) plus OAuth
 2.1 for hosted clients when `MCP_OAUTH_SESSION_SECRET` + `KRATOS_PUBLIC_URL`
-are set. All reads run as `checkpoint_mcp` with per-transaction
-`app.user_id` (RLS).
+are set. OAuth sign-in emails a one-time code through Kratos (no password).
+All reads run as `checkpoint_mcp` with per-transaction `app.user_id` (RLS).
 
 ## Config (env)
 

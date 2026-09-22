@@ -52,6 +52,12 @@ selfservice:
       enabled: false
     code:
       enabled: true
+      # Passwordless email one-time-code login (used by the MCP OAuth sign-in page).
+      passwordless_enabled: true
+      config:
+        # Accounts created before the `code` identity-schema extension have no
+        # code credential; let Kratos send a code to their verified address.
+        missing_credential_fallback_enabled: true
     link:
       enabled: false
     oidc:
