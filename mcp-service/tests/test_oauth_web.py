@@ -49,7 +49,7 @@ class HelperTest(unittest.TestCase):
 
 def kratos_stub(send_response=None, verify_response=None):
     """_kratos_call stub covering the GET-flow / POST-identifier / POST-code / whoami calls."""
-    send_response = send_response or (400, {"id": FLOW_ID, "state": "email_sent"})
+    send_response = send_response or (400, {"id": FLOW_ID, "state": "sent_email"})
 
     def call(url, method, body=None, token=None):
         if url.endswith("/sessions/whoami"):
@@ -66,6 +66,10 @@ def kratos_stub(send_response=None, verify_response=None):
 
 @unittest.skipUnless(oauth_web, "mcp package not installed")
 class KratosLoginTest(unittest.TestCase):
+    def test_flow_state_matches_kratos(self):
+        # Verified against Kratos v26.2.0 selfservice/flow/state.go (StateEmailSent).
+        self.assertEqual(oauth_web._KRATOS_STATE_SENT_EMAIL, "sent_email")
+
     def test_start_returns_flow_id_when_code_sent(self):
         with mock.patch.object(oauth_web, "_kratos_call", side_effect=kratos_stub()):
             flow_id, error = oauth_web.kratos_login_start(KRATOS, EMAIL)

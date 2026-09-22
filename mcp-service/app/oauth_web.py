@@ -41,6 +41,8 @@ _KRATOS_MAX_ATTEMPTS = 3
 _KRATOS_RETRY_BACKOFFS = (0.5, 1.0)
 _LOGIN_SEND_PER_MINUTE = 3
 _LOGIN_SEND_BURST = 3
+# Kratos' flow state once the code has been emailed (flow.StateEmailSent).
+_KRATOS_STATE_SENT_EMAIL = "sent_email"
 
 log = logging.getLogger(__name__)
 
@@ -140,8 +142,8 @@ def kratos_login_start(kratos_url: str, email: str) -> tuple[str | None, str | N
     action = _resolve_kratos_url(kratos_url, flow["ui"]["action"])
     status, result = _kratos_call(action, "POST", {"method": "code", "identifier": email})
     # Kratos answers 400 for API/SPA clients once the code is sent; the body is
-    # the updated flow whose state is "email_sent".
-    if result.get("state") == "email_sent" and _is_uuid(result.get("id")):
+    # the updated flow whose state is "sent_email".
+    if result.get("state") == _KRATOS_STATE_SENT_EMAIL and _is_uuid(result.get("id")):
         return str(result["id"]), None
     # Log Kratos' reason for operators; the address stays out of it and the user
     # still gets a generic message so this cannot confirm whether an account exists.
