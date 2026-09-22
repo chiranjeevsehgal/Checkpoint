@@ -12,6 +12,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useColorScheme } from 'nativewind';
 import { useEffect, useState } from 'react';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AppSplash } from '@/components/shared/app-splash';
 import '@/features/checkpoint/backgroundService';
@@ -60,8 +61,10 @@ function RootNavigator() {
 
 export default function RootLayout() {
   return (
-    <AppProviders>
-      <RootNavigator />
-    </AppProviders>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <AppProviders>
+        <RootNavigator />
+      </AppProviders>
+    </GestureHandlerRootView>
   );
 }

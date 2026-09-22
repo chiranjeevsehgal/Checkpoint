@@ -1,12 +1,4 @@
-import {
-  Bell,
-  Check,
-  ListChecks,
-  Pencil,
-  Sparkles,
-  Trash2,
-  type LucideIcon,
-} from 'lucide-react-native';
+import { Bell, Check, ListChecks, Pencil, Sparkles, type LucideIcon } from 'lucide-react-native';
 import type { ReactElement, ReactNode } from 'react';
 import { FlatList, Pressable, SectionList, View } from 'react-native';
 
@@ -15,6 +7,7 @@ import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { AppRefreshControl } from '@/components/ui/refresh-control';
 import { Text } from '@/components/ui/text';
+import { SwipeToDelete } from '@/features/items/components/swipe-to-delete';
 import {
   CATEGORY_ACCENT,
   emptyMessage,
@@ -112,12 +105,10 @@ function RowAction({
   icon,
   label,
   onPress,
-  destructive,
 }: {
   icon: LucideIcon;
   label: string;
   onPress: () => void;
-  destructive?: boolean;
 }) {
   return (
     <Pressable
@@ -126,7 +117,7 @@ function RowAction({
       accessibilityLabel={label}
       className="h-8 w-8 items-center justify-center active:opacity-70"
     >
-      <Icon as={icon} size={14} className={destructive ? 'text-destructive' : undefined} />
+      <Icon as={icon} size={14} />
     </Pressable>
   );
 }
@@ -143,32 +134,37 @@ export function TodoRow({
   onDelete: () => void;
 }) {
   return (
-    <RowCard category="todos">
-      <View className="flex-row items-start gap-3">
-        <Pressable
-          onPress={onToggle}
-          accessibilityRole="checkbox"
-          accessibilityState={{ checked: todo.is_done }}
-          accessibilityLabel={todo.is_done ? 'Mark as not done' : 'Mark as done'}
-          className={cn(
-            'mt-0.5 h-5 w-5 items-center justify-center border',
-            todo.is_done ? 'border-primary bg-primary' : 'border-border',
-          )}
-        >
-          {todo.is_done ? <Icon as={Check} size={13} className="text-primary-foreground" /> : null}
-        </Pressable>
-        <View className="flex-1 gap-0.5">
-          <Text className={cn('text-[14px]', todo.is_done && 'text-muted-foreground line-through')}>
-            {todo.text}
-          </Text>
-          <Text variant="muted" className="text-[11px]">
-            {formatItemDate(itemDate(todo))}
-          </Text>
+    <SwipeToDelete onDelete={onDelete} label="Delete to-do">
+      <RowCard category="todos">
+        <View className="flex-row items-start gap-3">
+          <Pressable
+            onPress={onToggle}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: todo.is_done }}
+            accessibilityLabel={todo.is_done ? 'Mark as not done' : 'Mark as done'}
+            className={cn(
+              'mt-0.5 h-5 w-5 items-center justify-center border',
+              todo.is_done ? 'border-primary bg-primary' : 'border-border',
+            )}
+          >
+            {todo.is_done ? (
+              <Icon as={Check} size={13} className="text-primary-foreground" />
+            ) : null}
+          </Pressable>
+          <View className="flex-1 gap-0.5">
+            <Text
+              className={cn('text-[14px]', todo.is_done && 'text-muted-foreground line-through')}
+            >
+              {todo.text}
+            </Text>
+            <Text variant="muted" className="text-[11px]">
+              {formatItemDate(itemDate(todo))}
+            </Text>
+          </View>
+          <RowAction icon={Pencil} label="Edit to-do" onPress={onEdit} />
         </View>
-        <RowAction icon={Pencil} label="Edit to-do" onPress={onEdit} />
-        <RowAction icon={Trash2} label="Delete to-do" onPress={onDelete} destructive />
-      </View>
-    </RowCard>
+      </RowCard>
+    </SwipeToDelete>
   );
 }
 
@@ -182,24 +178,25 @@ export function ReminderRow({
   onDelete: () => void;
 }) {
   return (
-    <RowCard category="reminders">
-      <View className="flex-row items-start gap-3">
-        <Icon as={Bell} size={16} className="mt-0.5 text-warning" />
-        <View className="flex-1 gap-0.5">
-          <View className="flex-row items-center gap-2">
-            <Text className="flex-1 text-[14px]">{reminder.text}</Text>
-            {reminder.important ? (
-              <Text className="text-[10px] text-warning">Important</Text>
-            ) : null}
+    <SwipeToDelete onDelete={onDelete} label="Delete reminder">
+      <RowCard category="reminders">
+        <View className="flex-row items-start gap-3">
+          <Icon as={Bell} size={16} className="mt-0.5 text-warning" />
+          <View className="flex-1 gap-0.5">
+            <View className="flex-row items-center gap-2">
+              <Text className="flex-1 text-[14px]">{reminder.text}</Text>
+              {reminder.important ? (
+                <Text className="text-[10px] text-warning">Important</Text>
+              ) : null}
+            </View>
+            <Text variant="muted" className="text-[11px]">
+              {formatReminderTime(reminder.remind_at)}
+            </Text>
           </View>
-          <Text variant="muted" className="text-[11px]">
-            {formatReminderTime(reminder.remind_at)}
-          </Text>
+          <RowAction icon={Pencil} label="Edit reminder" onPress={onEdit} />
         </View>
-        <RowAction icon={Pencil} label="Edit reminder" onPress={onEdit} />
-        <RowAction icon={Trash2} label="Delete reminder" onPress={onDelete} destructive />
-      </View>
-    </RowCard>
+      </RowCard>
+    </SwipeToDelete>
   );
 }
 
@@ -213,19 +210,20 @@ export function InsightRow({
   onDelete: () => void;
 }) {
   return (
-    <RowCard category="insights">
-      <View className="flex-row items-start gap-2">
-        <Text className="font-display text-[20px] leading-none text-success">“</Text>
-        <View className="flex-1 gap-0.5">
-          <Text className="text-[14px] italic">{insight.text}</Text>
-          <Text variant="muted" className="text-[11px]">
-            {formatItemDate(insight.created_at)}
-          </Text>
+    <SwipeToDelete onDelete={onDelete} label="Delete insight">
+      <RowCard category="insights">
+        <View className="flex-row items-start gap-2">
+          <Text className="font-display text-[20px] leading-none text-success">“</Text>
+          <View className="flex-1 gap-0.5">
+            <Text className="text-[14px] italic">{insight.text}</Text>
+            <Text variant="muted" className="text-[11px]">
+              {formatItemDate(insight.created_at)}
+            </Text>
+          </View>
+          <RowAction icon={Pencil} label="Edit insight" onPress={onEdit} />
         </View>
-        <RowAction icon={Pencil} label="Edit insight" onPress={onEdit} />
-        <RowAction icon={Trash2} label="Delete insight" onPress={onDelete} destructive />
-      </View>
-    </RowCard>
+      </RowCard>
+    </SwipeToDelete>
   );
 }
 
@@ -239,19 +237,20 @@ export function FeaturedInsight({
   onDelete: () => void;
 }) {
   return (
-    <Card className={cn('mb-3 border-l-2', CATEGORY_ACCENT.insights)}>
-      <Text variant="kicker">Latest insight</Text>
-      <Text className="font-display text-[17px] italic leading-tight">{insight.text}</Text>
-      <View className="flex-row items-center justify-between gap-2">
-        <Text variant="muted" className="text-[11px]">
-          {formatItemDate(insight.created_at)}
-        </Text>
-        <View className="flex-row">
-          <RowAction icon={Pencil} label="Edit insight" onPress={onEdit} />
-          <RowAction icon={Trash2} label="Delete insight" onPress={onDelete} destructive />
-        </View>
-      </View>
-    </Card>
+    <View className="mb-3">
+      <SwipeToDelete onDelete={onDelete} label="Delete insight">
+        <Card className={cn('border-l-2', CATEGORY_ACCENT.insights)}>
+          <Text variant="kicker">Latest insight</Text>
+          <Text className="font-display text-[17px] italic leading-tight">{insight.text}</Text>
+          <View className="flex-row items-center justify-between gap-2">
+            <Text variant="muted" className="text-[11px]">
+              {formatItemDate(insight.created_at)}
+            </Text>
+            <RowAction icon={Pencil} label="Edit insight" onPress={onEdit} />
+          </View>
+        </Card>
+      </SwipeToDelete>
+    </View>
   );
 }
 
