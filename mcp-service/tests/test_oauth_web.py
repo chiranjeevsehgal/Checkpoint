@@ -70,6 +70,27 @@ class KratosLoginTest(unittest.TestCase):
         # Verified against Kratos v26.2.0 selfservice/flow/state.go (StateEmailSent).
         self.assertEqual(oauth_web._KRATOS_STATE_SENT_EMAIL, "sent_email")
 
+    def test_submit_path_matches_kratos(self):
+        # Verified against Kratos v26.2.0 selfservice/flow/login/handler.go
+        # (RouteSubmitFlow); /self-service/login/api only accepts GET.
+        self.assertEqual(oauth_web._KRATOS_SUBMIT_LOGIN_PATH, "/self-service/login")
+
+    def test_finish_posts_to_the_submit_route(self):
+        seen = []
+
+        def call(url, method, body=None, token=None):
+            seen.append(url)
+            if url.endswith("/sessions/whoami"):
+                return 200, {"active": True, "identity": {"id": USER_ID, "verifiable_addresses": [
+                    {"via": "email", "verified": True}]}}
+            return 200, {"session_token": "sess"}
+
+        with mock.patch.object(oauth_web, "_kratos_call", side_effect=call):
+            user_id, error = oauth_web.kratos_login_finish(KRATOS, FLOW_ID, EMAIL, "123456")
+        self.assertEqual(user_id, USER_ID)
+        self.assertIsNone(error)
+        self.assertEqual(seen[0], f"{KRATOS}{oauth_web._KRATOS_SUBMIT_LOGIN_PATH}?flow={FLOW_ID}")
+
     def test_start_returns_flow_id_when_code_sent(self):
         with mock.patch.object(oauth_web, "_kratos_call", side_effect=kratos_stub()):
             flow_id, error = oauth_web.kratos_login_start(KRATOS, EMAIL)

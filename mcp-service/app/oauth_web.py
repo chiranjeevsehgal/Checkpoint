@@ -43,6 +43,9 @@ _LOGIN_SEND_PER_MINUTE = 3
 _LOGIN_SEND_BURST = 3
 # Kratos' flow state once the code has been emailed (flow.StateEmailSent).
 _KRATOS_STATE_SENT_EMAIL = "sent_email"
+# Kratos submits login flows to this path with ?flow=<id> (flow.RouteSubmitFlow);
+# /self-service/login/api only creates flows and rejects POST.
+_KRATOS_SUBMIT_LOGIN_PATH = "/self-service/login"
 
 log = logging.getLogger(__name__)
 
@@ -158,7 +161,7 @@ def kratos_login_finish(kratos_url: str, flow_id: str, email: str,
     """Verify the emailed code. Returns (user_id, error)."""
     if not _is_uuid(flow_id):
         return None, "This sign-in attempt expired. Start again."
-    action = _resolve_kratos_url(kratos_url, f"/self-service/login/api?flow={flow_id}")
+    action = _resolve_kratos_url(kratos_url, f"{_KRATOS_SUBMIT_LOGIN_PATH}?flow={flow_id}")
     status, result = _kratos_call(action, "POST",
                                   {"method": "code", "identifier": email, "code": code})
     token = _session_token(result) if status == 200 else None
