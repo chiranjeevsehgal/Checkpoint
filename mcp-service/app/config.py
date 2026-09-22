@@ -13,6 +13,7 @@ class Config:
     public_url: str
     turbovec_bits: int
     poll_seconds: int
+    reconcile_seconds: int
     fallback_timezone: str
     kratos_public_url: str
     kratos_admin_url: str
@@ -76,6 +77,7 @@ def load() -> Config:
         public_url=os.getenv("MCP_PUBLIC_URL", "http://localhost:1417"),
         turbovec_bits=_int_env("MCP_TURBOVEC_BITS", 4),
         poll_seconds=_int_env("MCP_POLL_SECONDS", 30),
+        reconcile_seconds=_int_env("MCP_RECONCILE_SECONDS", 60),
         fallback_timezone=os.getenv("MCP_FALLBACK_TIMEZONE", "UTC"),
         kratos_public_url=os.getenv("KRATOS_PUBLIC_URL", ""),
         kratos_admin_url=os.getenv("KRATOS_ADMIN_URL", ""),
@@ -94,6 +96,8 @@ def load() -> Config:
         raise ValueError("MCP_TURBOVEC_BITS must be one of 2, 3, 4")
     if cfg.poll_seconds <= 0:
         raise ValueError("MCP_POLL_SECONDS must be positive")
+    if cfg.reconcile_seconds <= 0:
+        raise ValueError("MCP_RECONCILE_SECONDS must be positive")
     if cfg.embed_batch_size <= 0:
         raise ValueError("MCP_EMBED_BATCH_SIZE must be positive")
     if cfg.max_text_chars <= 0:

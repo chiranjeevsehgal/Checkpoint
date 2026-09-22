@@ -89,7 +89,8 @@ def main() -> None:
     store = ReadStore(cfg.database_mcp_url)
     store.connect()
 
-    indexer = Indexer(cfg.database_worker_url, embedder, index, cfg.embed_batch_size)
+    indexer = Indexer(cfg.database_worker_url, embedder, index, cfg.embed_batch_size,
+                      cfg.reconcile_seconds)
     indexer.connect()
     indexer.rebuild_index()
     indexer.run_once()

@@ -3,7 +3,8 @@
 Runs as checkpoint_worker (BYPASSRLS) so it can index every account; the MCP
 itself only reads as checkpoint_mcp under RLS. Sources are replace-shaped
 (extraction deletes and reinserts per audio), so a changed audio is rebuilt
-wholesale, which also drops rows that no longer exist.
+wholesale, which also drops rows that no longer exist. Structured items the
+user edits or deletes in place are healed by the periodic reconcile pass.
 """
 
 import logging
@@ -82,13 +83,91 @@ _CHANGED_AUDIO = """
     WHERE created_at > %s AND created_at <= %s AND audio_id IS NOT NULL
 """
 
+# Structured items are edited and deleted in place by the ingestion API, which
+# never touches created_at; created_at-based detection would miss it. The
+# reconcile pass compares indexed rows against the source tables, so a changed
+# item is rebuilt and a deleted one drops out. The structured CTE is
+# MATERIALIZED and narrows to numeric source_ids before any ::bigint cast, so
+# transcript UUIDs and summary "period:date" ids can never reach the cast.
+_DRIFT = """
+    WITH structured AS MATERIALIZED (
+        SELECT id, user_id, source_type, source_id, content, reminded_at, is_done, important
+        FROM search_documents
+        WHERE source_type IN ('todo', 'reminder', 'insight')
+          AND chunk_index = -1
+          AND source_id ~ '^[0-9]+$'
+    )
+    SELECT s.id AS doc_id, s.source_type,
+           t.user_id, t.audio_id, t.id::text AS source_id, t.text AS content,
+           t.recorded_at, t.created_at, t.is_done,
+           NULL::timestamptz AS remind_at, NULL::boolean AS important
+    FROM structured s
+    JOIN todos t ON t.id = s.source_id::bigint AND t.user_id = s.user_id
+    WHERE s.source_type = 'todo'
+      AND (s.content IS DISTINCT FROM t.text OR s.is_done IS DISTINCT FROM t.is_done)
+    UNION ALL
+    SELECT s.id, s.source_type,
+           r.user_id::uuid, r.audio_id::uuid, r.id::text, r.text,
+           NULL::timestamptz, r.created_at, NULL::boolean,
+           r.remind_at, r.important
+    FROM structured s
+    JOIN reminders r ON r.id = s.source_id::bigint AND r.user_id::uuid = s.user_id
+    WHERE s.source_type = 'reminder'
+      AND (s.content IS DISTINCT FROM r.text
+           OR s.reminded_at IS DISTINCT FROM r.remind_at
+           OR s.important IS DISTINCT FROM r.important)
+    UNION ALL
+    SELECT s.id, s.source_type,
+           i.user_id::uuid, i.audio_id::uuid, i.id::text, i.text,
+           NULL::timestamptz, i.created_at, NULL::boolean,
+           NULL::timestamptz, NULL::boolean
+    FROM structured s
+    JOIN insights i ON i.id = s.source_id::bigint AND i.user_id::uuid = s.user_id
+    WHERE s.source_type = 'insight'
+      AND s.content IS DISTINCT FROM i.text
+"""
+
+_ORPHAN = """
+    WITH structured AS MATERIALIZED (
+        SELECT id, user_id, source_type, source_id, (embedding IS NOT NULL) AS embedded
+        FROM search_documents
+        WHERE source_type IN ('todo', 'reminder', 'insight')
+          AND chunk_index = -1
+          AND source_id ~ '^[0-9]+$'
+    )
+    SELECT s.id, s.embedded FROM structured s
+    WHERE (s.source_type = 'todo'
+           AND NOT EXISTS (SELECT 1 FROM todos t
+                           WHERE t.id = s.source_id::bigint AND t.user_id = s.user_id))
+       OR (s.source_type = 'reminder'
+           AND NOT EXISTS (SELECT 1 FROM reminders r
+                           WHERE r.id = s.source_id::bigint AND r.user_id::uuid = s.user_id))
+       OR (s.source_type = 'insight'
+           AND NOT EXISTS (SELECT 1 FROM insights i
+                           WHERE i.id = s.source_id::bigint AND i.user_id::uuid = s.user_id))
+"""
+
+_RECONCILE_FIELDS = ("content", "content_hash", "occurred_at", "recorded_at",
+                     "reminded_at", "is_done", "important")
+
+_RECONCILE_UPDATE = """
+    UPDATE search_documents
+       SET content = %(content)s, content_hash = %(content_hash)s, occurred_at = %(occurred_at)s,
+           recorded_at = %(recorded_at)s, reminded_at = %(reminded_at)s, is_done = %(is_done)s,
+           important = %(important)s, embedding = NULL, indexed_at = NULL, updated_at = NOW()
+     WHERE id = %(id)s
+"""
+
 
 class Indexer:
-    def __init__(self, dsn: str, embedder, index: "search.DocumentIndex", batch_size: int = 32) -> None:
+    def __init__(self, dsn: str, embedder, index: "search.DocumentIndex",
+                 batch_size: int = 32, reconcile_seconds: int = 60) -> None:
         self._dsn = dsn
         self._embedder = embedder
         self._index = index
         self._batch_size = batch_size
+        self._reconcile_seconds = reconcile_seconds
+        self._last_reconcile = None
         self._conn = None
         self.last_synced_at = None
 
@@ -119,8 +198,49 @@ class Indexer:
         cycle_now = self._now()
         self._sync_sources(cycle_now)
         self._sync_summaries(cycle_now)
+        if self._reconcile_due(cycle_now):
+            self._reconcile_structured()
+            self._last_reconcile = cycle_now
         self._embed_pending()
         self.last_synced_at = cycle_now
+
+    def _reconcile_due(self, cycle_now: datetime) -> bool:
+        if self._last_reconcile is None:
+            return True
+        return (cycle_now - self._last_reconcile).total_seconds() >= self._reconcile_seconds
+
+    def _reconcile_structured(self) -> None:
+        removed: list[int] = []
+        drift = orphans = 0
+        with self._conn.transaction():
+            with self._conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(_DRIFT)
+                for row in cur.fetchall():
+                    doc = self._document_for(row)
+                    params = {key: doc[key] for key in _RECONCILE_FIELDS}
+                    params["id"] = row["doc_id"]
+                    cur.execute(_RECONCILE_UPDATE, params)
+                    drift += 1
+
+                cur.execute(_ORPHAN)
+                for row in cur.fetchall():
+                    if row["embedded"]:
+                        removed.append(row["id"])
+                    cur.execute("DELETE FROM search_documents WHERE id = %s", (row["id"],))
+                    orphans += 1
+        self._index.remove(removed)
+        if drift or orphans:
+            log.info("reconciled structured items", extra={"drift": drift, "orphans": orphans})
+
+    def _document_for(self, row: dict) -> dict:
+        if row["source_type"] == documents.SOURCE_TODO:
+            return documents.todo(row["user_id"], row["audio_id"], row["source_id"],
+                                  row["content"], row["recorded_at"], row["created_at"], row["is_done"])
+        if row["source_type"] == documents.SOURCE_REMINDER:
+            return documents.reminder(row["user_id"], row["audio_id"], row["source_id"],
+                                      row["content"], row["remind_at"], row["created_at"], row["important"])
+        return documents.insight(row["user_id"], row["audio_id"], row["source_id"],
+                                 row["content"], row["created_at"])
 
     def _sync_sources(self, cycle_now: datetime) -> None:
         watermark = self._watermark(SOURCE_WATERMARK)
@@ -132,9 +252,9 @@ class Indexer:
         removed: list[int] = []
         for audio_id in audio_ids:
             removed.extend(self._rebuild_audio(audio_id, to_index))
-        self._set_watermark(SOURCE_WATERMARK, cycle_now)
         self._index.remove(removed)
         self._index.upsert(to_index)
+        self._set_watermark(SOURCE_WATERMARK, cycle_now)
         if audio_ids:
             log.info("indexed changed audio", extra={"count": len(audio_ids)})
 
@@ -247,9 +367,9 @@ class Indexer:
                     self._insert(cur, documents.summary(
                         user_id, row["period"], row["period_start"], row["text"], row["model"]),
                         None, False, to_index)
-        self._set_watermark(SUMMARY_WATERMARK, cycle_now)
         self._index.remove(removed)
         self._index.upsert(to_index)
+        self._set_watermark(SUMMARY_WATERMARK, cycle_now)
 
     def _embed_pending(self) -> None:
         while True:
