@@ -9,6 +9,7 @@ consent. Markup and styling live in oauth_pages.
 import asyncio
 import html
 import json
+import logging
 import secrets
 import time
 import urllib.error
@@ -40,6 +41,8 @@ _KRATOS_MAX_ATTEMPTS = 3
 _KRATOS_RETRY_BACKOFFS = (0.5, 1.0)
 _LOGIN_SEND_PER_MINUTE = 3
 _LOGIN_SEND_BURST = 3
+
+log = logging.getLogger(__name__)
 
 
 async def _form_value(request, name: str) -> str:
@@ -132,6 +135,7 @@ def kratos_login_start(kratos_url: str, email: str) -> tuple[str | None, str | N
     """Email a one-time sign-in code. Returns (kratos_flow_id, error)."""
     status, flow = _kratos_call(kratos_url.rstrip("/") + "/self-service/login/api", "GET")
     if status != 200 or "ui" not in flow:
+        log.warning("kratos login flow unavailable", extra={"status": status})
         return None, "Sign-in is temporarily unavailable. Try again shortly."
     action = _resolve_kratos_url(kratos_url, flow["ui"]["action"])
     status, result = _kratos_call(action, "POST", {"method": "code", "identifier": email})
@@ -139,10 +143,12 @@ def kratos_login_start(kratos_url: str, email: str) -> tuple[str | None, str | N
     # the updated flow whose state is "email_sent".
     if result.get("state") == "email_sent" and _is_uuid(result.get("id")):
         return str(result["id"]), None
+    # Log Kratos' reason for operators; the address stays out of it and the user
+    # still gets a generic message so this cannot confirm whether an account exists.
+    log.warning("login code not sent", extra={"reason": _kratos_error(result, f"status={status}")})
     if status == 0:
         return None, "Sign-in is temporarily unavailable. Try again shortly."
-    # Generic on purpose: Kratos' own message would confirm the account exists.
-    return None, "We couldn't send a code to that address."
+    return None, "We couldn't send a code to that address. Check the spelling, then sign up in the Checkpoint app if you haven't yet."
 
 
 def kratos_login_finish(kratos_url: str, flow_id: str, email: str,

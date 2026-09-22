@@ -72,13 +72,16 @@ class KratosLoginTest(unittest.TestCase):
         self.assertEqual(flow_id, FLOW_ID)
         self.assertIsNone(error)
 
-    def test_start_hides_account_existence(self):
+    def test_start_hides_account_existence_and_logs_reason(self):
         enumeration = "account does not exist or has not setup sign in with code"
         stub = kratos_stub(send_response=(400, {"ui": {"messages": [{"text": enumeration}]}}))
-        with mock.patch.object(oauth_web, "_kratos_call", side_effect=stub):
+        with mock.patch.object(oauth_web, "_kratos_call", side_effect=stub), \
+                self.assertLogs("app.oauth_web", level="WARNING") as captured:
             flow_id, error = oauth_web.kratos_login_start(KRATOS, EMAIL)
         self.assertIsNone(flow_id)
-        self.assertEqual(error, "We couldn't send a code to that address.")
+        self.assertIn("We couldn't send a code to that address.", error)
+        self.assertNotIn("account does not exist", error)
+        self.assertEqual(captured.records[0].reason, enumeration)
 
     def test_start_reports_outage_when_flow_fetch_fails(self):
         with mock.patch.object(oauth_web, "_kratos_call", return_value=(0, {})):
